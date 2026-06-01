@@ -113,7 +113,7 @@ export function TopicInput() {
             value={goals}
             onChange={(event) => setGoals(event.target.value)}
           />
-          <div className="field-note">The more specific you are, the better your stored roadmap.</div>
+          <div className="field-note">The more specific you are, the better your stored Atlas.</div>
         </div>
         {mode === 'source_grounded' ? (
           <div className="field">
@@ -141,7 +141,7 @@ export function TopicInput() {
         <div className="result-banner auth-required-banner">
           <div>
             <div className="course-title">Sign in to save this course</div>
-            <p className="course-meta">Generated roadmaps, summaries, and progress need an account so each course stays isolated and recoverable.</p>
+            <p className="course-meta">Generated Atlases, summaries, and progress need an account so each course stays isolated and recoverable.</p>
           </div>
           <div className="auth-required-actions">
             <Link className="button" href="/auth/signin">Sign in</Link>

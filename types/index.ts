@@ -11,7 +11,7 @@ export type TopicState =
 
 export type UnderstandingLevel = 1 | 2 | 3 | 4 | 5
 
-export type QuestionType = 'apply' | 'spot_error' | 'explain'
+export type QuestionType = 'apply' | 'spot_error' | 'explain' | 'mcq' | 'true_false' | 'code'
 
 export interface Course {
   id: string
@@ -52,17 +52,49 @@ export interface Branch {
   mastered_count: number
 }
 
+// ── Structured lesson sections ────────────────────────────────────────────
+
+export type LessonSectionType =
+  | 'core'           // Main explanation — always present
+  | 'prerequisites'  // Quick prerequisite recap
+  | 'key_ideas'      // Bullet list of must-remember points
+  | 'misconceptions' // Common wrong beliefs + corrections
+  | 'examples'       // Concrete examples / analogies
+  | 'checkpoints'    // Think-through questions (no text input)
+
+export type TopicDepth = 'shallow' | 'medium' | 'deep'
+
+export type ConceptKind =
+  | 'definition'   // naming / orientation
+  | 'mechanism'    // causal explanation
+  | 'procedure'    // steps / algorithm / method
+  | 'math'         // formula / derivation / quantitative
+  | 'comparison'   // contrasts multiple ideas
+  | 'pitfall'      // concept is commonly misunderstood
+
+export interface LessonSection {
+  type: LessonSectionType
+  title?: string   // optional override label
+  content: string  // raw markdown with LaTeX
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────
+
 export interface Page {
   id: string
   topic_id: string
   page_number: number
-  content: string
+  content: string       // flat markdown — kept for search / backward compat
   created_at: string
+  topic_depth?: TopicDepth
+  concept_kind?: ConceptKind
+  sections?: LessonSection[]
 }
 
 export interface DoubtMessage {
   id: string
   topic_id: string
+  topic_title?: string | null
   page_number: number | null
   role: 'user' | 'assistant'
   content: string
@@ -74,6 +106,7 @@ export interface QuizQuestion {
   topic_id: string
   type: QuestionType
   question: string
+  options?: string[] | null   // MCQ only — correct_answer is NOT sent to client
   rubric: string | null
   created_at: string
 }

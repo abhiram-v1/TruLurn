@@ -12,11 +12,11 @@ export type GeneratedCourseResult = {
 
 export async function generateAndPersistCourse(input: CourseGenerationInput & { userId: string }): Promise<GeneratedCourseResult> {
   const curriculumPrompt = curriculumBuilderSkill(input)
-  const curriculumText = await generateWithGemini(curriculumPrompt)
+  const curriculumText = await generateWithGemini({ ...curriculumPrompt, purpose: 'primary' })
   const curriculum = parseGeminiJson<unknown>(curriculumText)
 
   const mapPrompt = mapBuilderSkill(curriculum)
-  const mapText = await generateWithGemini(mapPrompt)
+  const mapText = await generateWithGemini({ ...mapPrompt, purpose: 'primary' })
   const map = parseGeminiJson<unknown>(mapText)
 
   const persisted = await persistGeneratedCourse({

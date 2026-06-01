@@ -1,3 +1,5 @@
+import { generateWithOpenAI, shouldUseOpenAI } from '@/lib/ai/openai/client'
+
 type GeminiPart = { text: string }
 
 type GeminiContent = {
@@ -9,6 +11,8 @@ type GeminiGenerateInput = {
   system: string
   user: string
   model?: string
+  purpose?: 'primary' | 'agent'
+  responseMimeType?: 'application/json' | 'text/plain'
 }
 
 type GeminiResponse = {
@@ -24,7 +28,17 @@ type GeminiResponse = {
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
 
-export async function generateWithGemini({ system, user, model }: GeminiGenerateInput): Promise<string> {
+export async function generateWithGemini({
+  system,
+  user,
+  model,
+  purpose,
+  responseMimeType = 'application/json',
+}: GeminiGenerateInput): Promise<string> {
+  if (shouldUseOpenAI()) {
+    return generateWithOpenAI({ system, user, model, purpose, responseMimeType })
+  }
+
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
   const selectedModel = model ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 
@@ -50,7 +64,7 @@ export async function generateWithGemini({ system, user, model }: GeminiGenerate
       generationConfig: {
         temperature: 0.25,
         topP: 0.9,
-        responseMimeType: 'application/json',
+        responseMimeType,
       },
     }),
   })

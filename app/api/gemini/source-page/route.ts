@@ -27,7 +27,7 @@ export async function POST(request: Request) {
       sourceText: body.sourceText.trim(),
     })
 
-    const text = await generateWithGemini(prompt)
+    const text = await generateWithGemini({ ...prompt, purpose: 'primary' })
     const page = parseGeminiJson<unknown>(text)
 
     return NextResponse.json({ page })

@@ -1,24 +1,19 @@
-import Link from 'next/link'
-import { KnowledgeGraphPreview } from '@/components/graph/KnowledgeGraphPreview'
-import { AppFrame } from '@/components/navigation/AppFrame'
+﻿export const dynamic = 'force-dynamic'
 
-export default function GraphPage({ params }: { params: { courseId: string } }) {
-  return (
-    <AppFrame
-      courseId={params.courseId}
-      title="Knowledge graph"
-      action={<Link className="button-subtle" href={`/course/${params.courseId}`}>Big roadmap</Link>}
-    >
-      <main className="graph-page">
-        <div className="page-header narrow">
-          <p className="eyebrow">Reflection view</p>
-          <h1 className="page-heading">Connections are evidence-based, not guessed live.</h1>
-          <p className="page-subtitle">
-            The graph shows structural dependencies and demonstrated connection strength. It is not used as active study navigation.
-          </p>
-        </div>
-        <KnowledgeGraphPreview />
-      </main>
-    </AppFrame>
-  )
+import { redirect } from 'next/navigation'
+import { getServerSession } from 'next-auth'
+import { authOptions } from '@/lib/auth'
+import { GraphClient } from '@/components/graph/GraphClient'
+
+export default async function GraphPage({
+  params,
+}: {
+  params: { courseId: string }
+}) {
+  const session = await getServerSession(authOptions)
+  if (!session?.user) {
+    redirect('/auth/signin')
+  }
+
+  return <GraphClient courseId={params.courseId} />
 }

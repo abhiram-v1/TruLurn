@@ -1,3 +1,7 @@
+-- ARCHIVED / DO NOT APPLY FOR MVP
+-- TruLurn MVP now uses MongoDB Atlas + NextAuth as the active database/auth path.
+-- This migration is retained only as historical schema reference.
+
 create extension if not exists vector;
 
 create table courses (

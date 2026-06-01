@@ -29,16 +29,16 @@ The roadmap must never be embedded in setup after generation.
 
 ## Architecture Decision
 
-Use Supabase Postgres as the canonical product database.
+Use MongoDB Atlas + NextAuth as the canonical MVP database and auth stack.
 
 Reasons:
 
-- Existing plans specify relational course entities and RLS.
-- `.env.local` already contains Supabase variables.
-- Roadmaps, prerequisites, pages, progress, chats, and quiz attempts are relational.
-- Supabase supports `pgvector`, which is the cleanest MVP path for course memory and retrieval.
+- The active code already uses MongoDB and the NextAuth MongoDB adapter.
+- `MEMORY.md` defines the current memory architecture around MongoDB Atlas.
+- MongoDB Atlas Vector Search can support the later retrieval layer without introducing another database.
+- Course isolation is enforced in application queries with `user_id` and verified course ownership.
 
-MongoDB and `local-user` should be removed from the product path after migration.
+Supabase files in this repository are archive-only artifacts and are not part of the MVP execution path.
 
 ## Data Model
 
@@ -63,10 +63,10 @@ MongoDB and `local-user` should be removed from the product path after migration
 
 ### Ownership Rules
 
-- Every course belongs to `auth.uid()`.
+- Every course belongs to a NextAuth user id.
 - Every child row is reachable from a course.
-- RLS must enforce course ownership.
-- Server-only generation routes may use the service role key, but client reads must use user-scoped policies.
+- MongoDB has no RLS. Every server route must verify the signed-in user owns the course before reading or writing course data.
+- Never query course-owned collections without a `course_id` or `user_id` boundary.
 
 ## Adaptive Roadmap Generation
 
@@ -289,11 +289,11 @@ Gemini should live behind `lib/ai/providers/gemini`, not in route names.
 - Delete or disable preview JSON/roadmap state in setup.
 - Keep old mock course only as seed/demo data, not generation output.
 
-### Phase 1: Supabase Foundation
+### Phase 1: MongoDB Foundation
 
-- Add Supabase client packages.
-- Create migrations for core tables, RLS, and pgvector.
-- Replace Mongo `getDb()` calls with repository functions.
+- Mark Supabase artifacts archive-only.
+- Keep `lib/db.ts` and the NextAuth MongoDB adapter as the active stack.
+- Replace direct unscoped Mongo queries with repository-style helpers where useful.
 - Implement authenticated user lookup for server routes.
 - Remove `local-user`.
 
@@ -343,7 +343,7 @@ Gemini should live behind `lib/ai/providers/gemini`, not in route names.
 ### Phase 8: Cleanup
 
 - Remove duplicated generation routes.
-- Remove Mongo-only helpers if Supabase is finalized.
+- Keep MongoDB as the MVP persistence layer.
 - Replace provider-named routes with product routes.
 - Add route tests for setup, roadmap, topic open, chat, and progress.
 

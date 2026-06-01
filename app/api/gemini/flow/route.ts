@@ -7,7 +7,7 @@ export async function POST(request: Request) {
   try {
     const evidence = (await request.json()) as unknown
     const prompt = flowTrackerSkill(evidence)
-    const text = await generateWithGemini(prompt)
+    const text = await generateWithGemini({ ...prompt, purpose: 'agent' })
     const flow = parseGeminiJson<unknown>(text)
 
     return NextResponse.json({ flow })

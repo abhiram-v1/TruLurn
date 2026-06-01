@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 const QUOTES = [
   'Creating the course record...',
   'Reading your learning goals...',
-  'Building the primary roadmap...',
+  'Building the Atlas...',
   'Resolving prerequisites...',
   'Storing course modules...',
   'Saving topic summaries...',

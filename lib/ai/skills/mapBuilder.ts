@@ -1,5 +1,36 @@
 import type { SkillPrompt } from '@/lib/ai/skills/types'
 
+// Strip fields the map builder never reads: description, structure_reasoning,
+// source_limitations, complexity narrative. Only structural data is needed.
+function slimCurriculum(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object') return raw
+  const c = raw as any
+  return {
+    title: c.title,
+    branches: Array.isArray(c.branches)
+      ? c.branches.map((b: any) => ({
+          id: b.id,
+          title: b.title,
+          sections: Array.isArray(b.sections)
+            ? b.sections.map((s: any) => ({
+                title: s.title,
+                topics: Array.isArray(s.topics)
+                  ? s.topics.map((t: any) => ({
+                      id: t.id,
+                      title: t.title,
+                      prerequisites: t.prerequisites ?? [],
+                      depth: t.depth,
+                      estimated_pages: t.estimated_pages,
+                      initial_state: t.initial_state,
+                    }))
+                  : [],
+              }))
+            : [],
+        }))
+      : [],
+  }
+}
+
 export function mapBuilderSkill(courseJson: unknown): SkillPrompt {
   return {
     name: 'map_builder',
@@ -9,7 +40,7 @@ You do not infer user mastery. You only define subject structure.
 Return only valid JSON.`,
     user: `Convert this curriculum into structural roadmap data:
 
-${JSON.stringify(courseJson, null, 2)}
+${JSON.stringify(slimCurriculum(courseJson))}
 
 Return:
 {

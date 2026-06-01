@@ -2,83 +2,120 @@ export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
 import { QuizSession } from '@/components/quiz/QuizSession'
+import { BackButton } from '@/components/navigation/BackButton'
 import { getDb } from '@/lib/db'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateQuizQuestions, QUIZ_SESSION_SIZE } from '@/lib/quiz/generateQuizQuestions'
 import crypto from 'crypto'
+import { getRequiredUserId } from '@/lib/server/currentUser'
 
-async function generateQuizForTopic(course: any, topic: any) {
-  const system = `You are TruLurn's quiz generator.
-Generate exactly 3 quiz questions for the topic.
-We use open-answer questions only, to evaluate cognitive understanding. No multiple choice.
-Generate 3 questions matching these types exactly:
-1. type "apply": require student to apply the concept to a new scenario.
-2. type "spot_error": give a quote or scenario with a conceptual bug, and ask student to find/explain it.
-3. type "explain": ask student to explain the mechanism in plain terms to a beginner.
-
-For each question, also write a "rubric" detailing what a strong answer must include (key terms, causal links, mechanisms).
-Return ONLY a valid JSON array of 3 question objects, like this:
-[
-  {
-    "type": "apply" | "spot_error" | "explain",
-    "question": "question text...",
-    "rubric": "rubric details..."
-  }
-]`
-
-  const user = `Course Topic: ${course.topic}
-Topic Title: ${topic.title}
-Goals: ${course.goals || 'Understand mechanisms.'}`
-
-  const prompt = { system, user }
-  const text = await generateWithGemini(prompt)
-  const quizPool = parseGeminiJson<any[]>(text)
-  return quizPool
-}
+// ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function QuizPage({ params }: { params: { topicId: string } }) {
-  const db = await getDb()
+  // Decode the topicId — Next.js encodes colons in path segments as %3A
+  const topicId = decodeURIComponent(params.topicId)
 
-  // 1. Fetch Topic
-  const topic = await db.collection('topics').findOne({ _id: params.topicId as any })
+  const db = await getDb()
+  const userId = await getRequiredUserId()
+
+  // 1. Fetch Topic (with decoded ID)
+  const topic = await db.collection('topics').findOne({ _id: topicId as any })
   if (!topic) {
-    return <div style={{ padding: 40 }}>Topic not found.</div>
+    return (
+      <main className="quiz-page">
+        <header className="topbar">
+          <div className="topbar-left">
+            <BackButton fallbackHref="/" />
+            <Link className="brand" href="/">TruLurn</Link>
+          </div>
+        </header>
+        <div style={{ padding: '40px 0', textAlign: 'center' }}>
+          <h2 className="page-heading">Topic not found</h2>
+          <p className="page-subtitle">The topic ID in this URL is invalid or the topic was deleted.</p>
+        </div>
+      </main>
+    )
   }
 
   const courseId = String(topic.course_id)
 
-  // 2. Fetch Course
-  const course = await db.collection('courses').findOne({ _id: topic.course_id as any })
+  // 2. Verify course ownership
+  const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
   if (!course) {
-    return <div style={{ padding: 40 }}>Course not found.</div>
+    return (
+      <main className="quiz-page">
+        <header className="topbar">
+          <div className="topbar-left">
+            <BackButton fallbackHref="/" />
+            <Link className="brand" href="/">TruLurn</Link>
+          </div>
+        </header>
+        <div style={{ padding: '40px 0', textAlign: 'center' }}>
+          <h2 className="page-heading">Access denied</h2>
+          <p className="page-subtitle">This course does not belong to your account.</p>
+        </div>
+      </main>
+    )
   }
 
-  // 3. Fetch Quiz Questions for this topic
-  let questions = await db.collection('quizQuestions').find({ topic_id: params.topicId }).toArray()
+  // 3. Load or generate quiz questions.
+  // When the pool has more than QUIZ_SESSION_SIZE questions (e.g. pre-generated at unlock),
+  // sample randomly so each retake feels different and prevents answer memorisation.
+  const poolCount = await db.collection('quizQuestions')
+    .countDocuments({ course_id: courseId, topic_id: topicId })
 
-  // 4. If no questions exist, generate them
-  if (!questions.length) {
+  let questions: any[] = []
+
+  if (poolCount === 0) {
+    // Generate on first visit — stores the initial pool
     try {
-      const generated = await generateQuizForTopic(course, topic)
-      const questionsToInsert = generated.map((q: any) => ({
+      const generated = await generateQuizQuestions(db, course, topic, userId)
+      const docs = generated.map((q: any) => ({
         _id: crypto.randomUUID() as any,
-        topic_id: params.topicId,
+        course_id: courseId,
+        topic_id: topicId,
+        user_id: userId,
         type: q.type,
         question: q.question,
-        rubric: q.rubric,
+        options: q.options ?? null,
+        correct_answer: q.correct_answer ?? null,
+        rubric: q.rubric ?? null,
         created_at: new Date(),
       }))
-      await db.collection('quizQuestions').insertMany(questionsToInsert)
-      questions = await db.collection('quizQuestions').find({ topic_id: params.topicId }).toArray()
+      await db.collection('quizQuestions').insertMany(docs)
+      questions = await db.collection('quizQuestions')
+        .find({ course_id: courseId, topic_id: topicId })
+        .toArray()
     } catch (err) {
-      console.error('Failed to generate quiz pool on the fly:', err)
+      const msg = err instanceof Error ? err.message : 'Unknown error'
       return (
-        <div style={{ padding: 40, textAlign: 'center' }}>
-          <h2>Failed to load quiz</h2>
-          <p>Please check your connection and refresh the page.</p>
-        </div>
+        <main className="quiz-page">
+          <header className="topbar">
+            <div className="topbar-left">
+              <BackButton fallbackHref={`/learn/${courseId}/${topicId}`} />
+              <Link className="brand" href="/">TruLurn</Link>
+            </div>
+            <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>Back to lesson</Link>
+          </header>
+          <div style={{ padding: '40px 0', textAlign: 'center' }}>
+            <h2 className="page-heading">Quiz generation failed</h2>
+            <p className="page-subtitle">{msg}</p>
+            <p className="course-meta" style={{ marginTop: 8 }}>Refresh to try again.</p>
+          </div>
+        </main>
       )
     }
+  } else if (poolCount > QUIZ_SESSION_SIZE) {
+    // Pool is large enough to sample from — gives variety on retake
+    questions = await db.collection('quizQuestions')
+      .aggregate([
+        { $match: { course_id: courseId, topic_id: topicId } },
+        { $sample: { size: QUIZ_SESSION_SIZE } },
+      ])
+      .toArray()
+  } else {
+    questions = await db.collection('quizQuestions')
+      .find({ course_id: courseId, topic_id: topicId })
+      .toArray()
   }
 
   const serializedQuestions = questions.map((q) => ({
@@ -86,25 +123,35 @@ export default async function QuizPage({ params }: { params: { topicId: string }
     topic_id: String(q.topic_id),
     type: q.type as any,
     question: q.question,
-    rubric: q.rubric,
+    options: Array.isArray(q.options) ? q.options : null,
+    rubric: q.rubric ?? null,
     created_at: q.created_at.toISOString(),
+    // correct_answer is intentionally excluded — evaluated server-side only
   }))
 
   return (
     <main className="quiz-page">
       <header className="topbar">
-        <Link className="brand" href="/">
-          TruLurn
-        </Link>
-        <Link className="button-subtle" href={`/learn/${courseId}/${params.topicId}`}>
+        <div className="topbar-left">
+          <BackButton fallbackHref={`/learn/${courseId}/${topicId}`} />
+          <Link className="brand" href="/">TruLurn</Link>
+        </div>
+        <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>
           Back to lesson
         </Link>
       </header>
       <div style={{ marginTop: 34 }}>
-        <h1 className="page-heading">{topic.title} quiz</h1>
-        <p className="page-subtitle">Open answers only. No multiple choice, no score theater.</p>
+        <h1 className="page-heading">{topic.title}</h1>
+        <p className="page-subtitle">
+          Open-answer questions. Programming topics may ask you to write or fix code directly.
+        </p>
       </div>
-      <QuizSession topicId={params.topicId} topicTitle={topic.title} questions={serializedQuestions} courseId={courseId} />
+      <QuizSession
+        topicId={topicId}
+        topicTitle={topic.title}
+        questions={serializedQuestions}
+        courseId={courseId}
+      />
     </main>
   )
 }

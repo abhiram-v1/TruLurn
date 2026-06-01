@@ -97,13 +97,13 @@ export async function seedDefaultCourse() {
 export async function unlockNextTopics(courseId: string, completedTopicId: string) {
   const db = await getDb()
 
-  // 1. Mark completed topic as mastered
-  await db.collection('topics').updateOne(
-    { _id: completedTopicId as any, course_id: courseId },
-    { $set: { state: 'mastered', understanding_level: 5 } }
-  )
+  // Do NOT force state/understanding_level here — the graph evaluator in
+  // quiz/evaluate sets the correct level-based state (partial/functional/mastered)
+  // after this function returns. Hardcoding mastered/5 here conflicts with that.
+  // The prerequisite check below already special-cases completedTopicId so the
+  // unlock logic works correctly without first writing the state.
 
-  // 2. Fetch all topics for this course
+  // 1. Fetch all topics for this course
   const allTopics = await db.collection('topics').find({ course_id: courseId }).toArray()
 
   const masteredTopicIds = new Set(
@@ -133,7 +133,8 @@ export async function unlockNextTopics(courseId: string, completedTopicId: strin
   const updatedTopics = await db.collection('topics').find({ course_id: courseId }).toArray()
 
   for (const branch of allBranches) {
-    const branchTopics = updatedTopics.filter((t) => String(t.branch_id) === String(branch._id))
+    const branchKey = String(branch.branch_key ?? branch._id)
+    const branchTopics = updatedTopics.filter((t) => String(t.branch_id) === branchKey || String(t.branch_id) === String(branch._id))
     const totalCount = branchTopics.length
     const masteredCount = branchTopics.filter((t) => t.state === 'mastered').length
     

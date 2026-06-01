@@ -10,7 +10,7 @@ Use wording based on demonstrated evidence.
 Return only valid JSON.`,
     user: `Given this evidence, recommend conservative roadmap updates:
 
-${JSON.stringify(evidenceJson, null, 2)}
+${JSON.stringify(evidenceJson)}
 
 Return:
 {

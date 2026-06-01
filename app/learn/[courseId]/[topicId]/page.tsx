@@ -1,62 +1,18 @@
 export const dynamic = 'force-dynamic'
 
 import { LearnExperience } from '@/components/learn/LearnExperience'
+import { MissingPageGenerator } from '@/components/learn/MissingPageGenerator'
+import { BottomNav } from '@/components/navigation/BottomNav'
 import { getDb } from '@/lib/db'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
-import crypto from 'crypto'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 
-async function generatePagesForTopic(course: any, topic: any) {
-  const isSourceGrounded = course.mode === 'source_grounded'
-  const sourceText = course.source_text || ''
-  const hasSubtopics = topic.subtopics && topic.subtopics.length > 0
-  const subtopicsText = hasSubtopics
-    ? topic.subtopics.map((s: any) => `- Page ${s.page_number}: Focus on "${s.title}" (${s.focus})`).join('\n')
+function isBlankGeneratedPage(page: any) {
+  const content = String(page?.content ?? '').trim()
+  const sectionContent = Array.isArray(page?.sections)
+    ? page.sections.map((section: any) => String(section?.content ?? '').trim()).join('')
     : ''
 
-  const system = `You are TruLurn's topic lesson page writer.
-Generate a structured, clear, textbook-like lesson page sequence for the topic.
-Format each page content as high-quality Markdown, focusing on depth, clarity, and explanations. Do not include chat intro/outros.
-For each page, return a markdown section containing the content.
-
-Return ONLY a valid JSON array of 3 page objects, like this:
-[
-  {
-    "page_number": 1,
-    "content": "markdown content for page 1..."
-  },
-  {
-    "page_number": 2,
-    "content": "markdown content for page 2..."
-  },
-  {
-    "page_number": 3,
-    "content": "markdown content for page 3..."
-  }
-]`
-
-  const user = `Course Topic: ${course.topic}
-Specific Topic to write lessons for: ${topic.title}
-Student learning goals: ${course.goals || 'Master the subject.'}
-Mode: ${course.mode}
-
-${hasSubtopics ? `Follow this planned subtopic roadmap for the pages strictly:
-${subtopicsText}
-` : ''}
-
-${isSourceGrounded ? `Use ONLY the following source text to ground the explanation. Do not use external knowledge.
-Source Text:
----
-${sourceText}
----` : 'Use general AI teaching knowledge to build a thorough, structured, conceptual lesson.'}
-
-Generate exactly 3 pages of content. ${hasSubtopics ? 'Ensure each page matches its corresponding subtopic focus listed above.' : 'Make sure page 1 introduces the concept, page 2 explains the core mechanism and equations/details, and page 3 summarizes, details edge cases, and prepares the user for the quiz.'}`
-
-  const prompt = { system, user }
-  const text = await generateWithGemini(prompt)
-  const pagesList = parseGeminiJson<any[]>(text)
-  return pagesList
+  return content.length < 60 && sectionContent.length < 60
 }
 
 export default async function LearnTopicPage({
@@ -75,10 +31,31 @@ export default async function LearnTopicPage({
     return <div style={{ padding: 40 }}>Course not found.</div>
   }
 
+  // Decode the topicId — Next.js Link encodes colons (%3A) in path segments
+  const topicId = decodeURIComponent(params.topicId)
+
   // 2. Fetch Topic
-  const topic = await db.collection('topics').findOne({ _id: params.topicId as any })
+  const topic = await db.collection('topics').findOne({
+    _id: topicId as any,
+    course_id: params.courseId,
+  })
   if (!topic) {
     return <div style={{ padding: 40 }}>Topic not found.</div>
+  }
+
+  if (topic.state === 'locked') {
+    return (
+      <main className="missing-page-shell">
+        <section className="missing-page-panel">
+          <p className="eyebrow">Locked topic</p>
+          <h1 className="page-heading">{topic.title}</h1>
+          <p className="page-subtitle">
+            Complete the prerequisite topic first. TruLurn does not open locked Traccia nodes out of order.
+          </p>
+        </section>
+        <BottomNav courseId={params.courseId} />
+      </main>
+    )
   }
 
   // 3. Fetch all topics in the same branch
@@ -87,48 +64,90 @@ export default async function LearnTopicPage({
     .sort({ position: 1 })
     .toArray()
 
-  // 4. Fetch Pages for this topic
-  let pages = await db.collection('pages')
-    .find({ topic_id: params.topicId })
+  const courseTopics = await db.collection('topics')
+    .find({ course_id: params.courseId })
+    .project({ title: 1, state: 1, branch_id: 1, branch_position: 1, position: 1, created_at: 1 })
+    .sort({ branch_position: 1, branch_id: 1, position: 1, created_at: 1 })
+    .toArray()
+
+  // 4. Fetch Pages for this topic — deduplicate by page_number (keeps first stored copy
+  //    per number to guard against any concurrent-generation duplicates in MongoDB).
+  const allRawPages = await db.collection('pages')
+    .find({ course_id: params.courseId, topic_id: topicId })
     .sort({ page_number: 1 })
     .toArray()
 
-  // 5. If no pages, generate them on the fly
+  const seenPageNumbers = new Set<number>()
+  const pages = allRawPages.filter((p) => {
+    if (seenPageNumbers.has(p.page_number)) return false
+    seenPageNumbers.add(p.page_number)
+    return true
+  })
+
+  // How many pages the AI planned for this topic (from curriculum generation)
+  const estimatedPages = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
+
+  const requestedPage = Math.max(1, Number(searchParams?.page ?? '1'))
+
+  // No pages at all → generate page 1
   if (!pages.length) {
-    try {
-      const generated = await generatePagesForTopic(course, topic)
-      const pagesToInsert = generated.map((p: any) => ({
-        _id: crypto.randomUUID() as any,
-        topic_id: params.topicId,
-        page_number: p.page_number || p.pageNumber || 1,
-        content: p.content,
-        created_at: new Date(),
-      }))
-      await db.collection('pages').insertMany(pagesToInsert)
-      pages = await db.collection('pages')
-        .find({ topic_id: params.topicId })
-        .sort({ page_number: 1 })
-        .toArray()
-    } catch (err) {
-      console.error('Failed to generate pages on the fly:', err)
-      return (
-        <div style={{ padding: 40, textAlign: 'center' }}>
-          <h2>Failed to generate lesson content</h2>
-          <p>Please check your connection and refresh the page.</p>
-        </div>
-      )
-    }
+    return (
+      <MissingPageGenerator
+        courseId={params.courseId}
+        topicId={topicId}
+        topicTitle={topic.title}
+        pageNumber={1}
+      />
+    )
   }
 
-  const requestedPage = Number(searchParams?.page ?? '1')
+  // Student navigated to a page not yet generated → generate it.
+  // Always allow the immediately-next page beyond stored count, regardless of estimatedPages
+  // (estimated_pages may be null/1 for existing topics — don't block discovery).
+  // Hard cap at 15 pages per topic to prevent runaway generation.
+  const maxAllowedPage = Math.min(Math.max(estimatedPages, pages.length + 1), 15)
+  if (requestedPage > pages.length && requestedPage <= maxAllowedPage) {
+    return (
+      <MissingPageGenerator
+        courseId={params.courseId}
+        topicId={topicId}
+        topicTitle={topic.title}
+        pageNumber={requestedPage}
+      />
+    )
+  }
+
   const safePage = Math.min(Math.max(requestedPage, 1), pages.length)
   const activePage = pages[safePage - 1]
 
-  // 6. Fetch Doubt Messages for this topic
+  if (isBlankGeneratedPage(activePage)) {
+    return (
+      <MissingPageGenerator
+        courseId={params.courseId}
+        topicId={topicId}
+        topicTitle={topic.title}
+        pageNumber={activePage.page_number}
+        force
+      />
+    )
+  }
+
+  // 6. Fetch recent course-level Doubt Messages. Each message still stores
+  // topic/page context, but the chat should feel continuous across the course.
   const messages = await db.collection('doubtMessages')
-    .find({ topic_id: params.topicId })
-    .sort({ created_at: 1 })
+    .find({ course_id: params.courseId, user_id: userId })
+    .sort({ created_at: -1 })
+    .limit(50)
     .toArray()
+
+  const messageTopicIds = [...new Set(messages.map((m) => String(m.topic_id)))]
+  const messageTopics = await db.collection('topics')
+    .find({ course_id: params.courseId, _id: { $in: messageTopicIds as any[] } })
+    .project({ title: 1 })
+    .toArray()
+  const messageTopicTitleById = new Map(
+    messageTopics.map((messageTopic) => [String(messageTopic._id), messageTopic.title]),
+  )
 
   // 7. Format data for LearnExperience component
   const serializedTopic = {
@@ -165,16 +184,28 @@ export default async function LearnTopicPage({
     page_number: activePage.page_number,
     content: activePage.content,
     created_at: activePage.created_at.toISOString(),
+    topic_depth: activePage.topic_depth ?? undefined,
+    concept_kind: activePage.concept_kind ?? undefined,
+    sections: Array.isArray(activePage.sections) ? activePage.sections : undefined,
   }
 
-  const serializedMessages = messages.map((m) => ({
+  const serializedMessages = messages.reverse().map((m) => ({
     id: String(m._id),
     topic_id: String(m.topic_id),
     page_number: m.page_number,
+    topic_title: messageTopicTitleById.get(String(m.topic_id)) ?? null,
     role: m.role as any,
     content: m.content,
     created_at: m.created_at.toISOString(),
   }))
+
+  const currentTopicIndex = courseTopics.findIndex((t) => String(t._id) === topicId)
+  const nextOpenTopic = currentTopicIndex >= 0
+    ? courseTopics.slice(currentTopicIndex + 1).find((t) => String(t.state ?? 'active') !== 'locked')
+    : null
+  const serializedNextTopic = nextOpenTopic
+    ? { id: String(nextOpenTopic._id), title: String(nextOpenTopic.title ?? 'Next topic') }
+    : null
 
   return (
     <LearnExperience
@@ -183,7 +214,9 @@ export default async function LearnTopicPage({
       topics={serializedTopics}
       page={serializedPage}
       totalPages={pages.length}
+      estimatedPages={estimatedPages}
       initialMessages={serializedMessages}
+      nextTopic={serializedNextTopic}
     />
   )
 }

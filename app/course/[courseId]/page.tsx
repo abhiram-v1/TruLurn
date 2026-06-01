@@ -26,9 +26,8 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
   }
 
   const branches = await db.collection('branches').find({ course_id: params.courseId }).toArray()
-
   const serializedBranches = branches.map((b) => ({
-    id: String(b._id),
+    id: String(b.branch_key ?? b._id),
     course_id: String(b.course_id),
     title: b.title,
     description: b.description,
@@ -41,15 +40,21 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
   return (
     <AppFrame
       courseId={params.courseId}
-      title="Big roadmap"
-      action={<Link className="button-subtle" href="/setup">New course</Link>}
+      title="Atlas"
+      backFallback="/"
+      action={
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link className="button-subtle" href={`/graph/${params.courseId}`}>Knowledge graph</Link>
+          <Link className="button-subtle" href="/setup">New course</Link>
+        </div>
+      }
     >
       <main className="roadmap-page">
         <div className="page-header" style={{ textAlign: 'center', maxWidth: 600, margin: '0 auto 10px' }}>
           <p className="eyebrow">{course.title}</p>
-          <h1 className="page-heading">Your Learning Path</h1>
+          <h1 className="page-heading">Atlas</h1>
           <p className="page-subtitle">
-            Follow the roadmap through each milestone. Master one branch to unlock deeper connections.
+            Follow the course structure through each milestone. Master one branch to unlock deeper connections.
           </p>
         </div>
         <BigRoadmap branches={serializedBranches} courseId={params.courseId} />

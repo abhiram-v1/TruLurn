@@ -68,6 +68,8 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     summary: courseSummary.summary,
     complexity: courseSummary.complexity,
     structure_reasoning: courseSummary.structure_reasoning,
+    branch_count: courseSummary.branch_count,
+    topic_count: courseSummary.topic_count,
     status: 'ready',
     created_at: new Date(),
     updated_at: new Date(),
@@ -78,9 +80,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     idMap.set(topic.id, makeStableNodeId(courseId, topic.id))
   })
 
+  // Build all topics as locked first, then activate exactly one below.
   const topicsToInsert = topics.map((topic: any, index: number) => {
     const topicId = idMap.get(topic.id) ?? makeStableNodeId(courseId, topic.id || crypto.randomUUID())
-    const isFirstTopicOfFirstBranch = topic.branch_id === firstBranch.id && (topic.position === 0 || topic.position === 1 || index === 0)
     const curriculumTopic = findCurriculumTopic(input.curriculum, topic.id)
     const description = curriculumTopic?.description ?? topic.description ?? null
 
@@ -94,7 +96,7 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       summary: description,
       parent_id: topic.parent_id ? idMap.get(topic.parent_id) ?? null : null,
       position: Number.isFinite(topic.position) ? topic.position : index,
-      state: isFirstTopicOfFirstBranch ? 'active' : 'locked',
+      state: 'locked' as const,    // all start locked; exactly one is activated below
       understanding_level: null,
       prerequisites: (topic.prerequisites || []).map((id: string) => idMap.get(id) ?? id),
       depth: topic.depth ?? null,
@@ -104,7 +106,20 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     }
   })
 
-  const firstActiveTopic = topicsToInsert.find((topic: any) => topic.state === 'active') ?? topicsToInsert[0]
+  // Exactly one topic starts active: the mapBuilder's designated active topic in the
+  // first branch (position 0), falling back to the very first topic if none qualifies.
+  const mapActiveId = firstBranch.active_topic_id
+    ? idMap.get(firstBranch.active_topic_id) ?? null
+    : null
+
+  const firstActiveTopic =
+    (mapActiveId ? topicsToInsert.find((t: any) => String(t._id) === mapActiveId) : null)
+    ?? topicsToInsert.find((t: any) => t.branch_id === firstBranch.id && t.position === 0)
+    ?? topicsToInsert[0]
+
+  // Mutate the single chosen topic to active
+  ;(firstActiveTopic as any).state = 'active'
+
   const firstActiveTopicId = String(firstActiveTopic._id)
 
   const branchesToInsert = branches.map((branch: any, index: number) => {

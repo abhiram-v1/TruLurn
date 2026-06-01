@@ -3,9 +3,8 @@ export const dynamic = 'force-dynamic'
 import Link from 'next/link'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { BottomNav } from '@/components/navigation/BottomNav'
-import { TopicPill } from '@/components/ui/TopicPill'
 import { AuthButtons } from '@/components/auth/AuthButtons'
+import { HomeCourseRow } from '@/components/home/HomeCourseRow'
 import { getDb } from '@/lib/db'
 
 function timeGreeting() {
@@ -20,6 +19,8 @@ type CourseRow = {
   title?: string
   topic?: string
   status?: string
+  branch_count?: number
+  topic_count?: number
   created_at?: Date
 }
 
@@ -62,7 +63,7 @@ export default async function HomePage() {
         <div className="home-course-list">
           {!userId ? (
             <div className="empty-course-state">
-              <p>Generated courses are stored under your account. Sign in first, then create your first roadmap.</p>
+              <p>Generated courses are stored under your account. Sign in first, then create your first Atlas.</p>
               <div className="empty-course-actions">
                 <Link className="button" href="/auth/signin">Sign in</Link>
                 <Link className="button-subtle" href="/auth/signin">Sign up</Link>
@@ -80,19 +81,16 @@ export default async function HomePage() {
           {courses.map((course) => {
             const courseId = String(course._id)
             const isActive = courseId === activeCourseId
-            const branchCount = isActive ? branches.length : undefined
+            const branchCount = isActive ? branches.length : course.branch_count
 
             return (
-              <Link className="home-course-row" href={`/course/${courseId}`} key={courseId}>
-                <span className={`state-dot ${course.status === 'ready' ? 'active' : 'partial'}`} />
-                <span className="home-course-copy">
-                  <span className="course-title">{course.topic ?? course.title ?? 'Untitled course'}</span>
-                  <span className="course-meta">
-                    {course.title ?? 'Generated curriculum'}{branchCount !== undefined ? ` / ${branchCount} branches` : ''}
-                  </span>
-                </span>
-                <TopicPill state={course.status === 'ready' ? 'active' : 'partial'} />
-              </Link>
+              <HomeCourseRow
+                courseId={courseId}
+                key={courseId}
+                meta={`${course.title ?? 'Generated curriculum'}${branchCount !== undefined ? ` / ${branchCount} branches` : ''}`}
+                status={course.status === 'ready' ? 'active' : 'partial'}
+                title={course.topic ?? course.title ?? 'Untitled course'}
+              />
             )
           })}
 
@@ -106,7 +104,7 @@ export default async function HomePage() {
 
         {activeCourseId ? (
           <div className="home-pane-footer">
-            <Link href={`/course/${activeCourseId}`}>Big roadmap</Link>
+            <Link href={`/course/${activeCourseId}`}>Atlas</Link>
             {activeTopicId ? <Link href={`/learn/${activeCourseId}/${activeTopicId}`}>Continue study</Link> : null}
           </div>
         ) : null}
@@ -118,14 +116,15 @@ export default async function HomePage() {
             <path d="M0 0H40C74 92 78 168 48 246C18 324 20 404 54 486C88 568 80 648 38 726C12 774 8 834 34 900H0V0Z" />
           </svg>
         </div>
-        <div className="home-seam" aria-hidden="true">
-          <span>v</span>
-        </div>
         <img
           className="visual-artwork"
           src="/svggenie-1779268612546.svg"
           alt="Warm study illustration"
         />
+        <div className="home-visual-note" aria-hidden="true">
+          <span>{courses.length || 'New'}</span>
+          <p>{courses.length === 1 ? 'course workspace' : courses.length > 1 ? 'course workspaces' : 'workspace ready'}</p>
+        </div>
         <div className="continue-strip">
           <div>
             <span className="eyebrow">{activeCourse ? 'Continue' : 'Start'}</span>
@@ -140,8 +139,6 @@ export default async function HomePage() {
           </Link>
         </div>
       </section>
-
-      <BottomNav courseId={activeCourseId} />
     </main>
   )
 }

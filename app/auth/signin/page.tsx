@@ -1,7 +1,9 @@
 'use client'
 
-import { signIn } from 'next-auth/react'
+import { signIn, useSession } from 'next-auth/react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
 
 function GoogleIcon() {
   return (
@@ -35,6 +37,33 @@ function GitHubIcon() {
 }
 
 export default function SignInPage() {
+  const router = useRouter()
+  const { status } = useSession()
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (status === 'authenticated') {
+      router.replace('/')
+    }
+  }, [router, status])
+
+  useEffect(() => {
+    setError(new URLSearchParams(window.location.search).get('error'))
+  }, [])
+
+  if (status === 'authenticated' || status === 'loading') {
+    return (
+      <div className="signin-shell">
+        <div className="signin-card">
+          <Link href="/" className="signin-brand">
+            TruLurn
+          </Link>
+          <p className="signin-tagline">Checking your session...</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="signin-shell">
       <div className="signin-card">
@@ -62,6 +91,12 @@ export default function SignInPage() {
             Continue with GitHub
           </button>
         </div>
+
+        {error ? (
+          <div className="result-banner error-banner">
+            Sign in did not complete. Error: {error}. Check the terminal for NextAuth debug details.
+          </div>
+        ) : null}
 
         <p className="signin-footer">
           By continuing, you agree to our{' '}
