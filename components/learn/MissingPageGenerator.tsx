@@ -34,13 +34,17 @@ export function MissingPageGenerator({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ courseId, pageNumber, force }),
       })
-      const data = (await response.json()) as { error?: string }
+      const data = (await response.json()) as { error?: string; redirectTo?: string }
 
       if (!response.ok) {
         throw new Error(data.error ?? 'Lesson generation failed.')
       }
 
-      router.refresh()
+      if (data.redirectTo) {
+        router.push(data.redirectTo)
+      } else {
+        router.refresh()
+      }
     } catch (caught) {
       generationStartedRef.current = false
       setStatus('failed')

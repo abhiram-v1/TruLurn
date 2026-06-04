@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "dev:clean": "node scripts/dev-clean.js",
+    "build": "node scripts/next-build.js",
     "start": "next start",
     "lint": "next lint"
   },

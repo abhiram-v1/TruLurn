@@ -2,9 +2,20 @@ import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
-import { getConceptMap } from '@/lib/doubts/conceptMap'
+import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
 import { buildDoubtPrompt } from '@/lib/doubts/context'
 import { extractForwardRef, storeForwardRef } from '@/lib/agent/forwardRefs'
+import {
+  computeGlobalPagePosition,
+  findTopicPageByGlobalNumber,
+  plannedPageCount,
+  sortCourseTopics,
+} from '@/lib/course-pages/globalPageNumbers'
+import {
+  buildAgentWorkspaceContext,
+  planAgentContext,
+  selectAdaptiveHistory,
+} from '@/lib/agent/context'
 import {
   embedDoubtMessageById,
   findRelevantPages,
@@ -21,6 +32,7 @@ type HandleDoubtInput = {
   pageNumber: number
   question: string
   selectedContext?: string | null
+  preClassifiedType?: DoubtQuestionType
 }
 
 async function fetchCurrentPosition(
@@ -43,14 +55,23 @@ async function fetchCurrentPosition(
   if (!topic) throw new Error('Topic not found.')
   if (!page) throw new Error('Page not found.')
 
+  const orderedTopics = sortCourseTopics(topics, branches)
   const branch = branches.find((item) => item.branch_key === topic.branch_id || String(item._id) === String(topic.branch_id))
-  const branchTopics = topics.filter((item) => item.branch_id === topic.branch_id)
+  const branchTopics = orderedTopics.filter((item) => String(item.branch_id) === String(topic.branch_id))
+  const globalPage = computeGlobalPagePosition({
+    topics: orderedTopics,
+    branches,
+    topicId,
+    pageNumber,
+  })
 
-  const totalPages = Math.max(1, Number(topic.estimated_pages ?? page.page_number ?? 1))
+  const totalPages = plannedPageCount(topic, pageNumber)
 
   return {
     course,
     topic,
+    orderedTopics,
+    branches,
     page,
     promptPage: {
       courseTitle: course.title,
@@ -62,6 +83,8 @@ async function fetchCurrentPosition(
       topicTotal: Math.max(1, branchTopics.length),
       pageNumber,
       totalPages,
+      globalPageNumber: globalPage.globalPageNumber,
+      globalPageTotal: globalPage.globalPageTotal,
       isLastPage: totalPages > 1 && pageNumber >= totalPages,
       pageFocus: pageSummary?.focus ?? page.focus ?? null,
       content: page.content,
@@ -69,11 +92,94 @@ async function fetchCurrentPosition(
   }
 }
 
+function extractCoursePageReferences(question: string) {
+  const refs = new Set<number>()
+  const patterns = [
+    /\b(?:course|global|standard)\s+page\s*#?\s*(\d{1,4})\b/gi,
+    /\bpage\s+number\s*#?\s*(\d{1,4})\b/gi,
+    /\bpage\s+(\d{1,4})\b/gi,
+    /\bp(?:age)?\s*#\s*(\d{1,4})\b/gi,
+  ]
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(question)) !== null) {
+      refs.add(Number(match[1]))
+    }
+  }
+
+  return [...refs].filter((value) => Number.isFinite(value) && value > 0).slice(0, 3)
+}
+
+function compactForPrompt(value: unknown, max = 1700) {
+  const clean = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return clean.length > max ? `${clean.slice(0, max)}...` : clean
+}
+
+async function fetchExplicitPageReferences({
+  db,
+  courseId,
+  question,
+  orderedTopics,
+  branches,
+}: {
+  db: Db
+  courseId: string
+  question: string
+  orderedTopics: any[]
+  branches: any[]
+}) {
+  const refs = extractCoursePageReferences(question)
+  if (!refs.length) return ''
+
+  const blocks: string[] = ['EXPLICIT COURSE PAGE REFERENCES:']
+
+  for (const globalPageNumber of refs) {
+    const target = findTopicPageByGlobalNumber({ topics: orderedTopics, branches, globalPageNumber })
+
+    if (!target) {
+      blocks.push(`- Course page ${globalPageNumber}: no planned page exists for this course number.`)
+      continue
+    }
+
+    const [topic, page, summary] = await Promise.all([
+      db.collection('topics').findOne({ _id: target.topicId as any, course_id: courseId }),
+      db.collection('pages').findOne({
+        course_id: courseId,
+        topic_id: target.topicId,
+        page_number: target.pageNumber,
+      }),
+      db.collection('pageSummaries').findOne({
+        course_id: courseId,
+        topic_id: target.topicId,
+        page_number: target.pageNumber,
+      }),
+    ])
+
+    if (!page) {
+      blocks.push(
+        `- Course page ${globalPageNumber}: planned as ${topic?.title ?? target.topicId}, topic page ${target.pageNumber}, but it has not been generated yet.`,
+      )
+      continue
+    }
+
+    blocks.push([
+      `- Course page ${globalPageNumber}: ${topic?.title ?? target.topicId}, topic page ${target.pageNumber}`,
+      summary?.focus ? `Focus: ${summary.focus}` : null,
+      summary?.summary ? `Summary: ${summary.summary}` : null,
+      `Content excerpt: ${compactForPrompt(page.content)}`,
+    ].filter(Boolean).join('\n'))
+  }
+
+  return blocks.join('\n\n')
+}
+
 async function fetchRecentHistory(db: Db, courseId: string, userId: string) {
   const messages = await db.collection('doubtMessages')
     .find({ course_id: courseId, user_id: userId })
     .sort({ created_at: -1 })
-    .limit(6)
+    .limit(20)
+    .project({ role: 1, content: 1, topic_id: 1, page_number: 1, global_page_number: 1 })
     .toArray()
 
   const topicIds = [...new Set(messages.map((message) => String(message.topic_id)))]
@@ -83,12 +189,15 @@ async function fetchRecentHistory(db: Db, courseId: string, userId: string) {
     .toArray()
   const topicTitleById = new Map(topics.map((topic) => [String(topic._id), topic.title]))
 
-  return messages.reverse().map((message) => ({
+  const mapped = messages.reverse().map((message) => ({
     role: message.role as 'user' | 'assistant',
     content: String(message.content),
     topic_title: topicTitleById.get(String(message.topic_id)) ?? null,
     page_number: message.page_number ?? null,
+    global_page_number: message.global_page_number ?? null,
   }))
+
+  return selectAdaptiveHistory(mapped, 1800).messages
 }
 
 async function generateAnswer({
@@ -96,6 +205,7 @@ async function generateAnswer({
   type,
   question,
   selectedContext,
+  workspaceContext,
   courseId,
   userId,
   topicId,
@@ -109,6 +219,7 @@ async function generateAnswer({
   type: DoubtQuestionType
   question: string
   selectedContext?: string | null
+  workspaceContext?: string | null
   courseId: string
   userId: string
   topicId: string
@@ -122,6 +233,7 @@ async function generateAnswer({
     type,
     question,
     selectedContext,
+    workspaceContext,
     currentPage,
     recentHistory,
     conceptMap,
@@ -154,6 +266,7 @@ async function generateAnswer({
       type: 'course_specific',
       question,
       selectedContext,
+      workspaceContext,
       courseId,
       userId,
       topicId,
@@ -174,6 +287,7 @@ async function storeMessage({
   userId,
   topicId,
   pageNumber,
+  globalPageNumber,
   role,
   content,
 }: {
@@ -182,6 +296,7 @@ async function storeMessage({
   userId: string
   topicId: string
   pageNumber: number
+  globalPageNumber?: number
   role: 'user' | 'assistant'
   content: string
 }) {
@@ -193,6 +308,7 @@ async function storeMessage({
     user_id: userId,
     topic_id: topicId,
     page_number: pageNumber,
+    global_page_number: globalPageNumber ?? null,
     role,
     content,
     created_at: new Date(),
@@ -211,21 +327,55 @@ export async function handleDoubt(input: HandleDoubtInput) {
   const questionWithContext = selectedContext
     ? `${question}\n\nSelected passage:\n${selectedContext}`
     : question
+  const contextPlan = planAgentContext(question, selectedContext)
+
+  // Skip concept map for general_knowledge — not injected into that prompt type.
+  // Saves 3 DB reads (topics + topicSummaries + pageSummaries) per GK question.
+  const needsConceptMap = input.preClassifiedType !== 'general_knowledge'
 
   const [position, recentHistory, conceptMap] = await Promise.all([
     fetchCurrentPosition(input.db, input.courseId, input.topicId, input.pageNumber, input.userId),
     fetchRecentHistory(input.db, input.courseId, input.userId),
-    getConceptMap(input.db, input.courseId),
+    needsConceptMap
+      ? getConceptMap(input.db, input.courseId)
+      : Promise.resolve([] as string[]),
   ])
 
-  const type = await classifyQuestion(questionWithContext, position.page.content, conceptMap)
+  // Use pre-classified type from the combined intent classifier if available —
+  // this skips a full AI round-trip (~700-1000 ms).
+  const typePromise = input.preClassifiedType
+    ? Promise.resolve(input.preClassifiedType)
+    : classifyQuestion(questionWithContext, position.page.content, conceptMap)
+
+  // Parallelize workspace context reads alongside question type resolution
+  // instead of running them sequentially after classification.
+  const [type, workspaceContext, explicitPageContext] = await Promise.all([
+    typePromise,
+    buildAgentWorkspaceContext({
+      db: input.db,
+      courseId: input.courseId,
+      userId: input.userId,
+      currentTopicId: input.topicId,
+      plan: contextPlan,
+    }),
+    fetchExplicitPageReferences({
+      db: input.db,
+      courseId: input.courseId,
+      question,
+      orderedTopics: position.orderedTopics,
+      branches: position.branches,
+    }),
+  ])
+
+  const combinedWorkspaceContext = [workspaceContext, explicitPageContext]
+    .filter((block) => block && block.trim())
+    .join('\n\n')
 
   // general_knowledge: model answers from its own knowledge — no retrieval at all.
   // current_page: page content is already in the prompt — no cross-topic retrieval.
   // course_specific: full vector retrieval for cross-topic context.
-  // Skipping retrieveCourseMemory for the first two types avoids 3 unnecessary
-  // embedding API calls per message (each sub-function embeds even with limit=0).
-  const memory = type === 'course_specific'
+  const shouldRetrieveMemory = type === 'course_specific' || contextPlan.needsSemanticMemory
+  const memory = shouldRetrieveMemory
     ? await retrieveCourseMemory({
         db: input.db,
         query: questionWithContext,
@@ -238,23 +388,26 @@ export async function handleDoubt(input: HandleDoubtInput) {
       })
     : { pages: [], doubtMessages: [], sourceChunks: [] }
 
-  const relevantPages = type === 'course_specific' ? memory.pages : []
+  const relevantPages = shouldRetrieveMemory ? memory.pages : []
 
-  await storeMessage({
+  // Fire-and-forget — don't block answer generation on the DB write.
+  storeMessage({
     db: input.db,
     courseId: input.courseId,
     userId: input.userId,
     topicId: input.topicId,
     pageNumber: input.pageNumber,
+    globalPageNumber: position.promptPage.globalPageNumber,
     role: 'user',
     content: question,
-  })
+  }).catch((err) => console.warn('Failed to store user message.', err))
 
   const rawAnswer = await generateAnswer({
     db: input.db,
     type,
     question,
     selectedContext,
+    workspaceContext: combinedWorkspaceContext,
     courseId: input.courseId,
     userId: input.userId,
     topicId: input.topicId,
@@ -285,6 +438,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
     userId: input.userId,
     topicId: input.topicId,
     pageNumber: input.pageNumber,
+    globalPageNumber: position.promptPage.globalPageNumber,
     role: 'assistant',
     content: cleanResponse,
   })
@@ -303,5 +457,6 @@ export async function handleDoubt(input: HandleDoubtInput) {
       doubts: memory.doubtMessages.length,
       sources: memory.sourceChunks.length,
     },
+    contextPlan,
   }
 }

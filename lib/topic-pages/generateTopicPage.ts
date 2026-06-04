@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { parseGeminiJson } from '@/lib/ai/gemini/json'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
-import type { ConceptKind, LessonSection, LessonSectionType, TopicDepth } from '@/types'
+import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
 
 type GenerateTopicPageInput = {
   course: any
@@ -10,6 +10,8 @@ type GenerateTopicPageInput = {
   pageNumber?: number
   previousPages?: any[]
   memory?: CourseMemoryContext
+  mapPointer?: string
+  sequenceContext?: string
   approach?: 'explain_again' | 'go_deeper' | 'simplify' | 'show_example'
   customInstruction?: string
 }
@@ -22,6 +24,15 @@ export type GeneratedTopicPage = {
   key_concepts: string[]
   topic_depth: TopicDepth
   concept_kind: ConceptKind
+  content_kind: ContentKind
+  should_generate_page: boolean
+  decision_reason: string
+  estimated_length: 'short' | 'medium' | 'long'
+  requires_quiz: boolean
+  covered_concepts: string[]
+  reused_concepts: string[]
+  reminder_concepts: string[]
+  example_refs: LessonExampleRef[]
   sections: LessonSection[]
 }
 
@@ -330,6 +341,15 @@ function parseStructuredResponse(
     needs_examples?: boolean
     needs_misconceptions?: boolean
     needs_checkpoints?: boolean
+    content_kind?: ContentKind
+    should_generate_page?: boolean
+    reason?: string
+    estimated_length?: 'short' | 'medium' | 'long'
+    requires_quiz?: boolean
+    covered_concepts?: string[]
+    reused_concepts?: string[]
+    reminder_concepts?: string[]
+    example_refs?: LessonExampleRef[]
   }>(assessRaw)
 
   const sections: LessonSection[] = []
@@ -352,6 +372,29 @@ function parseStructuredResponse(
 
   sections.push(...chooseOptionalSections(optionalCandidates, meta))
 
+  const shouldGeneratePage = meta.should_generate_page !== false && meta.content_kind !== 'skip'
+  if (!shouldGeneratePage) {
+    return {
+      page_number: pageNumber,
+      focus: meta.focus || fallbackFocus,
+      content: meta.reason || meta.summary || `${fallbackFocus} is covered by surrounding Traccia nodes.`,
+      summary: meta.summary || meta.reason || `${fallbackFocus} does not need a standalone lesson page.`,
+      key_concepts: Array.isArray(meta.key_concepts) ? meta.key_concepts : [],
+      topic_depth: meta.topic_depth || 'shallow',
+      concept_kind: meta.concept_kind || 'definition',
+      content_kind: 'skip',
+      should_generate_page: false,
+      decision_reason: meta.reason || 'This node is better handled as context, a bridge, or part of nearby content.',
+      estimated_length: meta.estimated_length || 'short',
+      requires_quiz: Boolean(meta.requires_quiz),
+      covered_concepts: Array.isArray(meta.covered_concepts) ? meta.covered_concepts : [],
+      reused_concepts: Array.isArray(meta.reused_concepts) ? meta.reused_concepts : [],
+      reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
+      example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
+      sections: [],
+    }
+  }
+
   const coreSection = sections.find((section) => section.type === 'core')
   if (!coreSection || coreSection.content.trim().length < 350) return null
 
@@ -366,6 +409,15 @@ function parseStructuredResponse(
     key_concepts: Array.isArray(meta.key_concepts) ? meta.key_concepts : [],
     topic_depth: meta.topic_depth || 'medium',
     concept_kind: meta.concept_kind || 'mechanism',
+    content_kind: meta.content_kind || 'full_page',
+    should_generate_page: true,
+    decision_reason: meta.reason || 'This concept needs a standalone generated lesson page.',
+    estimated_length: meta.estimated_length || 'medium',
+    requires_quiz: Boolean(meta.requires_quiz),
+    covered_concepts: Array.isArray(meta.covered_concepts) ? meta.covered_concepts : [],
+    reused_concepts: Array.isArray(meta.reused_concepts) ? meta.reused_concepts : [],
+    reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
+    example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
     sections,
   }
 }
@@ -390,6 +442,15 @@ function parseOldFormat(
       key_concepts: Array.isArray(meta.key_concepts) ? meta.key_concepts : [],
       topic_depth: 'medium',
       concept_kind: 'mechanism',
+      content_kind: 'full_page',
+      should_generate_page: true,
+      decision_reason: 'Legacy lesson format produced a full page.',
+      estimated_length: 'medium',
+      requires_quiz: false,
+      covered_concepts: [],
+      reused_concepts: [],
+      reminder_concepts: [],
+      example_refs: [],
       sections: [{ type: 'core', content }],
     }
   }
@@ -408,6 +469,15 @@ function parseOldFormat(
     key_concepts: Array.isArray(parsed.key_concepts) ? parsed.key_concepts : [],
     topic_depth: 'medium',
     concept_kind: 'mechanism',
+    content_kind: 'full_page',
+    should_generate_page: true,
+    decision_reason: 'Legacy JSON lesson format produced a full page.',
+    estimated_length: 'medium',
+    requires_quiz: false,
+    covered_concepts: [],
+    reused_concepts: [],
+    reminder_concepts: [],
+    example_refs: [],
     sections: [{ type: 'core', content }],
   }
 }
@@ -417,6 +487,23 @@ function parseOldFormat(
 const SYSTEM = `You are TruLurn's adaptive lesson writer.
 Your job: match the FORMAT to the CONCEPT so the student actually learns — not just reads.
 Use paragraphs, bullets, examples, and callouts intelligently based on what each piece of content is.
+
+You also decide whether this Traccia node truly deserves a standalone lesson page.
+Do not over-explain simple bridge concepts. A learning unit may be:
+- full_page: a standalone lesson page is justified.
+- section: a concise teachable section is enough.
+- bridge: a short transition between nearby ideas is enough.
+- example: a concrete example is the main value.
+- skip: no page should be generated because the idea is already covered nearby or is only structural context.
+Choose skip carefully. Never skip a concept if skipping would hide a prerequisite, a common source of confusion, or an assessable skill.
+
+TONE & VOICE — follow these without exception:
+• Write like a knowledgeable friend explaining something, not a textbook author. Clear and direct, never stiff or overly formal.
+• Talk directly to the student. Use "you": "When you call a function..." not "When a function is called..."
+• Keep sentences short and clear. If a sentence is doing too much, split it.
+• When you introduce a technical term, explain what it means immediately — in the same sentence or the very next one. Don't assume the student already knows it.
+• Lead with intuition before definition. Start with what problem this solves, or a real-world analogy, before presenting formal terms.
+• Prefer active voice. "Python reads the file" lands better than "the file is read by Python".
 
 STRICT OPTIONAL SECTION POLICY:
 - Treat optional sections as false by default. The model must earn each one.
@@ -446,13 +533,32 @@ STEP 1 — ASSESS the concept:
 • needs_misconceptions → true if there is a specific, high-risk wrong belief about this concept
 • needs_checkpoints → true for math, procedure, or pitfall where active self-testing prevents false confidence
 
+STEP 1B - SHAPE THE CONTENT:
+• content_kind: "full_page" | "section" | "bridge" | "example" | "skip"
+• should_generate_page: false only when content_kind is "skip"
+• estimated_length:
+    "short"  -> 250-450 words, bridge/section/example
+    "medium" -> 550-850 words, normal page
+    "long"   -> 900-1200 words, only for deep concepts
+• requires_quiz: true only if the node introduces an assessable skill, formula, procedure, or high-risk misconception.
+Use the course map pointer to avoid repeating nearby pages and to keep this node scoped.
+
+STEP 1C - SEQUENCE CONTINUITY:
+• If the sequence context says a concept was already explained, do not re-teach it from scratch.
+  Use either 2-4 short reminder bullets or one compact bridge paragraph.
+• If the same concept appears in a new context, explain only the contextual difference.
+• Reuse examples listed in the sequence context when they still fit.
+  Introduce a new example only when the old one would mislead, hide the current mechanism, or fail for this topic.
+• Avoid casually switching analogy domains across adjacent pages.
+• Record what you did in assessment.covered_concepts, reused_concepts, reminder_concepts, and example_refs.
+
 STEP 2 — FORMAT RULES: choose the right format for each piece of content
 
 PARAGRAPHS — use for:
-• Narrative explanation, cause-effect reasoning, the "story" of why something works
-• Introducing a concept before showing its structure
-• Wrapping up a section with implications or broader context
-• Keep each paragraph 2–4 sentences, under 85 words. Do not write walls of prose.
+• Explaining the "why" and "how" — tell the story of the concept in plain language
+• Setting up a concept with intuition before showing its structure
+• Connecting ideas to what the student already knows
+• Keep each paragraph 2–4 sentences, under 85 words. No walls of prose. If it feels dense, split it.
 
 BULLET LISTS — use for:
 • Any 2+ discrete items: properties, types, conditions, components, consequences
@@ -479,10 +585,11 @@ INLINE CALLOUTS — embed in <core> at the point where they add the most value:
   Max 2 per page. Do not use for things the prose already states clearly.
 
 HEADINGS — required structure:
-• The very first line of <core> MUST be a ## heading naming the exact concept.
-  Good: "## What Is a Loss Function?" / "## Gradient Descent" / "## The Chain Rule"
-  Bad:  "## Introduction" / "## Overview" / "## Core Concepts"  ← too generic, never use these
-• For pages with 2–3 distinct sub-concepts, use ## sub-headings to separate them.
+• The very first line of <core> MUST be a ## heading that names the concept clearly and conversationally.
+  Good: "## What Is a Loss Function?" / "## How Gradient Descent Works" / "## Why Recursion Needs a Base Case"
+  Also good: "## Variables" / "## The Chain Rule" (short and direct is fine)
+  Bad:  "## Introduction" / "## Overview" / "## Core Concepts" ← too generic, never use these
+• Sub-headings for 2–3 distinct sub-concepts. Keep them direct and specific.
 • Max 3 ## headings per <core>.
 
 SEPARATE SECTIONS — use when content earns its own visual block:
@@ -520,6 +627,8 @@ const USER_TEMPLATE = ({
   focus,
   previousPages,
   memory,
+  mapPointer,
+  sequenceContext,
 }: {
   courseTitle: string
   courseGoal: string
@@ -531,6 +640,8 @@ const USER_TEMPLATE = ({
   focus: string
   previousPages?: any[]
   memory?: CourseMemoryContext
+  mapPointer?: string
+  sequenceContext?: string
 }) => `Course: ${courseTitle}
 Goal: ${courseGoal}
 Topic: ${topicTitle}
@@ -538,6 +649,9 @@ Description: ${topicDescription}
 Suggested depth: ${topicDepth}
 Page: ${pageNumber} of ${plannedPages}
 Page focus: ${focus}
+
+${mapPointer ? `${mapPointer}\n` : ''}
+${sequenceContext ? `${sequenceContext}\n` : ''}
 
 Previous pages in this same topic:
 ${formatPreviousPages(previousPages)}
@@ -556,12 +670,30 @@ Return in this EXACT format. Only <assessment> and <core> are always required.
   "needs_key_ideas": false,
   "needs_examples": false,
   "needs_misconceptions": false,
-  "needs_checkpoints": false
+  "needs_checkpoints": false,
+  "content_kind": "full_page|section|bridge|example|skip",
+  "should_generate_page": true,
+  "reason": "why this node deserves this content shape",
+  "estimated_length": "short|medium|long",
+  "requires_quiz": false,
+  "covered_concepts": ["concept explained or materially advanced on this page"],
+  "reused_concepts": ["prior concept referenced without re-teaching"],
+  "reminder_concepts": ["prior concept summarized only as a short hint"],
+  "example_refs": [
+    {
+      "label": "short example label",
+      "topic_title": "source topic title or null",
+      "page_number": 1,
+      "excerpt": "short reused or adapted example note"
+    }
+  ]
 }
 </assessment>
 
 RULES:
-- Always include <core>.
+- Always include <core> unless should_generate_page is false.
+- If should_generate_page is false, return only <assessment> and no other tags.
+- If content_kind is section, bridge, or example, keep <core> concise and do not pad to look like a full lesson.
 - Default to no optional sections. Include a separate optional section only when it changes how the learner studies the page.
 - Do not include more than one of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a medium page.
 - Do not include more than two of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a deep page.
@@ -572,6 +704,8 @@ RULES:
 - Include <misconceptions> only when needs_misconceptions is true.
 - Include <checkpoints> only when needs_checkpoints is true.
 - Omit any section whose flag is false. No placeholder text.
+- When using an earlier idea, record it in reused_concepts or reminder_concepts.
+- When reusing or adapting an example, include it in example_refs.
 
 <prerequisites>
 [Only if needs_prerequisites is true — 2–4 sentences on what the student must already know]
@@ -638,12 +772,27 @@ const APPROACH_INSTRUCTIONS: Record<string, string> = {
   show_example: 'REGENERATION MODE: Lead with concrete, worked examples. Every abstract claim should be grounded in a real or illustrative case. Use numbers, code snippets, or step-by-step walkthroughs.',
 }
 
+const COURSE_DEPTH_INSTRUCTIONS: Record<string, string> = {
+  low: `COURSE DEPTH: Low — This course is set to overview level.
+- Keep explanations concise. Prioritise clarity and the core intuition.
+- Skip advanced nuances, edge cases, and supplementary content — a student should understand the essentials, not every detail.
+- Prefer one clear example over multiple variations.
+- A focused, shorter page is better than a comprehensive but overwhelming one.`,
+  high: `COURSE DEPTH: High — This course is set to mastery level.
+- Provide thorough coverage. Include deeper reasoning, advanced nuances, and edge cases where they add genuine value.
+- Multiple examples are encouraged when they each illuminate a different angle.
+- The student expects a complete treatment — do not shy away from detail or complexity.
+- Only add depth where it genuinely aids understanding; do not pad.`,
+}
+
 export async function generateTopicPage({
   course,
   topic,
   pageNumber = 1,
   previousPages = [],
   memory,
+  mapPointer,
+  sequenceContext,
   approach,
   customInstruction,
 }: GenerateTopicPageInput): Promise<GeneratedTopicPage> {
@@ -652,12 +801,16 @@ export async function generateTopicPage({
     ? customInstruction
     : (topic.page_focuses?.[pageNumber - 1]?.focus ?? fallbackPageFocus(topic, pageNumber))
 
+  const depthKey = String(course.course_depth ?? 'standard')
+  const depthBlock = COURSE_DEPTH_INSTRUCTIONS[depthKey]
+    ? `\n${COURSE_DEPTH_INSTRUCTIONS[depthKey]}\n`
+    : ''
   const approachBlock = approach ? `\n${APPROACH_INSTRUCTIONS[approach] ?? ''}\n` : ''
   const customBlock = customInstruction
     ? `\nCUSTOM PAGE REQUEST: "${customInstruction}"\nGenerate this page in response to the student's specific request. The focus above reflects their intent.\n`
     : ''
 
-  const user = [approachBlock, customBlock, USER_TEMPLATE({
+  const user = [depthBlock, approachBlock, customBlock, USER_TEMPLATE({
     courseTitle: course.title ?? course.topic,
     courseGoal: course.goals ?? 'Master the subject clearly enough to explain and apply it.',
     topicTitle: topic.title,
@@ -668,6 +821,8 @@ export async function generateTopicPage({
     focus,
     previousPages,
     memory,
+    mapPointer,
+    sequenceContext,
   })].filter(Boolean).join('')
 
   const text = await generateWithGemini({
@@ -711,6 +866,15 @@ export function buildPageDocument(input: {
     key_concepts: input.page.key_concepts,
     topic_depth: input.page.topic_depth,
     concept_kind: input.page.concept_kind,
+    content_kind: input.page.content_kind,
+    should_generate_page: input.page.should_generate_page,
+    decision_reason: input.page.decision_reason,
+    estimated_length: input.page.estimated_length,
+    requires_quiz: input.page.requires_quiz,
+    covered_concepts: input.page.covered_concepts,
+    reused_concepts: input.page.reused_concepts,
+    reminder_concepts: input.page.reminder_concepts,
+    example_refs: input.page.example_refs,
     sections: input.page.sections,
     created_at: new Date(),
     updated_at: new Date(),

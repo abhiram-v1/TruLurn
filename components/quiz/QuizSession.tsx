@@ -1,55 +1,76 @@
 'use client'
 
 import Link from 'next/link'
-import { FormEvent, useState } from 'react'
-import type { EvaluationResult, QuizQuestion } from '@/types'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import type { EvaluationResult, ExamMode, ExamTurn, QuestionType } from '@/types'
 
-const TYPE_LABELS: Record<string, string> = {
-  apply:      'Apply',
+const TYPE_LABELS: Record<QuestionType, string> = {
+  apply: 'Apply',
   spot_error: 'Spot the error',
-  explain:    'Explain',
-  mcq:        'Multiple choice',
+  explain: 'Explain',
+  mcq: 'Multiple choice',
   true_false: 'True / False',
-  code:       'Code answer',
-}
-
-const LEVEL_NAMES: Record<number, string> = {
-  1: 'Recognition',
-  2: 'Mechanical',
-  3: 'Conceptual',
-  4: 'Transfer',
-  5: 'Intuitive',
+  code: 'Code answer',
 }
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D']
 
-// ── Input renderers ───────────────────────────────────────────────────────────
+type ExamSessionPayload = {
+  session: {
+    id: string
+    course_id: string
+    topic_id: string
+    mode: ExamMode
+    status: string
+    question_index: number
+    min_questions: number
+    max_questions: number
+    followups_used: number
+    max_followups: number
+    summary?: {
+      passed?: boolean
+      overall_level?: number
+      passed_count?: number
+      total_questions?: number
+      strong_concepts?: string[]
+      review_concepts?: string[]
+      student_summary?: string
+      graph_update?: { summary?: string; nextSuggestedTopicId?: string | null } | null
+    } | null
+  }
+  turn: ExamTurn | null
+  turns?: Array<ExamTurn & {
+    answer?: string
+    rubric?: string | null
+    evaluation?: EvaluationResult | null
+  }>
+}
 
 function McqInput({
-  question,
+  turn,
   value,
   onChange,
 }: {
-  question: QuizQuestion
+  turn: ExamTurn
   value: string
   onChange: (v: string) => void
 }) {
-  const options = question.options ?? []
+  const options = turn.options ?? []
   return (
     <div className="quiz-options" role="radiogroup">
       {options.map((opt, i) => (
         <label
-          key={i}
+          key={opt}
           className={`quiz-option${value === opt ? ' selected' : ''}`}
         >
           <input
             type="radio"
-            name={question.id}
+            name={turn.id}
             value={opt}
             checked={value === opt}
             onChange={() => onChange(opt)}
           />
-          <span className="quiz-option-letter">{OPTION_LETTERS[i]}</span>
+          <span className="quiz-option-letter">{OPTION_LETTERS[i] ?? String(i + 1)}</span>
           <span>{opt}</span>
         </label>
       ))}
@@ -58,11 +79,9 @@ function McqInput({
 }
 
 function TrueFalseInput({
-  questionId,
   value,
   onChange,
 }: {
-  questionId: string
   value: string
   onChange: (v: string) => void
 }) {
@@ -84,11 +103,9 @@ function TrueFalseInput({
 }
 
 function CodeAnswerInput({
-  questionId,
   value,
   onChange,
 }: {
-  questionId: string
   value: string
   onChange: (v: string) => void
 }) {
@@ -99,7 +116,7 @@ function CodeAnswerInput({
         <span>Tab inserts spaces</span>
       </div>
       <textarea
-        aria-label={`Code answer for ${questionId}`}
+        aria-label="Code answer"
         className="quiz-code-input"
         spellCheck={false}
         autoCapitalize="off"
@@ -125,200 +142,256 @@ function CodeAnswerInput({
   )
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+function AnswerInput({
+  turn,
+  answer,
+  setAnswer,
+}: {
+  turn: ExamTurn
+  answer: string
+  setAnswer: (value: string) => void
+}) {
+  if (turn.type === 'mcq') {
+    return <McqInput turn={turn} value={answer} onChange={setAnswer} />
+  }
+  if (turn.type === 'true_false') {
+    return <TrueFalseInput value={answer} onChange={setAnswer} />
+  }
+  if (turn.type === 'code') {
+    return <CodeAnswerInput value={answer} onChange={setAnswer} />
+  }
+  return (
+    <textarea
+      aria-label="Quiz answer"
+      placeholder="Explain your reasoning clearly."
+      value={answer}
+      onChange={(e) => setAnswer(e.target.value)}
+    />
+  )
+}
+
+function ResultView({
+  state,
+  courseId,
+  topicId,
+}: {
+  state: ExamSessionPayload
+  courseId: string
+  topicId: string
+}) {
+  const summary = state.session.summary
+  const turns = state.turns ?? []
+  const passed = Boolean(summary?.passed)
+
+  return (
+    <div className="quiz-stack">
+      <div className={`result-banner ${passed ? 'result-banner--pass' : 'result-banner--fail'}`}>
+        <strong>{passed ? 'Quiz completed' : 'Review recommended'}</strong>
+        <p style={{ marginTop: 6, fontWeight: 400 }}>
+          {summary?.student_summary ?? 'Your answers have been evaluated and stored.'}
+        </p>
+        {summary?.graph_update?.summary && (
+          <p style={{ marginTop: 6, fontWeight: 400 }}>{summary.graph_update.summary}</p>
+        )}
+      </div>
+
+      {(summary?.strong_concepts?.length || summary?.review_concepts?.length) ? (
+        <div className="question-block">
+          {summary.strong_concepts?.length ? (
+            <>
+              <div className="question-meta">Felt steady</div>
+              <p className="question-text">{summary.strong_concepts.join(', ')}</p>
+            </>
+          ) : null}
+          {summary.review_concepts?.length ? (
+            <>
+              <div className="question-meta" style={{ marginTop: 18 }}>Worth revisiting</div>
+              <p className="question-text">{summary.review_concepts.join(', ')}</p>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      {turns.map((turn) => (
+        <div
+          className={`result-block ${turn.evaluation?.passed ? 'result-block--pass' : 'result-block--fail'}`}
+          key={turn.id}
+        >
+          <div className="result-block-header">
+            <span className="question-meta">
+              Question {turn.turn_index} · {TYPE_LABELS[turn.type]}
+              {turn.source === 'followup' ? ' · Follow-up' : ''}
+            </span>
+          </div>
+          <p className="question-text">{turn.question}</p>
+          <div className={`result-answer${turn.type === 'code' ? ' result-answer--code' : ''}`}>
+            <span className="result-label">Your answer</span>
+            {turn.type === 'code'
+              ? <pre><code>{turn.answer || 'No answer given.'}</code></pre>
+              : <p>{turn.answer || <em>No answer given.</em>}</p>}
+          </div>
+          {turn.evaluation && (
+            <div className="result-feedback">
+              <span className="result-label">Feedback</span>
+              <p>{turn.evaluation.feedback}</p>
+              {turn.evaluation.gap && <p><strong>Review:</strong> {turn.evaluation.gap}</p>}
+            </div>
+          )}
+        </div>
+      ))}
+
+      <div className="topbar-actions">
+        <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>
+          Return to lesson
+        </Link>
+        <Link className="button" href={`/course/${courseId}/quizzes`}>
+          Quiz library
+        </Link>
+      </div>
+    </div>
+  )
+}
 
 export function QuizSession({
   topicId,
   topicTitle,
-  questions,
   courseId,
+  mode = 'full_topic',
 }: {
   topicId: string
   topicTitle: string
-  questions: QuizQuestion[]
   courseId: string
+  mode?: ExamMode
 }) {
-  const [answers, setAnswers] = useState<Record<string, string>>({})
-  const [evaluations, setEvaluations] = useState<Record<string, EvaluationResult> | null>(null)
+  const [state, setState] = useState<ExamSessionPayload | null>(null)
+  const [answer, setAnswer] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  function setAnswer(id: string, value: string) {
-    setAnswers((prev) => ({ ...prev, [id]: value }))
-  }
+  useEffect(() => {
+    let alive = true
+    async function start() {
+      setIsLoading(true)
+      setError(null)
+      try {
+        const res = await fetch('/api/exams/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ courseId, topicId, mode }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not start quiz.')
+        if (alive) {
+          setState(data)
+          setAnswer('')
+        }
+      } catch (err) {
+        if (alive) setError(err instanceof Error ? err.message : 'Could not start quiz.')
+      } finally {
+        if (alive) setIsLoading(false)
+      }
+    }
+    start()
+    return () => {
+      alive = false
+    }
+  }, [courseId, topicId, mode])
+
+  const turn = state?.turn ?? null
+  const progressLabel = useMemo(() => {
+    if (!state || !turn) return 'Preparing quiz'
+    if (state.session.mode === 'spot_check') return `Spot check · Question ${turn.turn_index}`
+    return `Question ${turn.turn_index}${turn.source === 'followup' ? ' · follow-up' : ''}`
+  }, [state, turn])
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!state?.session.id || !turn) return
     setIsSubmitting(true)
-    setSubmitError(null)
+    setError(null)
     try {
-      const res = await fetch('/api/quiz/evaluate', {
+      const res = await fetch(`/api/exams/${encodeURIComponent(state.session.id)}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ courseId, topicId, answers }),
+        body: JSON.stringify({ turnId: turn.id, answer }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Evaluation failed.')
-      setEvaluations(data.evaluations)
+      if (!res.ok) throw new Error(data.error || 'Could not submit answer.')
+      setState(data)
+      setAnswer('')
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Evaluation failed. Please try again.')
+      setError(err instanceof Error ? err.message : 'Could not submit answer.')
     } finally {
       setIsSubmitting(false)
     }
   }
 
-  const allResults = evaluations ? Object.values(evaluations) : []
-  const passCount = allResults.filter((e) => e.passed).length
-  const passed = allResults.length > 0 && allResults.every((e) => e.passed)
+  if (isLoading) {
+    return (
+      <div className="quiz-stack">
+        <div className="question-block">
+          <div className="question-meta">Preparing exam pointer</div>
+          <p className="question-text">Building this quiz from your Traccia path and stored lesson pages.</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error && !state) {
+    return (
+      <div className="quiz-stack">
+        <div className="result-banner result-banner--fail">
+          <strong>Quiz could not start</strong>
+          <p style={{ marginTop: 6, fontWeight: 400 }}>{error}</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (state?.session.status === 'completed') {
+    return <ResultView state={state} courseId={courseId} topicId={topicId} />
+  }
+
+  if (!turn) {
+    return (
+      <div className="quiz-stack">
+        <div className="question-block">
+          <div className="question-meta">Scoring final answers</div>
+          <p className="question-text">The engine is finishing evaluation. Refresh if this takes longer than a moment.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="quiz-stack">
-      {!evaluations ? (
-        <form className="quiz-stack" onSubmit={submit}>
-          {questions.map((question, index) => {
-            const answer = answers[question.id] ?? ''
-            const isCode = question.type === 'code'
-            const isDescriptive = question.type !== 'mcq' && question.type !== 'true_false' && !isCode
-
-            return (
-              <div className="question-block" key={question.id}>
-                <div className="question-meta">
-                  Q{index + 1} · {TYPE_LABELS[question.type] ?? question.type.replace('_', ' ')}
-                </div>
-                <p className="question-text">{question.question}</p>
-
-                {question.type === 'mcq' && (
-                  <McqInput
-                    question={question}
-                    value={answer}
-                    onChange={(v) => setAnswer(question.id, v)}
-                  />
-                )}
-
-                {question.type === 'true_false' && (
-                  <TrueFalseInput
-                    questionId={question.id}
-                    value={answer}
-                    onChange={(v) => setAnswer(question.id, v)}
-                  />
-                )}
-
-                {isCode && (
-                  <CodeAnswerInput
-                    questionId={question.id}
-                    value={answer}
-                    onChange={(v) => setAnswer(question.id, v)}
-                  />
-                )}
-
-                {isDescriptive && (
-                  <textarea
-                    aria-label={`Answer to question ${index + 1}`}
-                    placeholder="Explain your reasoning clearly."
-                    value={answer}
-                    onChange={(e) => setAnswer(question.id, e.target.value)}
-                  />
-                )}
-              </div>
-            )
-          })}
-
-          {submitError && (
-            <div
-              className="result-banner"
-              style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5' }}
-            >
-              {submitError}
-            </div>
-          )}
-
-          <button className="button" type="submit" disabled={isSubmitting}>
-            {isSubmitting ? 'Evaluating…' : 'Submit answers'}
-          </button>
-        </form>
-      ) : (
-        <div className="quiz-stack">
-          {/* Overall result */}
-          <div className={`result-banner ${passed ? 'result-banner--pass' : 'result-banner--fail'}`}>
-            <strong>
-              {passed
-                ? `Understanding confirmed — ${passCount} of ${questions.length} questions passed.`
-                : `${passCount} of ${questions.length} questions passed — not enough to advance.`}
-            </strong>
-            <p style={{ marginTop: 6, fontWeight: 400 }}>
-              {passed
-                ? 'The next topic will unlock.'
-                : 'Review the gaps below, then retake.'}
-            </p>
+      <form className="quiz-stack" onSubmit={submit}>
+        <div className="question-block">
+          <div className="question-meta">
+            {progressLabel} · {TYPE_LABELS[turn.type]}
           </div>
-
-          {/* Per-question results */}
-          {questions.map((question, index) => {
-            const ev = evaluations[question.id]
-            if (!ev) return null
-            const rawAnswer = answers[question.id] || ''
-            const displayAnswer =
-              question.type === 'true_false'
-                ? rawAnswer.charAt(0).toUpperCase() + rawAnswer.slice(1)
-                : rawAnswer
-
-            return (
-              <div
-                className={`result-block ${ev.passed ? 'result-block--pass' : 'result-block--fail'}`}
-                key={question.id}
-              >
-                <div className="result-block-header">
-                  <span className="question-meta">
-                    Q{index + 1} · {TYPE_LABELS[question.type] ?? question.type}
-                  </span>
-                  <span className={`quiz-level-badge quiz-level-badge--${ev.passed ? 'pass' : 'fail'}`}>
-                    {LEVEL_NAMES[ev.level] ?? `Level ${ev.level}`}
-                    {ev.false_confidence ? ' · ⚠ False confidence detected' : ''}
-                  </span>
-                </div>
-
-                <p className="question-text">{question.question}</p>
-
-                <div className={`result-answer${question.type === 'code' ? ' result-answer--code' : ''}`}>
-                  <span className="result-label">Your answer</span>
-                  {question.type === 'code'
-                    ? <pre><code>{displayAnswer || 'No answer given.'}</code></pre>
-                    : <p>{displayAnswer || <em>No answer given.</em>}</p>}
-                </div>
-
-                <div className="result-feedback">
-                  <span className="result-label">Feedback</span>
-                  <p>{ev.feedback}</p>
-                </div>
-
-                {ev.gap && (
-                  <div className="result-gap">
-                    <span className="result-label">Gap to close</span>
-                    <p>{ev.gap}</p>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-
-          <div className="topbar-actions">
-            <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>
-              Return to lesson
-            </Link>
-            <button
-              className="button-quiet"
-              type="button"
-              onClick={() => {
-                setEvaluations(null)
-                setAnswers({})
-                setSubmitError(null)
-              }}
-            >
-              Retake quiz
-            </button>
-          </div>
+          <p className="question-text">{turn.question}</p>
+          <AnswerInput turn={turn} answer={answer} setAnswer={setAnswer} />
         </div>
-      )}
+
+        {error && (
+          <div
+            className="result-banner"
+            style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5' }}
+          >
+            {error}
+          </div>
+        )}
+
+        <button className="button" type="submit" disabled={isSubmitting || !answer.trim()}>
+          {isSubmitting ? 'Saving answer...' : 'Continue'}
+        </button>
+      </form>
+
+      <p className="page-subtitle" style={{ marginTop: 4 }}>
+        Results stay hidden until the end. Follow-ups appear only when the engine needs a little more evidence.
+      </p>
     </div>
   )
 }

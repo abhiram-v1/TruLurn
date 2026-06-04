@@ -102,6 +102,7 @@ export interface RawTopicEdge {
   to_topic_id: string
   strength?: number | string
   reason?: string | null
+  edge_type?: string | null
 }
 
 export function transformToGraphData(params: {
@@ -127,6 +128,7 @@ export function transformToGraphData(params: {
 
   // From topicEdges collection
   for (const e of topicEdges) {
+    if (String(e.edge_type ?? 'semantic') === 'hierarchy') continue
     addEdge(e.from_topic_id, e.to_topic_id, toStrength(e.strength), false)
   }
 

@@ -6,129 +6,56 @@ export type DoubtQuestionType =
   | 'current_page'
   | 'course_specific'
 
-const COURSE_REF_SIGNALS = [
-  'we covered',
-  'you said',
-  'earlier',
-  'before',
-  'remember when',
-  'we learned',
-  'from before',
-  'what we did',
-  'last time',
-  'previously',
-  'you mentioned',
-  'we talked about',
-  'we discussed',
-  'back when',
-  'in the beginning',
-  'at the start',
-]
+const CLASSIFY_SYSTEM = `You classify a student's question to determine what context is needed to answer it.
 
-const GENERAL_SIGNALS = [
-  'what is',
-  'what are',
-  'define',
-  'explain what',
-  'how does',
-  'why does',
-  'what is the difference',
-  'when should i use',
-  'what happens when',
-  'why is',
-  'how do you',
-  'what does it mean when',
-]
+Categories:
+- "current_page": The question is about content on the current lesson page — asks about "this", "here", "above", or something specific to the wording, examples, or terms visible on the page the student is reading right now. Also use this when the question is directly about the topic being taught on this page and can be answered from the page content alone.
+- "course_specific": The question references something taught EARLIER in this course, asks how something connects to a previous topic, or needs context from the course history beyond the current page. Examples: "earlier you said...", "how does this connect to what we covered before", "is this the same as X from before?"
+- "general_knowledge": The question is purely about a broad concept that has nothing to do with this specific course's content or sequence — answerable entirely from general knowledge without any course context.
 
-export function heuristicClassify(
-  question: string,
-  currentPageContent: string,
-  conceptMap: string[],
-): DoubtQuestionType | 'ambiguous' {
-  const q = question.toLowerCase()
-  const page = currentPageContent.toLowerCase()
-
-  if (COURSE_REF_SIGNALS.some((signal) => q.includes(signal))) {
-    return 'course_specific'
-  }
-
-  const mentionsPastConcept = conceptMap.some((concept) => {
-    const c = concept.toLowerCase()
-    return c.length > 2 && q.includes(c) && !page.includes(c)
-  })
-
-  if (mentionsPastConcept) {
-    return 'course_specific'
-  }
-
-  const mentionsPageContent =
-    q.includes('this page') ||
-    q.includes('this section') ||
-    q.includes('above') ||
-    q.includes('here') ||
-    q.includes('paragraph') ||
-    q.includes('example above') ||
-    q.includes('this formula') ||
-    q.includes('this equation') ||
-    q.includes('selected part') ||
-    q.includes('selected text')
-
-  if (mentionsPageContent) {
-    return 'current_page'
-  }
-
-  const isGeneralPattern = GENERAL_SIGNALS.some((signal) => q.startsWith(signal))
-  if (isGeneralPattern && !mentionsPastConcept) {
-    return 'general_knowledge'
-  }
-
-  return 'ambiguous'
-}
+Decision rules:
+- When unsure between "current_page" and "course_specific", prefer "current_page".
+- When unsure between "current_page" and "general_knowledge", prefer "current_page".
+- Only use "general_knowledge" when the question is clearly not about the current topic at all.
+- Only use "course_specific" when the question explicitly needs something from earlier in the course.`
 
 export async function classifyQuestion(
   question: string,
   currentPageContent: string,
   conceptMap: string[],
 ): Promise<DoubtQuestionType> {
-  const heuristicResult = heuristicClassify(question, currentPageContent, conceptMap)
+  try {
+    const response = await generateWithGemini({
+      system: CLASSIFY_SYSTEM,
+      user: `Current page content (excerpt):
+${currentPageContent.slice(0, 1000)}
 
-  if (heuristicResult !== 'ambiguous') {
-    return heuristicResult
-  }
-
-  const response = await generateWithGemini({
-    model: process.env.GEMINI_CLASSIFIER_MODEL ?? process.env.GEMINI_MODEL,
-    purpose: 'agent',
-    system: `You classify student questions for an educational product.
-Return JSON only.
-
-Categories:
-- general_knowledge: answerable from general model knowledge without course memory.
-- current_page: answerable from the current page content.
-- course_specific: asks about something taught earlier in this course, compares to earlier material, or needs course memory.`,
-    user: `Current page excerpt:
-${currentPageContent.slice(0, 900)}
-
-Known course concepts:
-${conceptMap.slice(0, 80).join(', ') || 'None yet'}
+Previously covered course concepts:
+${conceptMap.slice(0, 60).join(', ') || 'None yet'}
 
 Student question:
 ${question}
 
-Return:
+Return JSON:
 {
-  "type": "general_knowledge | current_page | course_specific"
+  "type": "current_page | course_specific | general_knowledge",
+  "reason": "one sentence"
 }`,
-  })
+      purpose: 'agent',
+      responseMimeType: 'application/json',
+    })
 
-  const parsed = parseGeminiJson<{ type?: DoubtQuestionType }>(response)
+    const parsed = parseGeminiJson<{ type?: DoubtQuestionType }>(response)
 
-  if (
-    parsed.type === 'general_knowledge' ||
-    parsed.type === 'current_page' ||
-    parsed.type === 'course_specific'
-  ) {
-    return parsed.type
+    if (
+      parsed.type === 'general_knowledge' ||
+      parsed.type === 'current_page' ||
+      parsed.type === 'course_specific'
+    ) {
+      return parsed.type
+    }
+  } catch {
+    // fall through to safe default
   }
 
   return 'current_page'

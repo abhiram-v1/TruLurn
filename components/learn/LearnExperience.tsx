@@ -54,6 +54,8 @@ export function LearnExperience({
   page,
   totalPages,
   estimatedPages,
+  globalPageNumber,
+  globalPageTotal,
   initialMessages,
   nextTopic,
 }: {
@@ -63,6 +65,8 @@ export function LearnExperience({
   page: Page
   totalPages: number
   estimatedPages: number
+  globalPageNumber: number
+  globalPageTotal: number
   initialMessages: DoubtMessage[]
   nextTopic?: Pick<Topic, 'id' | 'title'> | null
 }) {
@@ -269,9 +273,13 @@ export function LearnExperience({
                 </div>
                 {hasScreenParts ? (
                   <span className="lesson-page-context">
-                    Part {lessonPageIndex + 1} of {lessonPages.length}
+                    Course page {globalPageNumber} of {globalPageTotal} - Part {lessonPageIndex + 1} of {lessonPages.length}
                   </span>
-                ) : null}
+                ) : (
+                  <span className="lesson-page-context">
+                    Course page {globalPageNumber} of {globalPageTotal}
+                  </span>
+                )}
               </div>
 
               <div className="lesson-footer-actions">
@@ -317,6 +325,7 @@ export function LearnExperience({
             topicId={topic.id}
             topicTitle={topic.title}
             pageNumber={page.page_number}
+            globalPageNumber={globalPageNumber}
             initialMessages={initialMessages}
             expanded={doubtsExpanded}
             onExpandedChange={setDoubtsExpanded}

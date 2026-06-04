@@ -8,6 +8,8 @@ import { generateTopicPage, buildPageDocument } from '@/lib/topic-pages/generate
 import crypto from 'crypto'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { embedPageById, retrieveCourseMemory } from '@/lib/vector/retrieval'
+import { buildGenerationPointer } from '@/lib/traccia/sequence'
+import { buildSequenceContextPack } from '@/lib/traccia/sequenceContext'
 
 export async function POST(request: Request) {
   try {
@@ -209,11 +211,27 @@ ${studentAnswer || '(no answer given)'}
                 doubtLimit: 3,
                 sourceLimit: 3,
               })
+              const nextPointer = await buildGenerationPointer({
+                db,
+                courseId,
+                topic: t,
+                pageNumber: 1,
+              })
+              const nextSequenceContext = await buildSequenceContextPack({
+                db,
+                courseId,
+                userId,
+                topic: t,
+                pageNumber: 1,
+                memory: nextMemory,
+              })
               const generated = await generateTopicPage({
                 course,
                 topic: t,
                 pageNumber: 1,
                 memory: nextMemory,
+                mapPointer: nextPointer.text,
+                sequenceContext: nextSequenceContext.text,
               })
               const doc = buildPageDocument({ courseId, topicId: tid, userId, page: generated })
               await db.collection('pages').insertOne(doc)
@@ -227,8 +245,32 @@ ${studentAnswer || '(no answer given)'}
                 focus: generated.focus,
                 summary: generated.summary,
                 key_concepts: generated.key_concepts,
+                covered_concepts: generated.covered_concepts,
+                reused_concepts: generated.reused_concepts,
+                reminder_concepts: generated.reminder_concepts,
+                example_refs: generated.example_refs,
                 created_at: new Date(),
               })
+              if (
+                generated.reused_concepts.length
+                || generated.reminder_concepts.length
+                || generated.example_refs.length
+              ) {
+                await db.collection('learningEvents').insertOne({
+                  _id: crypto.randomUUID() as any,
+                  course_id: courseId,
+                  topic_id: tid,
+                  user_id: userId,
+                  event_type: 'sequence_context_applied',
+                  page_id: String(doc._id),
+                  page_number: generated.page_number,
+                  covered_concepts: generated.covered_concepts,
+                  reused_concepts: generated.reused_concepts,
+                  reminder_concepts: generated.reminder_concepts,
+                  example_refs: generated.example_refs,
+                  created_at: new Date(),
+                })
+              }
               embedPageById(db, String(doc._id)).catch((error) => {
                 console.warn('[quiz/evaluate] Failed to embed pre-generated page.', error)
               })

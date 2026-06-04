@@ -19,6 +19,7 @@ type QuizLibraryRow = {
   level: number | null
   passedCount: number | null
   totalAsked: number | null
+  activeSessionId: string | null
 }
 
 function formatQuizTime(date: Date | null) {
@@ -48,7 +49,7 @@ function statusDescription(row: QuizLibraryRow) {
     const score = row.passedCount !== null && row.totalAsked
       ? `${row.passedCount}/${row.totalAsked} passed`
       : 'passed'
-    return `Completed ${attemptedAt ?? 'recently'} with ${score}${row.level ? ` at level ${row.level}` : ''}. This quiz has already updated the graph.`
+    return `Completed ${attemptedAt ?? 'recently'} with ${score}. This quiz has already updated the graph.`
   }
 
   if (row.status === 'review') {
@@ -59,7 +60,9 @@ function statusDescription(row: QuizLibraryRow) {
   }
 
   if (row.status === 'unfinished') {
-    return `Generated ${generatedAt ?? 'already'} with ${row.questionCount} questions, but no submitted attempt is stored yet.`
+    return row.activeSessionId
+      ? `Started ${generatedAt ?? 'recently'}. Continue the adaptive exam from the next unanswered question.`
+      : `Generated ${generatedAt ?? 'already'} with ${row.questionCount} questions, but no submitted attempt is stored yet.`
   }
 
   if (row.status === 'locked') {
@@ -104,7 +107,7 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     )
   }
 
-  const [topics, questions, attempts] = await Promise.all([
+  const [topics, questions, attempts, examSessions] = await Promise.all([
     db.collection('topics')
       .find({ course_id: params.courseId })
       .project({ title: 1, section: 1, state: 1, position: 1, branch_id: 1, branch_position: 1, created_at: 1 })
@@ -117,6 +120,10 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     db.collection('quizAttempts')
       .find({ course_id: params.courseId, user_id: userId })
       .sort({ created_at: -1 })
+      .toArray(),
+    db.collection('examSessions')
+      .find({ course_id: params.courseId, user_id: userId })
+      .sort({ updated_at: -1, created_at: -1 })
       .toArray(),
   ])
 
@@ -139,36 +146,62 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     attemptsByTopic.set(topicId, [...(attemptsByTopic.get(topicId) ?? []), attempt])
   }
 
+  const sessionsByTopic = new Map<string, any[]>()
+  for (const session of examSessions) {
+    const topicId = String(session.topic_id)
+    sessionsByTopic.set(topicId, [...(sessionsByTopic.get(topicId) ?? []), session])
+  }
+
   const rows: QuizLibraryRow[] = topics.map((topic) => {
     const topicId = String(topic._id)
     const quiz = questionsByTopic.get(topicId)
     const topicAttempts = attemptsByTopic.get(topicId) ?? []
+    const topicSessions = sessionsByTopic.get(topicId) ?? []
+    const latestSession = topicSessions[0]
     const latestAttempt = topicAttempts[0]
-    const passed = Boolean(latestAttempt?.passed)
-    const attemptedAt = latestAttempt?.created_at instanceof Date ? latestAttempt.created_at : null
+    const sessionSummary = latestSession?.summary && typeof latestSession.summary === 'object'
+      ? latestSession.summary
+      : null
+    const passed = latestSession?.status === 'completed'
+      ? Boolean(sessionSummary?.passed)
+      : Boolean(latestAttempt?.passed)
+    const attemptedAt = latestSession?.completed_at instanceof Date
+      ? latestSession.completed_at
+      : latestAttempt?.created_at instanceof Date ? latestAttempt.created_at : null
+    const generatedAt = latestSession?.started_at instanceof Date
+      ? latestSession.started_at
+      : quiz?.generatedAt ?? null
     const evaluation = latestAttempt?.evaluation && typeof latestAttempt.evaluation === 'object'
       ? Object.values(latestAttempt.evaluation as Record<string, any>)
       : []
-    const passedCount = evaluation.length
+    const passedCount = typeof sessionSummary?.passed_count === 'number'
+      ? sessionSummary.passed_count
+      : evaluation.length
       ? evaluation.filter((item: any) => Boolean(item?.passed)).length
       : null
-    const totalAsked = Array.isArray(latestAttempt?.questions_asked)
+    const totalAsked = typeof sessionSummary?.total_questions === 'number'
+      ? sessionSummary.total_questions
+      : Array.isArray(latestAttempt?.questions_asked)
       ? latestAttempt.questions_asked.length
       : evaluation.length || null
     const topicState = String(topic.state ?? 'active')
+    const isActiveSession = latestSession?.status === 'active'
 
     return {
       topicId,
       title: String(topic.title ?? 'Untitled topic'),
       section: String(topic.section ?? course.title ?? 'Course topic'),
-      status: topicState === 'locked' ? 'locked' : passed ? 'done' : latestAttempt ? 'review' : quiz ? 'unfinished' : 'ready',
-      questionCount: quiz?.count ?? 0,
-      generatedAt: quiz?.generatedAt ?? null,
+      status: topicState === 'locked' ? 'locked' : isActiveSession ? 'unfinished' : passed ? 'done' : latestSession?.status === 'completed' || latestAttempt ? 'review' : quiz ? 'unfinished' : 'ready',
+      questionCount: typeof sessionSummary?.total_questions === 'number' ? sessionSummary.total_questions : quiz?.count ?? 0,
+      generatedAt,
       attemptedAt,
-      attempts: topicAttempts.length,
-      level: typeof latestAttempt?.overall_level === 'number' ? latestAttempt.overall_level : null,
+      attempts: Math.max(topicAttempts.length, topicSessions.filter((session) => session.status === 'completed').length),
+      level: typeof sessionSummary?.overall_level === 'number'
+        ? sessionSummary.overall_level
+        : typeof latestAttempt?.overall_level === 'number' ? latestAttempt.overall_level : null,
       passedCount,
       totalAsked,
+      activeSessionId: isActiveSession ? String(latestSession._id) : null,
     }
   })
 

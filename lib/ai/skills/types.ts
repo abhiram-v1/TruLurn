@@ -12,11 +12,15 @@ export type SkillPrompt = {
 }
 
 export type CurriculumMode = 'ai_teacher' | 'source_grounded'
+export type LearningControlMode = 'guided' | 'balanced' | 'open'
+export type CourseDepth = 'low' | 'standard' | 'high'
 
 export type CurriculumSkillInput = {
   topic: string
   goals: string
   mode: CurriculumMode
+  learningControl: LearningControlMode
+  courseDepth: CourseDepth
   sourceText?: string
 }
 

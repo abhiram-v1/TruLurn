@@ -13,6 +13,8 @@ const COURSE_SCOPED_COLLECTIONS = [
   'doubtMessages',
   'quizQuestions',
   'quizAttempts',
+  'examSessions',
+  'examTurns',
   'sourceChunks',
 ] as const
 

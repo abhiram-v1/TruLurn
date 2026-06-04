@@ -1,5 +1,9 @@
 export type CourseMode = 'ai_teacher' | 'source_grounded'
 
+export type LearningControlMode = 'guided' | 'balanced' | 'open'
+
+export type CourseDepth = 'low' | 'standard' | 'high'
+
 export type TopicState =
   | 'locked'
   | 'active'
@@ -12,6 +16,15 @@ export type TopicState =
 export type UnderstandingLevel = 1 | 2 | 3 | 4 | 5
 
 export type QuestionType = 'apply' | 'spot_error' | 'explain' | 'mcq' | 'true_false' | 'code'
+export type TracciaNodeType = 'container' | 'learning_unit' | 'bridge' | 'example_unit' | 'assessment_unit'
+export type ContentKind = 'full_page' | 'section' | 'bridge' | 'example' | 'skip'
+
+export interface LessonExampleRef {
+  label: string
+  topic_title?: string | null
+  page_number?: number | null
+  excerpt: string
+}
 
 export interface Course {
   id: string
@@ -20,6 +33,8 @@ export interface Course {
   topic: string
   goals: string | null
   mode: CourseMode
+  learning_control?: LearningControlMode
+  course_depth?: CourseDepth
   created_at: string
 }
 
@@ -35,6 +50,16 @@ export interface Topic {
   created_at: string
   branch_id: string
   section: string
+  node_type?: TracciaNodeType
+  depth_level?: number
+  path_ids?: string[]
+  path_titles?: string[]
+  is_leaf?: boolean
+  children_count?: number
+  sequence_index?: number
+  recommended_next_ids?: string[]
+  is_optional?: boolean
+  covered_by_node_id?: string | null
   pages?: Page[]
   children?: Topic[]
 }
@@ -88,6 +113,15 @@ export interface Page {
   created_at: string
   topic_depth?: TopicDepth
   concept_kind?: ConceptKind
+  content_kind?: ContentKind
+  should_generate_page?: boolean
+  decision_reason?: string
+  estimated_length?: 'short' | 'medium' | 'long'
+  requires_quiz?: boolean
+  covered_concepts?: string[]
+  reused_concepts?: string[]
+  reminder_concepts?: string[]
+  example_refs?: LessonExampleRef[]
   sections?: LessonSection[]
 }
 
@@ -129,4 +163,26 @@ export interface EvaluationResult {
   feedback: string
   gap: string | null
   false_confidence: boolean
+}
+
+export type ExamMode = 'full_topic' | 'spot_check'
+export type ExamStatus = 'active' | 'completed' | 'abandoned'
+export type ExamTurnStatus = 'queued' | 'shown' | 'answered' | 'evaluated'
+export type ExamTurnSource = 'baseline' | 'followup' | 'spot_check'
+
+export interface ExamTurn {
+  id: string
+  session_id: string
+  course_id: string
+  topic_id: string
+  turn_index: number
+  roadmap_node_id: string
+  concept: string
+  type: QuestionType
+  difficulty: number
+  source: ExamTurnSource
+  status: ExamTurnStatus
+  question: string
+  options?: string[] | null
+  created_at: string
 }

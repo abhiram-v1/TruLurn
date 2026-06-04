@@ -6,26 +6,31 @@ import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { HallucinationWarning } from '@/components/setup/HallucinationWarning'
 import { ModeSelector } from '@/components/setup/ModeSelector'
+import { LearningControlSelector } from '@/components/setup/LearningControlSelector'
+import { CourseDepthSelector } from '@/components/setup/CourseDepthSelector'
 import { GeneratingOverlay } from '@/components/setup/GeneratingOverlay'
-import type { CourseMode } from '@/types'
+import type { CourseDepth, CourseMode, LearningControlMode } from '@/types'
 
 type GenerateCourseResponse = {
   courseId?: string
   firstTopicId?: string
   redirectTo?: string
   error?: string
+  code?: string
 }
 
 export function TopicInput() {
   const router = useRouter()
   const { status } = useSession()
   const [mode, setMode] = useState<CourseMode>('ai_teacher')
-  const [topic, setTopic] = useState('Machine Learning')
-  const [goals, setGoals] = useState('I want to understand the core ideas clearly enough to explain and apply them.')
+  const [learningControl, setLearningControl] = useState<LearningControlMode>('balanced')
+  const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
+  const [description, setDescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
   const [sourceFiles, setSourceFiles] = useState<FileList | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [topicUnsuitable, setTopicUnsuitable] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
 
   useEffect(() => {
@@ -42,9 +47,10 @@ export function TopicInput() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (topic.trim().length < 3) return
+    if (description.trim().length < 10) return
 
     setError(null)
+    setTopicUnsuitable(false)
     setAuthRequired(false)
 
     if (status !== 'authenticated') {
@@ -57,9 +63,10 @@ export function TopicInput() {
 
     try {
       const formData = new FormData()
-      formData.append('topic', topic)
-      formData.append('goals', goals)
+      formData.append('goals', description)
       formData.append('mode', mode)
+      formData.append('learningControl', learningControl)
+      formData.append('courseDepth', courseDepth)
 
       if (sourceFiles) {
         Array.from(sourceFiles).forEach((file) => {
@@ -74,6 +81,12 @@ export function TopicInput() {
       const data = (await response.json()) as GenerateCourseResponse
 
       if (!response.ok) {
+        if (data.code === 'TOPIC_UNSUITABLE') {
+          setTopicUnsuitable(true)
+          setProgress(0)
+          setIsGenerating(false)
+          return
+        }
         throw new Error(data.error ?? 'Course generation failed.')
       }
 
@@ -93,28 +106,19 @@ export function TopicInput() {
   return (
     <>
       <form className="setup-form" onSubmit={submit}>
+        <div className="field">
+          <label htmlFor="description">What do you want to learn?</label>
+          <textarea
+            id="description"
+            rows={4}
+            placeholder="e.g. I want to understand machine learning well enough to build and train my own models from scratch."
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+          />
+          <div className="field-note">Be specific about what you want to be able to do. The AI will name and structure your course.</div>
+        </div>
         <ModeSelector value={mode} onChange={setMode} />
         {mode === 'ai_teacher' ? <HallucinationWarning /> : null}
-        <div className="field">
-          <label htmlFor="topic">Topic</label>
-          <input
-            id="topic"
-            minLength={3}
-            placeholder="e.g. Machine Learning, React, Constitutional Law"
-            value={topic}
-            onChange={(event) => setTopic(event.target.value)}
-          />
-        </div>
-        <div className="field">
-          <label htmlFor="goals">Goals</label>
-          <textarea
-            id="goals"
-            placeholder="What do you want to be able to do at the end?"
-            value={goals}
-            onChange={(event) => setGoals(event.target.value)}
-          />
-          <div className="field-note">The more specific you are, the better your stored Atlas.</div>
-        </div>
         {mode === 'source_grounded' ? (
           <div className="field">
             <label htmlFor="sources">Sources</label>
@@ -125,15 +129,28 @@ export function TopicInput() {
               accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json,text/csv"
               onChange={updateSources}
             />
-            <div className="field-note">MVP upload reads text, markdown, JSON, and CSV. PDFs need a parser before we trust them.</div>
+            <div className="field-note">Upload text, markdown, JSON, or CSV files. The AI will build the course from your material.</div>
           </div>
         ) : null}
-        <button className="button" type="submit" disabled={isGenerating}>
-          {isGenerating ? 'Building course...' : 'Build my curriculum'}
+        <LearningControlSelector value={learningControl} onChange={setLearningControl} />
+        <CourseDepthSelector value={courseDepth} onChange={setCourseDepth} />
+        <button className="button" type="submit" disabled={isGenerating || description.trim().length < 10}>
+          {isGenerating ? 'Building course...' : 'Build my course'}
         </button>
       </form>
 
       {isGenerating ? <GeneratingOverlay progress={progress} /> : null}
+
+      {topicUnsuitable ? (
+        <div className="result-banner unsuitable-banner">
+          <strong>Topic not suitable for course creation.</strong>
+          <p>
+            This topic cannot be structured into a multi-lesson course. Please enter a subject that
+            can be taught through multiple lessons — such as programming, mathematics, design,
+            business, science, languages, or other professional or creative skills.
+          </p>
+        </div>
+      ) : null}
 
       {error ? <div className="result-banner error-banner">{error}</div> : null}
 

@@ -190,6 +190,7 @@ async function fallbackRelevantPages(
 export async function findRelevantPages({
   db,
   query,
+  queryVector: precomputedVector,
   courseId,
   userId,
   excludeTopicId,
@@ -197,13 +198,14 @@ export async function findRelevantPages({
 }: {
   db: Db
   query: string
+  queryVector?: number[]
   courseId: string
   userId?: string
   excludeTopicId: string
   limit?: number
 }): Promise<RelevantPage[]> {
   try {
-    const queryVector = await embedText(query, 'QUESTION_ANSWERING')
+    const queryVector = precomputedVector ?? await embedText(query, 'QUESTION_ANSWERING')
     const results = await db.collection('pages')
       .aggregate([
         {
@@ -302,6 +304,7 @@ async function fallbackRelevantDoubtMessages(
 export async function findRelevantDoubtMessages({
   db,
   query,
+  queryVector: precomputedVector,
   courseId,
   userId,
   excludeTopicId,
@@ -309,13 +312,14 @@ export async function findRelevantDoubtMessages({
 }: {
   db: Db
   query: string
+  queryVector?: number[]
   courseId: string
   userId: string
   excludeTopicId?: string
   limit?: number
 }): Promise<RelevantDoubtMemory[]> {
   try {
-    const queryVector = await embedText(query, 'QUESTION_ANSWERING')
+    const queryVector = precomputedVector ?? await embedText(query, 'QUESTION_ANSWERING')
     const match: Record<string, unknown> = {}
     if (excludeTopicId) match.topic_id = { $ne: excludeTopicId }
 
@@ -398,6 +402,7 @@ async function fallbackRelevantSourceChunks(
 export async function findRelevantSourceChunks({
   db,
   query,
+  queryVector: precomputedVector,
   courseId,
   userId,
   topicId,
@@ -405,13 +410,14 @@ export async function findRelevantSourceChunks({
 }: {
   db: Db
   query: string
+  queryVector?: number[]
   courseId: string
   userId: string
   topicId?: string
   limit?: number
 }): Promise<RelevantSourceChunk[]> {
   try {
-    const queryVector = await embedText(query, 'QUESTION_ANSWERING')
+    const queryVector = precomputedVector ?? await embedText(query, 'QUESTION_ANSWERING')
     const match: Record<string, unknown> = {}
     if (topicId) {
       match.$or = [{ topic_id: topicId }, { topic_id: { $exists: false } }, { topic_id: null }]
@@ -482,33 +488,41 @@ export async function retrieveCourseMemory({
   doubtLimit?: number
   sourceLimit?: number
 }): Promise<CourseMemoryContext> {
-  // Guard: skip embedding API calls and vector search when limits are 0.
-  // Each sub-function embeds the query even when limit=0, wasting API tokens.
+  const needsAny = (currentTopicId && pageLimit > 0) || doubtLimit > 0 || sourceLimit > 0
+
+  // Embed the query ONCE and share the vector across all three sub-functions.
+  // Without this, each sub-function independently embeds the same text —
+  // three identical embedding API calls per retrieval trigger.
+  const sharedVector = needsAny ? await embedText(query, 'QUESTION_ANSWERING') : undefined
+
   const [pages, doubtMessages, sourceChunks] = await Promise.all([
-    currentTopicId && pageLimit > 0
+    currentTopicId && pageLimit > 0 && sharedVector
       ? findRelevantPages({
           db,
           query,
+          queryVector: sharedVector,
           courseId,
           userId,
           excludeTopicId: currentTopicId,
           limit: pageLimit,
         })
       : Promise.resolve([]),
-    doubtLimit > 0
+    doubtLimit > 0 && sharedVector
       ? findRelevantDoubtMessages({
           db,
           query,
+          queryVector: sharedVector,
           courseId,
           userId,
           excludeTopicId: currentTopicId,
           limit: doubtLimit,
         })
       : Promise.resolve([]),
-    sourceLimit > 0
+    sourceLimit > 0 && sharedVector
       ? findRelevantSourceChunks({
           db,
           query,
+          queryVector: sharedVector,
           courseId,
           userId,
           topicId: currentTopicId,

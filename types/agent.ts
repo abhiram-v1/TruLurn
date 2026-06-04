@@ -9,6 +9,7 @@ export type ActionIntent =
   | 'go_to_topic'
   | 'custom_quiz'
   | 'generate_page'
+  | 'skip_current'
 
 export type UIAction =
   | { action: 'open_quiz';           topicId: string }

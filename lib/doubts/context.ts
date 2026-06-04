@@ -10,6 +10,7 @@ type DoubtHistoryMessage = {
   content: string
   topic_title?: string | null
   page_number?: number | null
+  global_page_number?: number | null
 }
 
 type CurrentDoubtPage = {
@@ -22,6 +23,8 @@ type CurrentDoubtPage = {
   topicTotal: number
   pageNumber: number
   totalPages: number
+  globalPageNumber: number
+  globalPageTotal: number
   isLastPage?: boolean
   pageFocus?: string | null
   content: string
@@ -32,6 +35,14 @@ Your job is to answer questions, spot confusion, and guide the student through t
 Never claim the learner understands something unless there is explicit evidence.
 If context is missing for a course-specific claim, start your response with exactly:
 NEEDS_RETRIEVAL: [brief concept needed]
+When AGENT WORKSPACE CONTEXT is present, use it as the source of truth for Atlas structure, graph signals, prerequisites, unlocks, quiz attempts, and navigation/state questions.
+Course page numbers are the stable global reference across the whole course. Topic page numbers are local to one topic.
+
+CURRENT PAGE GROUNDING:
+- If the student asks about the current page, selected passage, a word/phrase "here", or an example on screen, treat CURRENT PAGE CONTENT as the primary source.
+- Reuse the page's own examples, entities, notation, and framing. Do not swap in unrelated generic examples when the page already provides one.
+- If a requested example is not present on the page, say that briefly before giving a small additional example.
+- If the student asks what a word or symbol means, explain its meaning in this page's context first.
 
 AGENT PERSONA:
 - Tone: direct, honest, warm without being sycophantic.
@@ -61,6 +72,7 @@ Course: ${page.courseTitle}
 Primary topic: ${page.branchTitle} (${page.branchPosition} of ${page.branchTotal})
 Subtopic: ${page.topicTitle} (${page.topicPosition} of ${page.topicTotal})
 Current page: Page ${page.pageNumber} of ${page.totalPages}${page.pageFocus ? ` - "${page.pageFocus}"` : ''}${lastPageMarker}
+Course page: ${page.globalPageNumber} of ${page.globalPageTotal}
 ========================`
 }
 
@@ -70,7 +82,7 @@ function formatHistory(messages: DoubtHistoryMessage[]) {
   return messages
     .map((message) => {
       const where = message.topic_title
-        ? ` [${message.topic_title}${message.page_number ? `, p${message.page_number}` : ''}]`
+        ? ` [${message.topic_title}${message.page_number ? `, p${message.page_number}` : ''}${message.global_page_number ? `, course p${message.global_page_number}` : ''}]`
         : ''
       return `${message.role.toUpperCase()}${where}: ${message.content}`
     })
@@ -115,6 +127,7 @@ export function buildDoubtPrompt({
   type,
   question,
   selectedContext,
+  workspaceContext,
   currentPage,
   recentHistory,
   conceptMap,
@@ -125,6 +138,7 @@ export function buildDoubtPrompt({
   type: DoubtQuestionType
   question: string
   selectedContext?: string | null
+  workspaceContext?: string | null
   currentPage: CurrentDoubtPage
   recentHistory: DoubtHistoryMessage[]
   conceptMap: string[]
@@ -137,6 +151,9 @@ export function buildDoubtPrompt({
   const selectedContextBlock = selectedContext?.trim()
     ? `\nSELECTED PASSAGE THE STUDENT ATTACHED:\n${selectedContext.trim()}\n`
     : ''
+  const workspaceContextBlock = workspaceContext?.trim()
+    ? `\n${workspaceContext.trim()}\n`
+    : ''
 
   // general_knowledge: minimal context — no retrieval data needed, no concept map.
   // The model answers from its own knowledge; injecting course memory is pure waste.
@@ -148,6 +165,7 @@ ${pointer}
 
 ${historyBlock}
 ${selectedContextBlock}
+${workspaceContextBlock}
 
 Answer from general knowledge, but keep it relevant to the current topic.
 Do not invent course-specific claims not supported by general knowledge.`,
@@ -169,6 +187,7 @@ ${pointer}
 ${conceptLine ? `\n${conceptLine}\n` : ''}
 ${historyBlock}
 ${selectedContextBlock}
+${workspaceContextBlock}
 
 CURRENT PAGE CONTENT:
 ${currentPage.content}`,
@@ -189,6 +208,7 @@ ${pointer}
 ${conceptLine ? `\n${conceptLine}\n` : ''}
 ${historyBlock}
 ${selectedContextBlock}
+${workspaceContextBlock}
 
 Semantically relevant prior doubts:
 ${formatRelevantDoubts(relevantDoubts)}

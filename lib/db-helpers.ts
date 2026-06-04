@@ -8,6 +8,10 @@ import {
   mockQuestions,
 } from '@/lib/mock-data'
 
+function isStructuralTopic(topic: any) {
+  return String(topic.node_type ?? '') === 'container' || Number(topic.children_count ?? 0) > 0
+}
+
 export async function seedDefaultCourse() {
   const db = await getDb()
 
@@ -108,13 +112,13 @@ export async function unlockNextTopics(courseId: string, completedTopicId: strin
 
   const masteredTopicIds = new Set(
     allTopics
-      .filter((t) => t.state === 'mastered' || String(t._id) === completedTopicId)
+      .filter((t) => !isStructuralTopic(t) && (t.state === 'mastered' || t.state === 'functional' || String(t._id) === completedTopicId))
       .map((t) => String(t._id))
   )
 
   // 3. Find topics that are locked and whose prerequisites are all met
   for (const topic of allTopics) {
-    if (topic.state === 'locked') {
+    if (topic.state === 'locked' && !isStructuralTopic(topic)) {
       const prereqs = (topic.prerequisites || []) as string[]
       const allMet = prereqs.every((pId) => masteredTopicIds.has(pId))
       if (allMet) {
@@ -134,7 +138,9 @@ export async function unlockNextTopics(courseId: string, completedTopicId: strin
 
   for (const branch of allBranches) {
     const branchKey = String(branch.branch_key ?? branch._id)
-    const branchTopics = updatedTopics.filter((t) => String(t.branch_id) === branchKey || String(t.branch_id) === String(branch._id))
+    const branchTopics = updatedTopics
+      .filter((t) => String(t.branch_id) === branchKey || String(t.branch_id) === String(branch._id))
+      .filter((t) => !isStructuralTopic(t))
     const totalCount = branchTopics.length
     const masteredCount = branchTopics.filter((t) => t.state === 'mastered').length
     

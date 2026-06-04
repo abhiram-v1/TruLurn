@@ -3,8 +3,9 @@
 import {
   IconArrowsHorizontal,
   IconCodeDots,
-  IconX,
+  IconPlayerStop,
   IconSend,
+  IconX,
 } from '@tabler/icons-react'
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -18,6 +19,7 @@ export function DoubtChat({
   topicId,
   topicTitle,
   pageNumber,
+  globalPageNumber,
   initialMessages,
   expanded = false,
   onExpandedChange,
@@ -31,6 +33,7 @@ export function DoubtChat({
   topicId: string
   topicTitle: string
   pageNumber: number
+  globalPageNumber?: number
   initialMessages: DoubtMessage[]
   expanded?: boolean
   onExpandedChange?: (expanded: boolean) => void
@@ -53,13 +56,24 @@ export function DoubtChat({
   const [localContextByMessageId, setLocalContextByMessageId] = useState<Record<string, string>>({})
   const bottomRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isSending])
 
   useEffect(() => {
-    setMessages(initialMessages)
+    setMessages((current) => {
+      // Merge server messages with any client-only messages not yet in the DB.
+      // This prevents messages from being wiped on router.refresh() — action
+      // responses and their corresponding user messages are never stored to DB,
+      // so a naive replace would make them disappear after a page regeneration.
+      const serverIds = new Set(initialMessages.map((m) => m.id))
+      const clientOnly = current.filter((m) => !serverIds.has(m.id))
+      return clientOnly.length > 0
+        ? [...initialMessages, ...clientOnly]
+        : initialMessages
+    })
   }, [initialMessages])
 
   useEffect(() => {
@@ -126,10 +140,17 @@ export function DoubtChat({
     }
   }
 
+  function stopMessage() {
+    abortControllerRef.current?.abort()
+  }
+
   async function submitMessage(e?: FormEvent<HTMLFormElement>) {
     e?.preventDefault()
     const message = draft.trim()
     if (!message || isSending) return
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     const attachedContext = selectedContext?.text.trim() || null
     const userMessageId = `user-${Date.now()}`
@@ -165,6 +186,7 @@ export function DoubtChat({
           message,
           selectedContext: attachedContext,
         }),
+        signal: controller.signal,
       })
 
       const data = await response.json()
@@ -187,6 +209,7 @@ export function DoubtChat({
         executeUIAction(data.uiAction)
       }
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
       console.error(err)
       const errorMessage: DoubtMessage = {
         id: `error-${Date.now()}`,
@@ -199,6 +222,7 @@ export function DoubtChat({
       setMessages((prev) => [...prev, errorMessage])
     } finally {
       setIsSending(false)
+      abortControllerRef.current = null
     }
   }
 
@@ -210,7 +234,7 @@ export function DoubtChat({
       <div className="chat-header">
         <span className="panel-label">Agent</span>
         <div className="chat-header-actions">
-          <ContextBadge topicTitle={topicTitle} pageNumber={pageNumber} />
+          <ContextBadge topicTitle={topicTitle} pageNumber={pageNumber} globalPageNumber={globalPageNumber} />
           <button
             className="panel-toggle chat-expand-toggle"
             type="button"
@@ -249,7 +273,7 @@ export function DoubtChat({
                     </span>
                   </span>
                 ) : null}
-                {msg.content}
+                <p className="message-user-text">{msg.content}</p>
               </>
             )}
           </div>
@@ -289,14 +313,26 @@ export function DoubtChat({
           onFocus={() => onExpandedChange?.(true)}
           onKeyDown={handleKeyDown}
         />
-        <button
-          className="chat-submit button-subtle"
-          type="submit"
-          aria-label="Send"
-          disabled={!draft.trim()}
-        >
-          <IconSend aria-hidden="true" size={17} stroke={1.8} />
-        </button>
+        {isSending ? (
+          <button
+            className="chat-stop"
+            type="button"
+            aria-label="Stop"
+            title="Stop"
+            onClick={stopMessage}
+          >
+            <IconPlayerStop aria-hidden="true" size={15} stroke={1.8} />
+          </button>
+        ) : (
+          <button
+            className="chat-submit button-subtle"
+            type="submit"
+            aria-label="Send"
+            disabled={!draft.trim()}
+          >
+            <IconSend aria-hidden="true" size={17} stroke={1.8} />
+          </button>
+        )}
       </form>
     </div>
   )
