@@ -1,11 +1,114 @@
 import crypto from 'crypto'
 import { getDb } from '@/lib/db'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
+import type { LessonStyle } from '@/lib/ai/skills/lessonStyle'
+import type { CourseResearchReport } from '@/lib/course-generation/research'
+import { embedSourceChunkById } from '@/lib/vector/retrieval'
+
+// ── Source text chunking ──────────────────────────────────────────────────────
+// Split source text into ~1500-char chunks with paragraph-boundary awareness.
+// Inserted into sourceChunks at course creation so retrieval can find them.
+
+const CHUNK_SIZE = 1500
+const CHUNK_OVERLAP = 150
+
+function splitIntoChunks(text: string): string[] {
+  if (text.length <= CHUNK_SIZE) {
+    const trimmed = text.trim()
+    return trimmed.length > 50 ? [trimmed] : []
+  }
+
+  const chunks: string[] = []
+  let start = 0
+
+  while (start < text.length) {
+    const end = Math.min(start + CHUNK_SIZE, text.length)
+    let breakAt = end
+
+    // Prefer breaking at a paragraph boundary rather than mid-sentence.
+    if (end < text.length) {
+      const lastPara = text.lastIndexOf('\n\n', end)
+      if (lastPara > start + CHUNK_SIZE * 0.5) breakAt = lastPara + 2
+    }
+
+    const chunk = text.slice(start, breakAt).trim()
+    if (chunk.length > 50) chunks.push(chunk)
+
+    start = breakAt - CHUNK_OVERLAP
+    if (start >= text.length - CHUNK_OVERLAP) break
+  }
+
+  return chunks
+}
+
+async function createSourceChunks(
+  db: Awaited<ReturnType<typeof getDb>>,
+  courseId: string,
+  userId: string,
+  sourceText: string,
+): Promise<void> {
+  // sourceText format from extractSourceTextFromFormData:
+  //   "Source: filename.pdf\n[content]\n\n---\n\nSource: other.pdf\n[content]"
+  const fileBlocks = sourceText.split('\n\n---\n\n')
+  const docs: Array<{
+    _id: any
+    course_id: string
+    user_id: string
+    source_title: string | null
+    content: string
+    created_at: Date
+  }> = []
+
+  for (const block of fileBlocks) {
+    const trimmed = block.trim()
+    if (!trimmed) continue
+
+    const firstNewline = trimmed.indexOf('\n')
+    const firstLine = firstNewline >= 0 ? trimmed.slice(0, firstNewline) : trimmed
+    let title: string | null = null
+    let body = trimmed
+
+    if (firstLine.startsWith('Source: ')) {
+      title = firstLine.slice('Source: '.length).trim() || null
+      body = firstNewline >= 0 ? trimmed.slice(firstNewline + 1).trim() : ''
+    }
+
+    if (!body.trim()) continue
+
+    for (const chunk of splitIntoChunks(body)) {
+      docs.push({
+        _id: crypto.randomUUID() as any,
+        course_id: courseId,
+        user_id: userId,
+        source_title: title,
+        content: chunk,
+        created_at: new Date(),
+      })
+    }
+  }
+
+  if (!docs.length) return
+
+  // Synchronous insert so chunks exist before the first lesson generation request.
+  await db.collection('sourceChunks').insertMany(docs)
+
+  // Fire-and-forget embedding — don't block course creation on it.
+  for (const doc of docs) {
+    embedSourceChunkById(db, String(doc._id)).catch((err) =>
+      console.warn('[sourceChunks] Embedding failed for', doc._id, err),
+    )
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type PersistGeneratedCourseInput = CourseGenerationInput & {
   curriculum: any
   map: any
   userId: string
+  learningStyle?: LessonStyle
+  learningStyleReason?: string
+  researchReport?: CourseResearchReport | null
 }
 
 export type PersistedGeneratedCourse = {
@@ -17,9 +120,50 @@ function makeStableNodeId(courseId: string, rawId: string) {
   return `${courseId}:${rawId}`
 }
 
+function isRawPromptTitle(value?: string | null) {
+  if (!value) return false
+  const clean = value.trim()
+  return clean.length > 90 || clean.split(/\s+/).length > 12
+}
+
+function titleFromGoals(goals: string) {
+  const clean = goals
+    .replace(/^i\s+want\s+to\s+learn\s+/i, '')
+    .replace(/^learn\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const sentence = clean.split(/[.!?]/)[0]?.trim() || clean
+  const fromMatch = sentence.match(/^(.+?)\s+from\s+(first principles|scratch|basics|fundamentals)\b/i)
+  if (fromMatch) {
+    const subject = fromMatch[1].replace(/\b(the|a|an)\b/gi, '').trim()
+    const qualifier = fromMatch[2]
+      .toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+    return `${subject} from ${qualifier}`.replace(/\s+/g, ' ').trim()
+  }
+  return sentence
+    .split(/\s+/)
+    .slice(0, 6)
+    .join(' ')
+    .replace(/[,;:]$/, '')
+    .trim() || 'Generated curriculum'
+}
+
+function resolveCourseTitle(input: PersistGeneratedCourseInput) {
+  const generatedTitle = String(input.curriculum?.title ?? '').trim()
+  if (generatedTitle && !isRawPromptTitle(generatedTitle)) return generatedTitle
+
+  const topic = String(input.topic ?? '').trim()
+  if (topic && !isRawPromptTitle(topic)) return topic
+
+  return titleFromGoals(input.goals)
+}
+
 function buildCourseSummary(input: PersistGeneratedCourseInput, branchCount: number, topicCount: number) {
+  const title = resolveCourseTitle(input)
+
   return {
-    title: input.curriculum?.title || input.topic,
+    title,
     topic: input.topic,
     goals: input.goals,
     mode: input.mode,
@@ -108,7 +252,7 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   await db.collection('courses').insertOne({
     _id: courseId as any,
     user_id: input.userId,
-    title: input.curriculum?.title || input.topic,
+    title: courseSummary.title,
     topic: input.topic,
     goals: input.goals || null,
     mode: input.mode,
@@ -120,6 +264,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       allow_topic_jump: input.learningControl === 'open',
       require_quiz_to_unlock: input.learningControl === 'guided',
     },
+    learning_style: input.learningStyle ?? 'conceptual_technical',
+    learning_style_reason: input.learningStyleReason ?? null,
+    research_confidence: input.researchReport?.research_confidence ?? null,
     source_text: input.sourceText || null,
     source_limitations: input.sourceLimitations,
     summary: courseSummary.summary,
@@ -196,19 +343,38 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     }
   })
 
-  // Exactly one topic starts active: the mapBuilder's designated active topic in the
-  // first branch (position 0), falling back to the very first topic if none qualifies.
+  // Exactly one LEAF topic starts active: the mapBuilder's designated active topic in the
+  // first branch, but only if it is a teachable leaf. Containers cannot be "active" in the
+  // sense the learn page needs — it would redirect to a locked child and show "Locked topic".
   const mapActiveId = firstBranch.active_topic_id
     ? idMap.get(firstBranch.active_topic_id) ?? null
     : null
 
+  // Resolve the candidate from mapActiveId, but reject it if it is a container.
+  const mapActiveCandidate = mapActiveId
+    ? topicsToInsert.find((t: any) => String(t._id) === mapActiveId) ?? null
+    : null
+  const mapActiveLeaf = mapActiveCandidate && isTeachableTopic(mapActiveCandidate)
+    ? mapActiveCandidate
+    : null
+
+  // Normalise helper for the branch-id match below (reused in branchesToInsert too).
+  function normaliseBranchSlugForActive(raw: string) {
+    return String(raw ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  }
+  const normFirstBranch = normaliseBranchSlugForActive(firstBranch.id)
+
   const firstActiveTopic =
-    (mapActiveId ? topicsToInsert.find((t: any) => String(t._id) === mapActiveId) : null)
-    ?? topicsToInsert.find((t: any) => t.branch_id === firstBranch.id && isTeachableTopic(t))
+    mapActiveLeaf
+    ?? topicsToInsert.find((t: any) => {
+        const nb = normaliseBranchSlugForActive(String(t.branch_id ?? ''))
+        return (nb === normFirstBranch || nb.endsWith(`-${normFirstBranch}`) || normFirstBranch.endsWith(`-${nb}`))
+          && isTeachableTopic(t)
+      })
     ?? topicsToInsert.find((t: any) => isTeachableTopic(t))
     ?? topicsToInsert[0]
 
-  // Mutate the chosen leaf and its ancestor containers to active.
+  // Mutate the chosen leaf and all its ancestor containers to active.
   ;(firstActiveTopic as any).state = 'active'
   for (const ancestorId of firstActiveTopic.path_ids ?? []) {
     const ancestor = topicsToInsert.find((topic: any) => String(topic._id) === String(ancestorId))
@@ -217,8 +383,24 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
 
   const firstActiveTopicId = String(firstActiveTopic._id)
 
+  // Normalise a branch id slug so LLM inconsistencies (dash vs underscore, case) don't
+  // break the match between branch.id and topic.branch_id.
+  function normaliseBranchSlug(raw: string) {
+    return String(raw ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  }
+
   const branchesToInsert = branches.map((branch: any, index: number) => {
-    const branchTopics = topicsToInsert.filter((topic: any) => topic.branch_id === branch.id)
+    const normBranchId = normaliseBranchSlug(branch.id)
+    const branchTopics = topicsToInsert.filter((topic: any) => {
+      const normTopicBranchId = normaliseBranchSlug(String(topic.branch_id ?? ''))
+      // Exact match after normalisation, or topic branch_id is a courseId-prefixed slug that
+      // ends with the normalised branch id (e.g. "courseId:python-basics" → "python-basics").
+      return (
+        normTopicBranchId === normBranchId ||
+        normTopicBranchId.endsWith(`-${normBranchId}`) ||
+        normBranchId.endsWith(`-${normTopicBranchId}`)
+      )
+    })
     const isFirst = index === 0
     const teachableBranchTopics = branchTopics.filter(isTeachableTopic)
     const activeTopic = isFirst ? firstActiveTopic : teachableBranchTopics[0] ?? branchTopics[0]
@@ -302,6 +484,17 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     ...courseSummary,
     created_at: new Date(),
   })
+  if (input.researchReport) {
+    await db.collection('courseResearchReports').insertOne({
+      _id: crypto.randomUUID() as any,
+      course_id: courseId,
+      user_id: input.userId,
+      mode: input.mode,
+      goals: input.goals,
+      ...input.researchReport,
+      created_at: new Date(),
+    })
+  }
   await db.collection('topicSummaries').insertMany(
     topicsToInsert.map((topic: any) => ({
       _id: crypto.randomUUID() as any,
@@ -313,6 +506,12 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       created_at: new Date(),
     }))
   )
+
+  // Chunk and store source text so lesson generation and the doubt agent can
+  // retrieve it semantically. Run after all course documents are inserted.
+  if (input.sourceText) {
+    await createSourceChunks(db, courseId, input.userId, input.sourceText)
+  }
 
   return {
     courseId,

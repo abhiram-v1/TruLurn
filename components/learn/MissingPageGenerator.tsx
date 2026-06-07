@@ -4,17 +4,45 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { BottomNav } from '@/components/navigation/BottomNav'
 
+const INITIAL_BATCH_SIZE = 4
+
+async function prefetchBatch(
+  topicId: string,
+  courseId: string,
+  fromPage: number,
+  toPage: number,
+) {
+  for (let p = fromPage; p <= toPage; p++) {
+    try {
+      const res = await fetch(`/api/topics/${encodeURIComponent(topicId)}/pages/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ courseId, pageNumber: p }),
+      })
+      // If this page was skipped by the AI (content_kind=skip), stop generating further
+      if (res.ok) {
+        const data = await res.json()
+        if (data.skipped) break
+      }
+    } catch {
+      break
+    }
+  }
+}
+
 export function MissingPageGenerator({
   courseId,
   topicId,
   topicTitle,
   pageNumber = 1,
+  estimatedPages,
   force = false,
 }: {
   courseId: string
   topicId: string
   topicTitle: string
   pageNumber?: number
+  estimatedPages?: number
   force?: boolean
 }) {
   const router = useRouter()
@@ -29,15 +57,22 @@ export function MissingPageGenerator({
     setError(null)
 
     try {
-      const response = await fetch(`/api/topics/${topicId}/pages/generate`, {
+      const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}/pages/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ courseId, pageNumber, force }),
       })
-      const data = (await response.json()) as { error?: string; redirectTo?: string }
+      const data = (await response.json()) as { error?: string; redirectTo?: string; skipped?: boolean }
 
       if (!response.ok) {
         throw new Error(data.error ?? 'Lesson generation failed.')
+      }
+
+      // After page 1 generates, silently prefetch the initial batch (pages 2-4)
+      // so the user never waits on subsequent pages within the first batch.
+      if (pageNumber === 1 && !force && estimatedPages && estimatedPages > 1) {
+        const batchEnd = Math.min(estimatedPages, INITIAL_BATCH_SIZE, 15)
+        prefetchBatch(topicId, courseId, 2, batchEnd)
       }
 
       if (data.redirectTo) {
@@ -50,7 +85,7 @@ export function MissingPageGenerator({
       setStatus('failed')
       setError(caught instanceof Error ? caught.message : 'Lesson generation failed.')
     }
-  }, [courseId, router, topicId, pageNumber, force])
+  }, [courseId, router, topicId, pageNumber, force, estimatedPages])
 
   useEffect(() => {
     if (status === 'idle' && !generationStartedRef.current) {

@@ -18,6 +18,7 @@ export type UnderstandingLevel = 1 | 2 | 3 | 4 | 5
 export type QuestionType = 'apply' | 'spot_error' | 'explain' | 'mcq' | 'true_false' | 'code'
 export type TracciaNodeType = 'container' | 'learning_unit' | 'bridge' | 'example_unit' | 'assessment_unit'
 export type ContentKind = 'full_page' | 'section' | 'bridge' | 'example' | 'skip'
+export type PageSequenceRole = 'introduce' | 'deepen' | 'connect' | 'repair' | 'practice' | 'review'
 
 export interface LessonExampleRef {
   label: string
@@ -35,6 +36,8 @@ export interface Course {
   mode: CourseMode
   learning_control?: LearningControlMode
   course_depth?: CourseDepth
+  lesson_style?: string | null
+  code_language?: string | null   // e.g. 'python' — inject contextual code examples when set
   created_at: string
 }
 
@@ -72,7 +75,7 @@ export interface Branch {
   title: string
   description: string
   state: BranchState
-  active_topic_id: string
+  active_topic_id: string | null
   topic_count: number
   mastered_count: number
 }
@@ -122,6 +125,12 @@ export interface Page {
   reused_concepts?: string[]
   reminder_concepts?: string[]
   example_refs?: LessonExampleRef[]
+  learning_architecture?: unknown | null
+  target_understanding?: string | null
+  success_criteria?: string[]
+  active_processing?: unknown | null
+  retention_hooks?: unknown | null
+  page_sequence_role?: PageSequenceRole | null
   sections?: LessonSection[]
 }
 

@@ -10,6 +10,7 @@ export type ActionIntent =
   | 'custom_quiz'
   | 'generate_page'
   | 'skip_current'
+  | 'change_lesson_style'
 
 export type UIAction =
   | { action: 'open_quiz';           topicId: string }

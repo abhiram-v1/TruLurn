@@ -26,6 +26,18 @@ export interface GraphNode {
   suggested: boolean
   misconception: boolean
   current: boolean     // the topic the user is actively studying
+
+  // ── Intelligence layer ────────────────────────────────────────────────────
+  /** 0–100. Risk inherited from weak prerequisites via cascade. */
+  vulnerabilityRisk: number
+  /** Number of still-locked downstream nodes reachable from this one. */
+  downstreamImpact: number
+  /** 0–100. Freshness of last review (100 = recent, 0 = stale). Only meaningful for mastered/functional/partial. */
+  decayScore: number
+  /** Number of doubt/chat messages logged against this topic. */
+  doubtCount: number
+  /** True if the last quiz was passed but with false-confidence flags. */
+  falseConfidence: boolean
 }
 
 export interface GraphEdge {
@@ -57,6 +69,15 @@ export interface GraphCourse {
   locked: number
 }
 
+export interface GraphRegion {
+  id: string       // branch_id (raw slug)
+  label: string    // branch title shown in the background band
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
 export interface GraphData {
   course: GraphCourse
   branches: GraphBranch[]
@@ -64,6 +85,7 @@ export interface GraphData {
   edges: GraphEdge[]
   canvasW: number
   canvasH: number
+  regions: GraphRegion[]
 }
 
 // ── What the AI graph evaluator returns ──

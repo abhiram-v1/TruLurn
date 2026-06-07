@@ -3,6 +3,28 @@
 import Link from 'next/link'
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import type { EvaluationResult, ExamMode, ExamTurn, QuestionType } from '@/types'
+import CodeMirror from '@uiw/react-codemirror'
+import { oneDark } from '@codemirror/theme-one-dark'
+import { python } from '@codemirror/lang-python'
+import { javascript } from '@codemirror/lang-javascript'
+import { java } from '@codemirror/lang-java'
+import { cpp } from '@codemirror/lang-cpp'
+import { rust } from '@codemirror/lang-rust'
+import { sql } from '@codemirror/lang-sql'
+import { MarkdownContent } from '@/components/ui/MarkdownContent'
+
+// Detect the most likely language extension from the topic/course title.
+// Defaults to Python for general CS courses.
+function detectLanguageExtensions(topicTitle: string) {
+  const t = topicTitle.toLowerCase()
+  if (/python/.test(t)) return [python()]
+  if (/javascript|typescript|react|node|next/.test(t)) return [javascript({ typescript: true })]
+  if (/\bjava\b/.test(t)) return [java()]
+  if (/c\+\+|cpp/.test(t)) return [cpp()]
+  if (/rust/.test(t)) return [rust()]
+  if (/sql/.test(t)) return [sql()]
+  return [python()]
+}
 
 const TYPE_LABELS: Record<QuestionType, string> = {
   apply: 'Apply',
@@ -14,6 +36,39 @@ const TYPE_LABELS: Record<QuestionType, string> = {
 }
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D']
+
+// Strip the "A. " / "B. " prefix the model includes — the component adds its own letter label.
+function stripOptionPrefix(text: string) {
+  return text.replace(/^[A-D]\.\s*/, '').trim()
+}
+
+// Render inline markdown: `code`, **bold**, *italic* — without block-level elements.
+// Used for MCQ option text which often contains inline code references.
+function InlineMarkdown({ text }: { text: string }) {
+  // Split on `code` spans first, then handle bold/italic in plain segments
+  const segments = text.split(/(`[^`\n]+`)/)
+  return (
+    <>
+      {segments.map((seg, i) => {
+        if (seg.startsWith('`') && seg.endsWith('`') && seg.length > 2) {
+          return <code key={i} className="md-inline-code">{seg.slice(1, -1)}</code>
+        }
+        // Bold: **text**
+        const boldParts = seg.split(/(\*\*[^*]+\*\*)/)
+        return (
+          <span key={i}>
+            {boldParts.map((part, j) => {
+              if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+                return <strong key={j}>{part.slice(2, -2)}</strong>
+              }
+              return part
+            })}
+          </span>
+        )
+      })}
+    </>
+  )
+}
 
 type ExamSessionPayload = {
   session: {
@@ -71,7 +126,7 @@ function McqInput({
             onChange={() => onChange(opt)}
           />
           <span className="quiz-option-letter">{OPTION_LETTERS[i] ?? String(i + 1)}</span>
-          <span>{opt}</span>
+          <span><InlineMarkdown text={stripOptionPrefix(opt)} /></span>
         </label>
       ))}
     </div>
@@ -105,38 +160,39 @@ function TrueFalseInput({
 function CodeAnswerInput({
   value,
   onChange,
+  topicTitle,
 }: {
   value: string
   onChange: (v: string) => void
+  topicTitle: string
 }) {
+  const extensions = useMemo(() => detectLanguageExtensions(topicTitle), [topicTitle])
+
   return (
     <div className="quiz-code-shell">
       <div className="quiz-code-toolbar">
         <span>Code answer</span>
-        <span>Tab inserts spaces</span>
+        <span>⇥ indent · ⌘Z undo</span>
       </div>
-      <textarea
-        aria-label="Code answer"
-        className="quiz-code-input"
-        spellCheck={false}
-        autoCapitalize="off"
-        autoCorrect="off"
-        placeholder={`// Write your solution here\nfunction solve(input) {\n  \n}`}
+      <CodeMirror
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key !== 'Tab') return
-          e.preventDefault()
-          const target = e.currentTarget
-          const start = target.selectionStart
-          const end = target.selectionEnd
-          const next = `${value.slice(0, start)}  ${value.slice(end)}`
-          onChange(next)
-          requestAnimationFrame(() => {
-            target.selectionStart = start + 2
-            target.selectionEnd = start + 2
-          })
+        onChange={onChange}
+        theme={oneDark}
+        extensions={extensions}
+        basicSetup={{
+          lineNumbers: true,
+          foldGutter: false,
+          dropCursor: false,
+          allowMultipleSelections: false,
+          indentOnInput: true,
+          bracketMatching: true,
+          autocompletion: true,
+          highlightActiveLine: true,
+          tabSize: 4,
         }}
+        className="quiz-codemirror"
+        minHeight="240px"
+        placeholder="# Write your solution here"
       />
     </div>
   )
@@ -146,10 +202,12 @@ function AnswerInput({
   turn,
   answer,
   setAnswer,
+  topicTitle,
 }: {
   turn: ExamTurn
   answer: string
   setAnswer: (value: string) => void
+  topicTitle: string
 }) {
   if (turn.type === 'mcq') {
     return <McqInput turn={turn} value={answer} onChange={setAnswer} />
@@ -158,7 +216,7 @@ function AnswerInput({
     return <TrueFalseInput value={answer} onChange={setAnswer} />
   }
   if (turn.type === 'code') {
-    return <CodeAnswerInput value={answer} onChange={setAnswer} />
+    return <CodeAnswerInput value={answer} onChange={setAnswer} topicTitle={topicTitle} />
   }
   return (
     <textarea
@@ -182,6 +240,7 @@ function ResultView({
   const summary = state.session.summary
   const turns = state.turns ?? []
   const passed = Boolean(summary?.passed)
+  const nextTopicId = summary?.graph_update?.nextSuggestedTopicId ?? null
 
   return (
     <div className="quiz-stack">
@@ -223,7 +282,9 @@ function ResultView({
               {turn.source === 'followup' ? ' · Follow-up' : ''}
             </span>
           </div>
-          <p className="question-text">{turn.question}</p>
+          <div className="question-text">
+            <MarkdownContent className="quiz-question-md">{turn.question}</MarkdownContent>
+          </div>
           <div className={`result-answer${turn.type === 'code' ? ' result-answer--code' : ''}`}>
             <span className="result-label">Your answer</span>
             {turn.type === 'code'
@@ -233,8 +294,10 @@ function ResultView({
           {turn.evaluation && (
             <div className="result-feedback">
               <span className="result-label">Feedback</span>
-              <p>{turn.evaluation.feedback}</p>
-              {turn.evaluation.gap && <p><strong>Review:</strong> {turn.evaluation.gap}</p>}
+              <MarkdownContent className="quiz-question-md">{turn.evaluation.feedback}</MarkdownContent>
+              {turn.evaluation.gap && (
+                <p><strong>Review:</strong> {turn.evaluation.gap}</p>
+              )}
             </div>
           )}
         </div>
@@ -244,9 +307,19 @@ function ResultView({
         <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>
           Return to lesson
         </Link>
-        <Link className="button" href={`/course/${courseId}/quizzes`}>
-          Quiz library
-        </Link>
+        {passed && nextTopicId ? (
+          <Link className="button" href={`/learn/${courseId}/${encodeURIComponent(nextTopicId)}`}>
+            Continue →
+          </Link>
+        ) : passed ? (
+          <Link className="button" href={`/course/${courseId}`}>
+            Back to Atlas
+          </Link>
+        ) : (
+          <Link className="button" href={`/learn/${courseId}/${topicId}`}>
+            Review lesson
+          </Link>
+        )}
       </div>
     </div>
   )
@@ -371,8 +444,10 @@ export function QuizSession({
           <div className="question-meta">
             {progressLabel} · {TYPE_LABELS[turn.type]}
           </div>
-          <p className="question-text">{turn.question}</p>
-          <AnswerInput turn={turn} answer={answer} setAnswer={setAnswer} />
+          <div className="question-text">
+            <MarkdownContent className="quiz-question-md">{turn.question}</MarkdownContent>
+          </div>
+          <AnswerInput turn={turn} answer={answer} setAnswer={setAnswer} topicTitle={topicTitle} />
         </div>
 
         {error && (

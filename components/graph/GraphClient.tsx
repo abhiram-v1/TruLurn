@@ -15,7 +15,7 @@ const DEFAULT_FILTERS = {
   showLocked: true,
   showWeak: true,
   showCritical: true,
-  showRegions: false,
+  showRegions: true,   // branch swim-lane bands on by default
   showRecommended: true,
   focusMode: false,
 }
@@ -109,6 +109,46 @@ export function GraphClient({ courseId }: { courseId: string }) {
   )
 
   const focusId = filters.focusMode && selectedId ? selectedId : null
+
+  // ── Critical path — backward BFS from a locked node to nearest completed anchor ──
+  // Highlights the exact prerequisite chain the student needs to complete to unlock
+  // a selected locked topic. Nodes and edges on the path get a special visual class.
+  const criticalPath = useMemo((): { nodes: Set<string>; edges: Set<string> } => {
+    const empty = { nodes: new Set<string>(), edges: new Set<string>() }
+    if (!graphData || !selectedNode || selectedNode.state !== 'locked') return empty
+
+    const nodeById = new Map(graphData.nodes.map((n) => [n.id, n]))
+    // Build reverse adjacency (incoming edges per node)
+    const revAdj = new Map<string, Array<{ from: string; key: string }>>()
+    for (const e of graphData.edges) {
+      if (!revAdj.has(e.to)) revAdj.set(e.to, [])
+      revAdj.get(e.to)!.push({ from: e.from, key: `${e.from}::${e.to}` })
+    }
+
+    // BFS backwards from selected locked node
+    // Stop expanding a node once we hit a mastered/functional anchor
+    const pathNodes = new Set<string>()
+    const pathEdges = new Set<string>()
+    const queue: string[] = [selectedNode.id]
+    const visited = new Set<string>([selectedNode.id])
+
+    while (queue.length) {
+      const cur = queue.shift()!
+      pathNodes.add(cur)
+      const node = nodeById.get(cur)
+      // Mastered/functional = solid foundation, include in path but don't trace further back
+      if (node && (node.state === 'mastered' || node.state === 'functional')) continue
+      for (const { from, key } of revAdj.get(cur) ?? []) {
+        pathEdges.add(key)
+        if (!visited.has(from)) {
+          visited.add(from)
+          queue.push(from)
+        }
+      }
+    }
+
+    return { nodes: pathNodes, edges: pathEdges }
+  }, [graphData, selectedNode])
 
   // ── States ────────────────────────────────────────────────────────────────
   function centerNode(node: GraphNode | null = selectedNode) {
@@ -229,6 +269,8 @@ export function GraphClient({ courseId }: { courseId: string }) {
           showLocked={filters.showLocked}
           view={view}
           setView={setView}
+          criticalPathNodes={criticalPath.nodes}
+          criticalPathEdges={criticalPath.edges}
         />
 
         {/* Zoom controls */}

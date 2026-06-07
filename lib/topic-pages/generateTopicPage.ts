@@ -1,7 +1,9 @@
 import crypto from 'crypto'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { buildStyleDirective } from '@/lib/ai/skills/lessonStyle'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
+import type { LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
 import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
 
 type GenerateTopicPageInput = {
@@ -12,8 +14,10 @@ type GenerateTopicPageInput = {
   memory?: CourseMemoryContext
   mapPointer?: string
   sequenceContext?: string
+  learningArchitecture?: LearningArchitectureBrief
   approach?: 'explain_again' | 'go_deeper' | 'simplify' | 'show_example'
   customInstruction?: string
+  lessonResearch?: string
 }
 
 export type GeneratedTopicPage = {
@@ -33,6 +37,7 @@ export type GeneratedTopicPage = {
   reused_concepts: string[]
   reminder_concepts: string[]
   example_refs: LessonExampleRef[]
+  learning_architecture?: LearningArchitectureBrief | null
   sections: LessonSection[]
 }
 
@@ -105,6 +110,35 @@ function formatCourseMemory(memory?: CourseMemoryContext) {
   }
 
   return parts.length ? parts.join('\n\n') : ''
+}
+
+function formatLearningArchitecture(brief?: LearningArchitectureBrief) {
+  if (!brief) return ''
+
+  const active = [
+    brief.active_processing.retrieval_prompt ? `Retrieval: ${brief.active_processing.retrieval_prompt}` : null,
+    brief.active_processing.self_explanation_prompt ? `Self-explanation: ${brief.active_processing.self_explanation_prompt}` : null,
+    brief.active_processing.transfer_prompt ? `Transfer: ${brief.active_processing.transfer_prompt}` : null,
+  ].filter(Boolean)
+
+  return [
+    'LEARNING ARCHITECTURE BRIEF:',
+    `Target understanding: ${brief.target_understanding}`,
+    `Success criteria: ${brief.success_criteria.join('; ') || 'none'}`,
+    `Why this matters now: ${brief.why_this_matters_now}`,
+    `Prior knowledge: ${brief.required_prior_knowledge.join('; ') || 'none'}`,
+    brief.prior_knowledge_repair.length ? `Prior knowledge repair: ${brief.prior_knowledge_repair.join('; ')}` : null,
+    brief.likely_misconceptions.length ? `Misconception risks: ${brief.likely_misconceptions.join('; ')}` : null,
+    `Intuition plan: ${brief.intuition_plan}`,
+    `Representation plan: ${brief.representation_plan.join('; ') || 'prose'}`,
+    `Example strategy: opening=${brief.example_strategy.opening_example || 'none'}; worked_example_needed=${brief.example_strategy.worked_example_needed}; contrast_case_needed=${brief.example_strategy.contrast_case_needed}; reusable=${brief.example_strategy.reusable_example_refs.join('; ') || 'none'}`,
+    active.length ? `Active processing: ${active.join('; ')}` : 'Active processing: none',
+    `Page role: ${brief.page_sequence_role}`,
+    `Cross-page connection: ${brief.cross_page_connection}`,
+    brief.cognitive_load_notes.length ? `Cognitive-load notes: ${brief.cognitive_load_notes.join('; ')}` : null,
+    `Recommended content kind: ${brief.recommended_content_kind}`,
+    `Planner reason: ${brief.reason}`,
+  ].filter(Boolean).join('\n')
 }
 
 function splitLongParagraph(paragraph: string) {
@@ -199,7 +233,7 @@ function optionalSectionAllowedByGuardrails({
     return Boolean(meta.needs_key_ideas)
       && bulletCount >= 3
       && depth !== 'shallow'
-      && !['definition', 'mechanism'].includes(kind)
+      && kind !== 'definition'
   }
 
   if (tag === 'misconceptions') {
@@ -497,13 +531,24 @@ Do not over-explain simple bridge concepts. A learning unit may be:
 - skip: no page should be generated because the idea is already covered nearby or is only structural context.
 Choose skip carefully. Never skip a concept if skipping would hide a prerequisite, a common source of confusion, or an assessable skill.
 
+LEARNING ARCHITECTURE:
+- When a Learning Architecture Brief is supplied, follow it as the teaching design.
+- Do not invent a different page role, example strategy, or content kind.
+- The page should create the stated target understanding and satisfy the success criteria.
+- Use the suggested intuition before formalism unless the page role is review or practice.
+- If active-processing prompts are supplied, include them naturally in <checkpoints> or in the closing part of <core>.
+- If the brief says a worked example is needed, include a real worked example.
+- If the brief names misconception risks, address the specific risk without turning every page into a misconception page.
+
 TONE & VOICE — follow these without exception:
-• Write like a knowledgeable friend explaining something, not a textbook author. Clear and direct, never stiff or overly formal.
-• Talk directly to the student. Use "you": "When you call a function..." not "When a function is called..."
-• Keep sentences short and clear. If a sentence is doing too much, split it.
+• Write like a teacher who genuinely loves this subject. Not a textbook author, not a dry lecturer — someone who can't wait to show the student something that clicks. That energy should come through in the prose.
+• Let natural enthusiasm appear where the concept earns it. Phrases like "here's where it gets interesting", "this is the key insight", "and this is why it all fits together" are fine — use them when the moment genuinely calls for it, not as filler. Never use hollow affirmations ("Great!", "Awesome!", "Excellent question!") — those are hollow. Real enthusiasm is specific.
+• Talk directly to the student. Use "you": "When you train a model..." not "When a model is trained..."
+• Keep sentences short and punchy. If a sentence is doing too much, split it. Short sentences land harder.
 • When you introduce a technical term, explain what it means immediately — in the same sentence or the very next one. Don't assume the student already knows it.
-• Lead with intuition before definition. Start with what problem this solves, or a real-world analogy, before presenting formal terms.
-• Prefer active voice. "Python reads the file" lands better than "the file is read by Python".
+• Lead with intuition before definition. Start with the question this concept answers, or a real-world analogy that makes it feel familiar, before presenting formal terms.
+• Prefer active voice. "The network adjusts its weights" lands better than "the weights are adjusted by the network".
+• Avoid blunt one-sentence claims dropped without context. Instead of "Deep Learning learns features automatically.", say "This is what separates deep learning from classical ML: instead of you deciding which features matter, the network figures that out on its own — and it often finds patterns you'd never think to look for."
 
 STRICT OPTIONAL SECTION POLICY:
 - Treat optional sections as false by default. The model must earn each one.
@@ -543,14 +588,30 @@ STEP 1B - SHAPE THE CONTENT:
 • requires_quiz: true only if the node introduces an assessable skill, formula, procedure, or high-risk misconception.
 Use the course map pointer to avoid repeating nearby pages and to keep this node scoped.
 
-STEP 1C - SEQUENCE CONTINUITY:
-• If the sequence context says a concept was already explained, do not re-teach it from scratch.
-  Use either 2-4 short reminder bullets or one compact bridge paragraph.
-• If the same concept appears in a new context, explain only the contextual difference.
-• Reuse examples listed in the sequence context when they still fit.
-  Introduce a new example only when the old one would mislead, hide the current mechanism, or fail for this topic.
-• Avoid casually switching analogy domains across adjacent pages.
-• Record what you did in assessment.covered_concepts, reused_concepts, reminder_concepts, and example_refs.
+STEP 1C - SEQUENCE CONTINUITY (anti-redundancy rules — read carefully):
+The previous pages context is your single most important anti-repetition tool. Before writing anything, scan it for concepts already explained. Then apply these rules strictly:
+
+RULE 1 — Never re-teach what a previous page already taught.
+If a concept was explained on an earlier page, you must NOT explain it again as if the student hasn't seen it. This is the most common mistake. The student has read those pages. Treat them as knowledge the student already has.
+
+RULE 2 — Reference it briefly, then move on.
+When you need to mention a concept from a previous page, do it in ONE sentence using a callback phrase, then continue. Good callback forms:
+  "As we covered earlier, [one-phrase reminder] — so here we're building on that to..."
+  "You already know that [thing]. What's new here is..."
+  "Remember: [one-line reminder]. With that in mind, let's look at..."
+  "We established earlier that [thing], which means..."
+Use these naturally, as a teacher would when continuing a running lesson. Do not use them mechanically on every page — only when you genuinely need to invoke prior knowledge.
+
+RULE 3 — The test: would a teacher re-say this?
+Ask yourself: if you were teaching this live and had already covered this concept 10 minutes ago, would you repeat the full explanation? No — you'd say "as we just saw" and move on. Apply that instinct here.
+
+RULE 4 — Contextual re-use is fine; re-teaching is not.
+If the same concept appears in a genuinely new role (e.g., backpropagation is mentioned in the loss function page just to establish a link, then taught in depth on its own page), a one-sentence bridge is correct. A full re-explanation of what backpropagation is would be wrong.
+
+RULE 5 — Reuse examples when they still fit.
+If the sequence context names a prior example, re-use it by reference: "using the same image classification example..." rather than re-describing it from scratch.
+
+• Record what you did: covered_concepts (newly taught), reused_concepts (referenced without re-teaching), reminder_concepts (one-line callback used), example_refs (prior examples reused or adapted).
 
 STEP 2 — FORMAT RULES: choose the right format for each piece of content
 
@@ -579,6 +640,9 @@ INLINE CALLOUTS — embed in <core> at the point where they add the most value:
   > Concrete worked case with real values, steps, or analogies. $math$ inline as needed.
   Use at the exact point where an abstract claim needs grounding.
   Most mechanism, math, and procedure concepts should include at least one example inline.
+  Inline example callouts are for short paragraph examples only.
+  Do NOT put display equations, matrices, or multi-line derivations inside a > blockquote callout.
+  If an example needs a matrix, derivation, table, code block, or multiple displayed equations, put it in <examples> instead.
 
   > **Key insight:** [one non-obvious takeaway, 1–2 sentences]
   Use for a pinpoint observation students routinely miss or misapply.
@@ -607,7 +671,17 @@ DO NOT PRODUCE FILLER:
 
 MATH & FORMATTING:
 • Use $...$ for ALL inline math: $f(x)$, $\\lim_{x \\to c}$, $\\frac{a}{b}$
-• Use $$...$$ on its own line for display equations
+• Use $$...$$ only as standalone display-math fences.
+• A display equation MUST be formatted exactly like:
+  $$
+  \\lim_{x \\to c} f(x) = L
+  $$
+• Never put prose on the same line as $$.
+• Never write patterns like "$$ then $$", "$$ if", "$$ where", "$$ Thus", or "$$ Then".
+• Never place two display-math fences on the same line.
+• Any \\begin{bmatrix}, \\frac, \\mathbb, \\cdot, \\quad, multi-line derivation, or matrix/vector calculation MUST be inside a standalone $$ block.
+• If a display equation appears after prose, close the prose sentence first, then start the $$ block on the next line.
+• If prose follows a display equation, close the $$ block first, leave a blank line, then write the prose.
 • NEVER use backticks for math — only for code identifiers
 • Use **bold** for key terms on first mention only
 
@@ -629,6 +703,8 @@ const USER_TEMPLATE = ({
   memory,
   mapPointer,
   sequenceContext,
+  learningArchitecture,
+  lessonResearch,
 }: {
   courseTitle: string
   courseGoal: string
@@ -642,6 +718,8 @@ const USER_TEMPLATE = ({
   memory?: CourseMemoryContext
   mapPointer?: string
   sequenceContext?: string
+  learningArchitecture?: LearningArchitectureBrief
+  lessonResearch?: string
 }) => `Course: ${courseTitle}
 Goal: ${courseGoal}
 Topic: ${topicTitle}
@@ -652,11 +730,12 @@ Page focus: ${focus}
 
 ${mapPointer ? `${mapPointer}\n` : ''}
 ${sequenceContext ? `${sequenceContext}\n` : ''}
+${learningArchitecture ? `${formatLearningArchitecture(learningArchitecture)}\n` : ''}
 
 Previous pages in this same topic:
 ${formatPreviousPages(previousPages)}
 ${(() => { const mem = formatCourseMemory(memory); return mem ? `\nSemantic course memory (use only for continuity/deduplication):\n${mem}\n` : '' })()}
-
+${lessonResearch ? `\nWEB RESEARCH CONTEXT — verified facts from reputable sources. Use as a factual anchor. Do not copy verbatim; adapt to your voice and format:\n${lessonResearch}\n` : ''}
 Return in this EXACT format. Only <assessment> and <core> are always required.
 
 <assessment>
@@ -694,6 +773,10 @@ RULES:
 - Always include <core> unless should_generate_page is false.
 - If should_generate_page is false, return only <assessment> and no other tags.
 - If content_kind is section, bridge, or example, keep <core> concise and do not pad to look like a full lesson.
+- If a Learning Architecture Brief recommends a content_kind, match it exactly unless should_generate_page is false.
+- The page must visibly support target_understanding, why_this_matters_now, intuition_plan, and cross_page_connection from the brief.
+- If the brief requires a worked example, include an inline example or <examples>.
+- If the brief has active_processing prompts, include them as <checkpoints> when appropriate or weave them into <core>.
 - Default to no optional sections. Include a separate optional section only when it changes how the learner studies the page.
 - Do not include more than one of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a medium page.
 - Do not include more than two of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a deep page.
@@ -726,11 +809,22 @@ RULES:
 
 > **Example: [short descriptive title]**
 > Concrete worked case with real values or steps. $math$ as needed.
+> Keep inline callout examples short. Use only inline math here.
 
 > **Key insight:** [Non-obvious takeaway students routinely miss]
 
 [Use ## sub-headings to separate distinct sub-concepts. Max 3.]
-LaTeX freely: $f(x)$, $$\\lim_{x \\to c} f(x) = L$$
+Inline math example: $f(x)$
+
+Display math example:
+$$
+\\lim_{x \\to c} f(x) = L
+$$
+
+Matrix example:
+$$
+x = \\begin{bmatrix} 2 \\\\ -1 \\\\ 3 \\end{bmatrix}
+$$
 </core>
 
 <key_ideas>
@@ -744,6 +838,7 @@ LaTeX freely: $f(x)$, $$\\lim_{x \\to c} f(x) = L$$
 [Only if needs_examples is true — a worked example that would clutter <core> if left inline]
 **Example: [descriptive title]**
 [Step-by-step walkthrough with real values or concrete scenario]
+[For matrices, vectors, derivations, or multi-step formulas, use standalone $$ blocks only. Never mix $$ with prose on the same line.]
 </examples>
 
 <misconceptions>
@@ -785,6 +880,33 @@ const COURSE_DEPTH_INSTRUCTIONS: Record<string, string> = {
 - Only add depth where it genuinely aids understanding; do not pad.`,
 }
 
+// ── Code augmentation directive ───────────────────────────────────────────────
+// Fired when course.code_language is set. This is NOT code_first style —
+// the concept still leads; code appears only when it genuinely helps.
+function buildCodeAugmentationDirective(lang: string): string {
+  const label = lang.charAt(0).toUpperCase() + lang.slice(1)
+  return `CODE AUGMENTATION — ${label} examples (use your own judgment, only when genuinely helpful):
+The student wants ${label} code where it makes concepts clearer. This does NOT mean adding code to every page.
+
+ADD code when:
+- The concept is an algorithm, formula, or computation that a short snippet makes tangible (e.g. gradient computation, convolution, attention)
+- The concept is an API or library pattern the student will actually use (e.g. defining a PyTorch layer, fitting a sklearn model)
+- A concrete implementation reveals *why* the math or theory takes the form it does
+
+SKIP code when:
+- The concept is purely motivational, historical, or conceptual ("What is a neural network?", "Why do we need normalisation?")
+- The concept is better understood through analogy or prose first
+- The page is already code-heavy from previous pages on the same topic
+
+CODE STYLE:
+- Keep snippets short: 5–20 lines. Remove all unnecessary boilerplate — show only what matters.
+- Use real library names (NumPy, PyTorch, TensorFlow, scikit-learn, Keras, etc.) — pick whichever is most natural for the specific concept.
+- Add a brief comment on each non-obvious line.
+- Format as a fenced code block: \`\`\`${lang.toLowerCase()}
+- If a snippet immediately follows prose, add a blank line before the fence.
+- A page can have zero, one, or two snippets — never add more unless the concept genuinely requires it.`
+}
+
 export async function generateTopicPage({
   course,
   topic,
@@ -793,8 +915,10 @@ export async function generateTopicPage({
   memory,
   mapPointer,
   sequenceContext,
+  learningArchitecture,
   approach,
   customInstruction,
+  lessonResearch,
 }: GenerateTopicPageInput): Promise<GeneratedTopicPage> {
   const plannedPages = topic.estimated_pages ?? topic.total_pages_planned ?? 3
   const focus = customInstruction
@@ -805,12 +929,16 @@ export async function generateTopicPage({
   const depthBlock = COURSE_DEPTH_INSTRUCTIONS[depthKey]
     ? `\n${COURSE_DEPTH_INSTRUCTIONS[depthKey]}\n`
     : ''
+  const styleDirective = buildStyleDirective(course.lesson_style ?? null)
+  const styleBlock = styleDirective ? `\n${styleDirective}\n` : ''
+  const codeLang = String(course.code_language ?? '').trim().toLowerCase()
+  const codeBlock = codeLang ? `\n${buildCodeAugmentationDirective(codeLang)}\n` : ''
   const approachBlock = approach ? `\n${APPROACH_INSTRUCTIONS[approach] ?? ''}\n` : ''
   const customBlock = customInstruction
     ? `\nCUSTOM PAGE REQUEST: "${customInstruction}"\nGenerate this page in response to the student's specific request. The focus above reflects their intent.\n`
     : ''
 
-  const user = [depthBlock, approachBlock, customBlock, USER_TEMPLATE({
+  const user = [depthBlock, styleBlock, codeBlock, approachBlock, customBlock, USER_TEMPLATE({
     courseTitle: course.title ?? course.topic,
     courseGoal: course.goals ?? 'Master the subject clearly enough to explain and apply it.',
     topicTitle: topic.title,
@@ -823,6 +951,8 @@ export async function generateTopicPage({
     memory,
     mapPointer,
     sequenceContext,
+    learningArchitecture,
+    lessonResearch,
   })].filter(Boolean).join('')
 
   const text = await generateWithGemini({
@@ -833,7 +963,7 @@ export async function generateTopicPage({
   })
 
   const structured = parseStructuredResponse(text, focus, pageNumber)
-  if (structured) return structured
+  if (structured) return { ...structured, learning_architecture: learningArchitecture ?? null }
 
   const parsed = parseOldFormat(text, focus, pageNumber)
   const hasContent = parsed.content.trim().length > 0
@@ -843,7 +973,7 @@ export async function generateTopicPage({
     throw new Error('Generated lesson page was empty.')
   }
 
-  return parsed
+  return { ...parsed, learning_architecture: learningArchitecture ?? null }
 }
 
 // ── Document builder ──────────────────────────────────────────────────────────
@@ -875,6 +1005,12 @@ export function buildPageDocument(input: {
     reused_concepts: input.page.reused_concepts,
     reminder_concepts: input.page.reminder_concepts,
     example_refs: input.page.example_refs,
+    learning_architecture: input.page.learning_architecture ?? null,
+    target_understanding: input.page.learning_architecture?.target_understanding ?? null,
+    success_criteria: input.page.learning_architecture?.success_criteria ?? [],
+    active_processing: input.page.learning_architecture?.active_processing ?? null,
+    retention_hooks: input.page.learning_architecture?.retention_hooks ?? null,
+    page_sequence_role: input.page.learning_architecture?.page_sequence_role ?? null,
     sections: input.page.sections,
     created_at: new Date(),
     updated_at: new Date(),

@@ -17,11 +17,51 @@ export async function GET(
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
 
-    const [topics, branches, topicEdges] = await Promise.all([
+    const [topics, branches, topicEdges, examSessions, doubtAgg] = await Promise.all([
       db.collection('topics').find({ course_id: courseId }).sort({ position: 1 }).toArray(),
       db.collection('branches').find({ course_id: courseId }).toArray(),
       db.collection('topicEdges').find({ course_id: courseId }).toArray(),
+      // Most recent completed exam session per topic — for decay + false confidence
+      db.collection('examSessions')
+        .find({ course_id: courseId, user_id: userId, status: 'completed' })
+        .sort({ completed_at: -1 })
+        .project({ topic_id: 1, completed_at: 1, summary: 1 })
+        .toArray(),
+      // Doubt message count per topic
+      db.collection('doubtMessages')
+        .aggregate([
+          { $match: { course_id: courseId, user_id: userId } },
+          { $group: { _id: '$topic_id', count: { $sum: 1 } } },
+        ])
+        .toArray(),
     ])
+
+    // Build lookup maps for the intelligence layer
+    const lastExamByTopic = new Map<string, { completedAt: Date; falseConfidence: boolean }>()
+    for (const session of examSessions) {
+      const tid = String(session.topic_id)
+      if (lastExamByTopic.has(tid)) continue // already have the most recent (sorted desc)
+      const summary = session.summary as any
+      const hasFalseConf = Boolean(
+        summary?.passed &&
+        Array.isArray(summary?.review_concepts) &&
+        summary.review_concepts.length > 0 &&
+        !summary.passed, // passed but flagged — check both flags
+      ) || Boolean(
+        session.summary &&
+        typeof session.summary === 'object' &&
+        (session.summary as any).false_confidence,
+      )
+      lastExamByTopic.set(tid, {
+        completedAt: session.completed_at instanceof Date ? session.completed_at : new Date(session.completed_at ?? 0),
+        falseConfidence: hasFalseConf,
+      })
+    }
+
+    const doubtCountByTopic = new Map<string, number>()
+    for (const row of doubtAgg) {
+      doubtCountByTopic.set(String(row._id), Number(row.count ?? 0))
+    }
 
     const graphTopics = topics.filter((topic) =>
       String(topic.node_type ?? '') !== 'container' && Number(topic.children_count ?? 0) <= 0,
@@ -43,6 +83,8 @@ export async function GET(
       branches: branches as any,
       topicEdges: graphEdges as any,
       activeSingleTopicId,
+      lastExamByTopic,
+      doubtCountByTopic,
     })
 
     return NextResponse.json(graphData)

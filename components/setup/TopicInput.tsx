@@ -1,6 +1,6 @@
 'use client'
 
-import { ChangeEvent, FormEvent, useEffect, useState } from 'react'
+import { ChangeEvent, FormEvent, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
@@ -12,41 +12,51 @@ import { GeneratingOverlay } from '@/components/setup/GeneratingOverlay'
 import type { CourseDepth, CourseMode, LearningControlMode } from '@/types'
 
 type GenerateCourseResponse = {
-  courseId?: string
-  firstTopicId?: string
-  redirectTo?: string
+  jobId?: string
   error?: string
   code?: string
 }
 
-export function TopicInput() {
+interface TopicInputProps {
+  initialJobId?: string | null
+}
+
+export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const router = useRouter()
   const { status } = useSession()
   const [mode, setMode] = useState<CourseMode>('ai_teacher')
   const [learningControl, setLearningControl] = useState<LearningControlMode>('balanced')
   const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
   const [description, setDescription] = useState('')
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [isGenerating, setIsGenerating] = useState(initialJobId !== null)
+  const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId)
+  const [generationComplete, setGenerationComplete] = useState(false)
   const [sourceFiles, setSourceFiles] = useState<FileList | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [topicUnsuitable, setTopicUnsuitable] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
-
-  useEffect(() => {
-    if (!isGenerating) return
-    const timer = window.setInterval(() => {
-      setProgress((current) => Math.min(92, current + 6))
-    }, 600)
-    return () => window.clearInterval(timer)
-  }, [isGenerating])
+  const needsSource = mode === 'source_grounded' && (!sourceFiles || sourceFiles.length === 0)
+  const cannotGenerate = isGenerating || description.trim().length < 10 || needsSource
 
   function updateSources(event: ChangeEvent<HTMLInputElement>) {
     setSourceFiles(event.target.files)
+    setError(null)
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  function handleCancel() {
+    setActiveJobId(null)
+    setIsGenerating(false)
+    window.history.replaceState(null, '', '/setup')
+  }
+
+  async function handleRetry() {
+    setActiveJobId(null)
+    setIsGenerating(false)
+    window.history.replaceState(null, '', '/setup')
+    await startGeneration()
+  }
+
+  async function startGeneration() {
     if (description.trim().length < 10) return
 
     setError(null)
@@ -58,7 +68,7 @@ export function TopicInput() {
       return
     }
 
-    setProgress(10)
+    setGenerationComplete(false)
     setIsGenerating(true)
 
     try {
@@ -83,24 +93,29 @@ export function TopicInput() {
       if (!response.ok) {
         if (data.code === 'TOPIC_UNSUITABLE') {
           setTopicUnsuitable(true)
-          setProgress(0)
           setIsGenerating(false)
           return
         }
         throw new Error(data.error ?? 'Course generation failed.')
       }
 
-      if (!data.courseId && !data.redirectTo) {
-        throw new Error('Course was generated but no workspace route was returned.')
+      if (!data.jobId) {
+        throw new Error('Course was generated but no job ID was returned.')
       }
 
-      setProgress(100)
-      router.push(data.redirectTo ?? `/course/${data.courseId}`)
+      window.history.replaceState(null, '', `/setup?job=${data.jobId}`)
+      setActiveJobId(data.jobId)
+      setIsGenerating(true)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Course generation failed.')
-      setProgress(0)
+      setGenerationComplete(false)
       setIsGenerating(false)
     }
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await startGeneration()
   }
 
   return (
@@ -121,25 +136,59 @@ export function TopicInput() {
         {mode === 'ai_teacher' ? <HallucinationWarning /> : null}
         {mode === 'source_grounded' ? (
           <div className="field">
-            <label htmlFor="sources">Sources</label>
-            <input
-              id="sources"
-              multiple
-              type="file"
-              accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json,text/csv"
-              onChange={updateSources}
-            />
-            <div className="field-note">Upload text, markdown, JSON, or CSV files. The AI will build the course from your material.</div>
+            <label>Sources</label>
+            <label htmlFor="sources" className="custom-file-upload">
+              <input
+                id="sources"
+                className="hidden-file-input"
+                multiple
+                required
+                type="file"
+                accept=".txt,.md,.markdown,.json,.csv,.pdf,.docx,.pptx,.xlsx,.html,.epub,text/plain,text/markdown,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={updateSources}
+              />
+              <div className="upload-icon-wrapper">
+                <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5h10.5a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0017.25 4.5H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25z" />
+                </svg>
+              </div>
+              <div className="upload-text">
+                {sourceFiles?.length ? (
+                  <strong>{sourceFiles.length} file{sourceFiles.length === 1 ? '' : 's'} selected</strong>
+                ) : (
+                  <strong>Choose files to upload</strong>
+                )}
+                <span>or drag & drop them here</span>
+              </div>
+            </label>
+            {sourceFiles && sourceFiles.length > 0 && (
+              <div className="file-pill-list">
+                {Array.from(sourceFiles).map((file, idx) => (
+                  <span key={idx} className="file-pill">
+                    {file.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="field-note">
+              Upload text, Markdown, PDF, Word, PowerPoint, Excel, or HTML files. The AI will build the course from your material.
+            </div>
           </div>
         ) : null}
         <LearningControlSelector value={learningControl} onChange={setLearningControl} />
         <CourseDepthSelector value={courseDepth} onChange={setCourseDepth} />
-        <button className="button" type="submit" disabled={isGenerating || description.trim().length < 10}>
+        <button className="button" type="submit" disabled={cannotGenerate}>
           {isGenerating ? 'Building course...' : 'Build my course'}
         </button>
       </form>
 
-      {isGenerating ? <GeneratingOverlay progress={progress} /> : null}
+      {isGenerating && activeJobId ? (
+        <GeneratingOverlay
+          jobId={activeJobId}
+          onCancel={handleCancel}
+          onRetry={handleRetry}
+        />
+      ) : null}
 
       {topicUnsuitable ? (
         <div className="result-banner unsuitable-banner">

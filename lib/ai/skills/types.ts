@@ -22,6 +22,7 @@ export type CurriculumSkillInput = {
   learningControl: LearningControlMode
   courseDepth: CourseDepth
   sourceText?: string
+  curriculumResearchBrief?: string
 }
 
 export type ScopedChatSkillInput = {

@@ -13,6 +13,10 @@ type GeminiGenerateInput = {
   model?: string
   purpose?: 'primary' | 'agent'
   responseMimeType?: 'application/json' | 'text/plain'
+  responseSchema?: {
+    name: string
+    schema: Record<string, unknown>
+  }
 }
 
 type GeminiResponse = {
@@ -34,9 +38,10 @@ export async function generateWithGemini({
   model,
   purpose,
   responseMimeType = 'application/json',
+  responseSchema,
 }: GeminiGenerateInput): Promise<string> {
   if (shouldUseOpenAI()) {
-    return generateWithOpenAI({ system, user, model, purpose, responseMimeType })
+    return generateWithOpenAI({ system, user, model, purpose, responseMimeType, responseSchema })
   }
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY

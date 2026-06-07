@@ -1,13 +1,25 @@
-// Compute x/y positions for graph nodes using a longest-path layering algorithm.
-// Nodes with no incoming edges start at layer 0.
-// Each subsequent layer is separated by COL_W px; nodes within a layer are
-// sorted by branch then position and separated by ROW_H px.
+// Branch-lane layout engine.
+//
+// Each branch is assigned a horizontal swim lane (a y-band across the full canvas).
+// Within each lane, nodes are placed left-to-right by their DAG layer (topological
+// distance from the nearest source). Multiple nodes in the same lane+layer are
+// stacked vertically within that lane.
+//
+// Effect:
+//   - Concepts from the same branch cluster together in a band
+//   - Cross-branch prerequisite edges are diagonal, not horizontal
+//   - The result looks like a knowledge network, not a linked list
+//
+// Compare to the old "one pool of columns" approach where every node shared the
+// same column x regardless of branch — that always produced a chain appearance.
 
-const COL_W = 282   // horizontal gap between layers (columns)
-const ROW_H = 126   // vertical gap between nodes in the same column
-const START_X = 60
-const START_Y = 60
-const NODE_W = 216  // default node card width
+const COL_W     = 300   // horizontal pitch between DAG layers (px)
+const SLOT_H    = 112   // vertical space per node slot inside a lane
+const LANE_VPAD = 44    // top + bottom padding inside each lane
+const LANE_GAP  = 32    // gap between adjacent swim lanes
+const START_X   = 80
+const START_Y   = 60
+export const NODE_W = 196   // node card width
 
 interface RawNode {
   id: string
@@ -26,50 +38,55 @@ interface NodePosition {
   w: number
 }
 
-/** Assign a "layer" (column index) to each node via Kahn's topological sort.
- *  Each node's layer = max(layer of predecessors) + 1.
- *  Cycles are handled gracefully — cyclic nodes get layer 0. */
+export interface GraphRegion {
+  id: string        // branch_id (raw)
+  label: string     // filled in by transform.ts with the real branch title
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+// ── Topological layer assignment ─────────────────────────────────────────────
+// Each node's layer = longest path from any source node to it.
+// Cycles are handled gracefully — cyclic nodes land at layer 0.
 function assignLayers(nodes: RawNode[], edges: RawEdge[]): Map<string, number> {
   const inDegree = new Map<string, number>()
-  const succ = new Map<string, string[]>()   // forward adjacency
-  const bestPred = new Map<string, number>() // id → max layer of known predecessors
+  const succ     = new Map<string, string[]>()
+  const bestPred = new Map<string, number>()
 
   for (const n of nodes) {
     inDegree.set(n.id, 0)
     succ.set(n.id, [])
   }
-
   for (const e of edges) {
     if (!succ.has(e.from) || !succ.has(e.to)) continue
     succ.get(e.from)!.push(e.to)
     inDegree.set(e.to, (inDegree.get(e.to) ?? 0) + 1)
   }
 
-  // Kahn's BFS
   const queue: string[] = []
   for (const [id, deg] of inDegree) {
     if (deg === 0) queue.push(id)
   }
 
   const layer = new Map<string, number>()
-
   while (queue.length > 0) {
     const id = queue.shift()!
     const myLayer = bestPred.get(id) ?? 0
     layer.set(id, myLayer)
-
     for (const next of succ.get(id) ?? []) {
       const candidate = myLayer + 1
       if (!bestPred.has(next) || bestPred.get(next)! < candidate) {
         bestPred.set(next, candidate)
       }
-      const remaining = (inDegree.get(next) ?? 1) - 1
-      inDegree.set(next, remaining)
-      if (remaining === 0) queue.push(next)
+      const rem = (inDegree.get(next) ?? 1) - 1
+      inDegree.set(next, rem)
+      if (rem === 0) queue.push(next)
     }
   }
 
-  // Nodes not reached (isolated / in cycles) → layer 0
+  // Nodes not reached (isolated or in cycles) → layer 0
   for (const n of nodes) {
     if (!layer.has(n.id)) layer.set(n.id, 0)
   }
@@ -77,7 +94,7 @@ function assignLayers(nodes: RawNode[], edges: RawEdge[]): Map<string, number> {
   return layer
 }
 
-/** Compute x/y/w for every node and return canvas dimensions. */
+// ── Main layout ───────────────────────────────────────────────────────────────
 export function computeLayout(
   nodes: RawNode[],
   edges: RawEdge[],
@@ -85,41 +102,111 @@ export function computeLayout(
   positions: Map<string, NodePosition>
   canvasW: number
   canvasH: number
+  regions: GraphRegion[]
 } {
+  if (!nodes.length) {
+    return { positions: new Map(), canvasW: 1200, canvasH: 800, regions: [] }
+  }
+
   const layers = assignLayers(nodes, edges)
 
-  // Group nodes by layer
-  const byLayer = new Map<number, RawNode[]>()
+  // ── Determine branch order ──────────────────────────────────────────────
+  // Branches appear in the order they first show up by position (study order).
+  const branchOrder: string[] = []
+  const seenBranches = new Set<string>()
+  const byPosition = [...nodes].sort((a, b) => a.position - b.position)
+  for (const n of byPosition) {
+    if (!seenBranches.has(n.branch_id)) {
+      branchOrder.push(n.branch_id)
+      seenBranches.add(n.branch_id)
+    }
+  }
+
+  // ── Group nodes by branch → layer, sorted by position within each layer ──
+  const laneLayerNodes = new Map<string, Map<number, RawNode[]>>()
+  for (const bid of branchOrder) laneLayerNodes.set(bid, new Map())
   for (const n of nodes) {
     const l = layers.get(n.id) ?? 0
-    if (!byLayer.has(l)) byLayer.set(l, [])
-    byLayer.get(l)!.push(n)
+    const m = laneLayerNodes.get(n.branch_id)!
+    if (!m.has(l)) m.set(l, [])
+    m.get(l)!.push(n)
+  }
+  for (const m of laneLayerNodes.values()) {
+    for (const arr of m.values()) arr.sort((a, b) => a.position - b.position)
   }
 
-  const positions = new Map<string, NodePosition>()
-  let maxLayer = 0
-  let maxColSize = 0
+  // ── Row cap: how many nodes stack vertically before wrapping into a new
+  //    column. Derived from the largest single layer so dense lanes wrap into
+  //    a roughly square grid instead of one endless vertical column. ──
+  let maxLayerNodes = 1
+  for (const m of laneLayerNodes.values()) {
+    for (const arr of m.values()) maxLayerNodes = Math.max(maxLayerNodes, arr.length)
+  }
+  const ROW_CAP = Math.min(6, Math.max(3, Math.ceil(Math.sqrt(maxLayerNodes))))
 
-  for (const [l, group] of byLayer) {
-    // Within each column: sort by branch then position for visual grouping
-    group.sort((a, b) =>
-      a.branch_id.localeCompare(b.branch_id) || a.position - b.position,
-    )
+  // ── First pass: assign each node a (col, row) within its lane ──────────
+  // For each layer (left→right), nodes wrap top-to-bottom into ROW_CAP rows,
+  // spilling into additional sub-columns. The lane's column cursor advances
+  // past each layer's block so deeper layers sit further right.
+  const gridPos = new Map<string, { col: number; row: number }>()
+  const laneCols = new Map<string, number>()
+  const laneRows = new Map<string, number>()
 
-    group.forEach((n, i) => {
-      positions.set(n.id, {
-        x: START_X + l * COL_W,
-        y: START_Y + i * ROW_H,
-        w: NODE_W,
+  for (const bid of branchOrder) {
+    const m = laneLayerNodes.get(bid)!
+    const sortedLayers = [...m.keys()].sort((a, b) => a - b)
+    let colCursor = 0
+    let maxRowsUsed = 1
+    for (const l of sortedLayers) {
+      const arr = m.get(l)!
+      arr.forEach((n, i) => {
+        const subCol = Math.floor(i / ROW_CAP)
+        const row = i % ROW_CAP
+        gridPos.set(n.id, { col: colCursor + subCol, row })
+        maxRowsUsed = Math.max(maxRowsUsed, row + 1)
       })
-    })
-
-    if (l > maxLayer) maxLayer = l
-    if (group.length > maxColSize) maxColSize = group.length
+      colCursor += Math.ceil(arr.length / ROW_CAP)
+    }
+    laneCols.set(bid, Math.max(1, colCursor))
+    laneRows.set(bid, maxRowsUsed)
   }
 
-  const canvasW = Math.max(1900, START_X + (maxLayer + 1) * COL_W + 260)
-  const canvasH = Math.max(980, START_Y + maxColSize * ROW_H + 100)
+  // ── Assign y offsets to lanes (height driven by rows used) ─────────────
+  const laneHeight = (bid: string) =>
+    (laneRows.get(bid) ?? 1) * SLOT_H + 2 * LANE_VPAD
+  const laneY = new Map<string, number>()
+  let currentY = START_Y
+  for (const bid of branchOrder) {
+    laneY.set(bid, currentY)
+    currentY += laneHeight(bid) + LANE_GAP
+  }
 
-  return { positions, canvasW, canvasH }
+  // ── Second pass: convert (col, row) → pixel x/y ───────────────────────
+  const positions = new Map<string, NodePosition>()
+  for (const n of nodes) {
+    const g = gridPos.get(n.id) ?? { col: 0, row: 0 }
+    const baseY = laneY.get(n.branch_id) ?? START_Y
+    positions.set(n.id, {
+      x: START_X + g.col * COL_W,
+      y: baseY + LANE_VPAD + g.row * SLOT_H,
+      w: NODE_W,
+    })
+  }
+
+  // ── Canvas dimensions ──────────────────────────────────────────────────
+  const maxCols = Math.max(1, ...laneCols.values())
+  const canvasW = Math.max(1600, START_X + maxCols * COL_W + 200)
+  const canvasH = Math.max(900, currentY + 60)
+
+  // ── Region bands (one per branch, spanning full canvas width) ─────────
+  const regions: GraphRegion[] = branchOrder.map((bid) => ({
+    id: bid,
+    label: bid,
+    x: 16,
+    y: (laneY.get(bid) ?? 0) - 10,
+    w: canvasW - 32,
+    h: laneHeight(bid) + 20,
+  }))
+
+  return { positions, canvasW, canvasH, regions }
 }

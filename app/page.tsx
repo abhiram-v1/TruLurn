@@ -18,10 +18,64 @@ type CourseRow = {
   _id: unknown
   title?: string
   topic?: string
+  goals?: string
   status?: string
   branch_count?: number
   topic_count?: number
   created_at?: Date
+}
+
+function isRawPrompt(value?: string | null) {
+  if (!value) return false
+  const clean = value.trim()
+  return clean.length > 90 || clean.split(/\s+/).length > 12
+}
+
+function titleFromPrompt(value?: string | null) {
+  const clean = value
+    ?.replace(/^i\s+want\s+to\s+learn\s+/i, '')
+    .replace(/^learn\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim() ?? ''
+  const sentence = clean.split(/[.!?]/)[0]?.trim() || clean
+  const fromMatch = sentence.match(/^(.+?)\s+from\s+(first principles|scratch|basics|fundamentals)\b/i)
+
+  if (fromMatch) {
+    const subject = fromMatch[1].replace(/\b(the|a|an)\b/gi, '').trim()
+    const qualifier = fromMatch[2]
+      .toLowerCase()
+      .replace(/\b\w/g, (char) => char.toUpperCase())
+    return `${subject} from ${qualifier}`.replace(/\s+/g, ' ').trim()
+  }
+
+  return sentence.split(/\s+/).slice(0, 6).join(' ').replace(/[,;:]$/, '').trim()
+}
+
+function courseDisplayTitle(course?: CourseRow | null) {
+  if (!course) return 'Generated curriculum'
+  const generatedTitle = course.title?.trim()
+  const legacyTopic = course.topic?.trim()
+
+  if (legacyTopic && !isRawPrompt(legacyTopic)) return legacyTopic
+  if (generatedTitle && !isRawPrompt(generatedTitle)) return generatedTitle
+  const derivedTitle = titleFromPrompt(course.goals ?? legacyTopic ?? generatedTitle)
+  if (derivedTitle) return derivedTitle
+  return 'Generated curriculum'
+}
+
+function courseMeta(course: CourseRow, branchCount?: number) {
+  const title = courseDisplayTitle(course)
+  const generatedTitle = course.title?.trim()
+  const parts: string[] = []
+
+  if (generatedTitle && generatedTitle !== title && !isRawPrompt(generatedTitle)) {
+    parts.push(generatedTitle)
+  }
+  if (branchCount !== undefined) {
+    parts.push(`${branchCount} branches`)
+  }
+
+  return parts.length ? parts.join(' / ') : 'Course workspace'
 }
 
 export default async function HomePage() {
@@ -82,14 +136,15 @@ export default async function HomePage() {
             const courseId = String(course._id)
             const isActive = courseId === activeCourseId
             const branchCount = isActive ? branches.length : course.branch_count
+            const title = courseDisplayTitle(course)
 
             return (
               <HomeCourseRow
                 courseId={courseId}
                 key={courseId}
-                meta={`${course.title ?? 'Generated curriculum'}${branchCount !== undefined ? ` / ${branchCount} branches` : ''}`}
+                meta={courseMeta(course, branchCount)}
                 status={course.status === 'ready' ? 'active' : 'partial'}
-                title={course.topic ?? course.title ?? 'Untitled course'}
+                title={title}
               />
             )
           })}
@@ -130,7 +185,7 @@ export default async function HomePage() {
             <span className="eyebrow">{activeCourse ? 'Continue' : 'Start'}</span>
             <p>
               {activeCourse && activeTopic
-                ? `${activeCourse.topic ?? activeCourse.title} / ${activeTopic.title}`
+                ? `${courseDisplayTitle(activeCourse)} / ${activeTopic.title}`
                 : 'Create your first stored course workspace'}
             </p>
           </div>

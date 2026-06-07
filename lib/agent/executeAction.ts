@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { firstTeachableDescendant, isTeachableTopic, nextRecommendedTeachableTopic, previousTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
+import { resolveStyleFromMessage, STYLE_CATALOG } from '@/lib/ai/skills/lessonStyle'
 import type { ActionIntent, UIAction } from '@/types/agent'
 
 type ExecuteActionInput = {
@@ -178,6 +179,25 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
       return {
         content: `Generating a custom page: "${instruction.slice(0, 100)}${instruction.length > 100 ? '...' : ''}"`,
         uiAction: { action: 'generate_custom_page', instruction, targetPageNumber },
+      }
+    }
+
+    case 'change_lesson_style': {
+      const newStyle = await resolveStyleFromMessage(message)
+      if (!newStyle) {
+        return {
+          content: "I couldn't figure out which style you're after. Try describing what you want — for example: \"make lessons more mathematical\", \"use more code examples\", or \"keep it conceptual and practical\".",
+          uiAction: null,
+        }
+      }
+      await db.collection('courses').updateOne(
+        { _id: courseId as any, user_id: input.userId },
+        { $set: { learning_style: newStyle, updated_at: new Date() } },
+      )
+      const styleName = STYLE_CATALOG[newStyle]?.name ?? newStyle
+      return {
+        content: `Done — lessons from here on will use the **${styleName}** style. Pages already generated won't change, but every new page will follow the updated approach.`,
+        uiAction: null,
       }
     }
 

@@ -18,6 +18,9 @@ export async function POST(
     if (!answer.trim()) {
       return NextResponse.json({ error: 'Write an answer before continuing.' }, { status: 400 })
     }
+    if (answer.length > 10000) {
+      return NextResponse.json({ error: 'Answer is too long (max 10,000 characters).' }, { status: 400 })
+    }
 
     const db = await getDb()
     const userId = await getRequiredUserId()

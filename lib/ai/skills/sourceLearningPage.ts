@@ -14,7 +14,15 @@ If the source text is insufficient, note it in the metadata summary field.
 MATH & FORMATTING RULES — follow these exactly:
 - Write lesson content as clean Markdown.
 - Use $...$ for ALL inline math: $f(x)$, $\\lim_{x \\to c}$, $\\frac{a}{b}$
-- Use $$...$$ on its own line for display/block equations.
+- Use $$...$$ only as standalone display-math fences.
+- A display equation MUST be formatted exactly like:
+  $$
+  \\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
+  $$
+- Never put prose on the same line as $$.
+- Never place two display-math fences on the same line.
+- Never write patterns like "$$ then $$", "$$ if", "$$ where", "$$ Thus", or "$$ Then".
+- Any \\begin{bmatrix}, \\frac, \\mathbb, \\cdot, \\quad, multi-line derivation, or matrix/vector calculation MUST be inside a standalone $$ block.
 - NEVER write math in plain text or backticks.
 - Use **bold** for key terms when first defined.
 - Write in a clear, book-like style. No chat language. No quiz questions.`,
@@ -40,7 +48,10 @@ Return your response in this EXACT format:
 </metadata>
 <content>
 Your full Markdown lesson content here — grounded strictly in the source text above.
-Write LaTeX freely: $\\lim_{x \\to c} f(x)$, $$\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}$$, etc.
+Use inline math as $\\lim_{x \\to c} f(x)$. Use display math only as:
+$$
+\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}
+$$
 </content>`,
   }
 }

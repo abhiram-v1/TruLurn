@@ -105,6 +105,87 @@ export interface RawTopicEdge {
   edge_type?: string | null
 }
 
+// ── Intelligence metric helpers ────────────────────────────────────────────
+
+/** State → own vulnerability contribution (risk seeded before cascade). */
+function ownRisk(state: string): number {
+  if (state === 'unstable') return 80
+  if (state === 'partial')  return 42
+  if (state === 'active')   return 8   // untested — small inherent uncertainty
+  return 0
+}
+
+/** Compute vulnerability risk for every node via forward-BFS cascade.
+ *  A weak/unstable prerequisite propagates its risk to all downstream nodes,
+ *  attenuated by 0.78 per hop so that distant nodes still carry a signal
+ *  but the source of the problem is clearly the most affected. */
+function computeVulnerabilityRisks(
+  ids: string[],
+  stateMap: Map<string, string>,
+  fwdAdj: Map<string, string[]>,
+): Map<string, number> {
+  const risk = new Map<string, number>()
+  for (const id of ids) risk.set(id, ownRisk(stateMap.get(id) ?? 'locked'))
+
+  // Topological BFS — propagate from highest-risk sources outward
+  const queue = [...ids].filter((id) => (risk.get(id) ?? 0) > 0)
+  const visited = new Set<string>()
+  while (queue.length) {
+    const id = queue.shift()!
+    if (visited.has(id)) continue
+    visited.add(id)
+    const myRisk = risk.get(id) ?? 0
+    if (myRisk <= 2) continue
+    for (const next of fwdAdj.get(id) ?? []) {
+      const propagated = myRisk * 0.78
+      if ((risk.get(next) ?? 0) < propagated) {
+        risk.set(next, propagated)
+        queue.push(next)
+      }
+    }
+  }
+
+  return risk
+}
+
+/** For each node, count reachable locked downstream nodes (bottleneck score). */
+function computeDownstreamImpact(
+  ids: string[],
+  stateMap: Map<string, string>,
+  fwdAdj: Map<string, string[]>,
+): Map<string, number> {
+  const impact = new Map<string, number>()
+  for (const id of ids) {
+    let count = 0
+    const seen = new Set<string>()
+    const q = [id]
+    while (q.length) {
+      const cur = q.shift()!
+      for (const next of fwdAdj.get(cur) ?? []) {
+        if (seen.has(next)) continue
+        seen.add(next)
+        if (stateMap.get(next) === 'locked') count++
+        q.push(next)
+      }
+    }
+    impact.set(id, count)
+  }
+  return impact
+}
+
+/** Decay score 0–100. Only meaningful for mastered/functional/partial nodes. */
+function computeDecayScore(state: string, lastActivityAt: Date | null): number {
+  if (!['mastered', 'functional', 'partial'].includes(state)) return 100
+  if (!lastActivityAt) return 30 // never reviewed → stale
+
+  const daysSince = (Date.now() - lastActivityAt.getTime()) / 86_400_000
+
+  // Different decay rates by state: mastered decays slower than partial
+  const halfLifeDays = state === 'mastered' ? 45 : state === 'functional' ? 28 : 14
+  const lambda = Math.LN2 / halfLifeDays
+  return Math.round(Math.max(0, 100 * Math.exp(-lambda * daysSince)))
+}
+
 export function transformToGraphData(params: {
   courseId: string
   courseTitle: string
@@ -112,8 +193,14 @@ export function transformToGraphData(params: {
   branches: RawBranch[]
   topicEdges: RawTopicEdge[]
   activeSingleTopicId?: string | null
+  lastExamByTopic?: Map<string, { completedAt: Date; falseConfidence: boolean }>
+  doubtCountByTopic?: Map<string, number>
 }): GraphData {
-  const { courseId, courseTitle, topics, branches, topicEdges, activeSingleTopicId } = params
+  const {
+    courseId, courseTitle, topics, branches, topicEdges, activeSingleTopicId,
+    lastExamByTopic = new Map(),
+    doubtCountByTopic = new Map(),
+  } = params
 
   // ── Build raw edge list from topicEdges + prerequisites ──
   const edgeSet = new Set<string>() // dedup key: `from::to`
@@ -140,6 +227,27 @@ export function transformToGraphData(params: {
     }
   }
 
+  // ── Build forward adjacency for intelligence metrics ──
+  const stateMap = new Map(topics.map((t) => [String(t._id), String(t.state ?? 'locked')]))
+  const fwdAdj = new Map<string, string[]>()
+  for (const t of topics) fwdAdj.set(String(t._id), [])
+  for (const e of rawEdges) {
+    fwdAdj.get(e.from)?.push(e.to)
+  }
+  // Also include prerequisite relationships from topics themselves
+  for (const t of topics) {
+    const id = String(t._id)
+    for (const prereqId of t.prerequisites ?? []) {
+      const pid = String(prereqId)
+      if (!fwdAdj.has(pid)) fwdAdj.set(pid, [])
+      if (!fwdAdj.get(pid)!.includes(id)) fwdAdj.get(pid)!.push(id)
+    }
+  }
+
+  const topicIds = topics.map((t) => String(t._id))
+  const vulnerabilityRisks = computeVulnerabilityRisks(topicIds, stateMap, fwdAdj)
+  const downstreamImpacts  = computeDownstreamImpact(topicIds, stateMap, fwdAdj)
+
   // ── Compute layout ──
   const layoutNodes = topics.map((t) => ({
     id: String(t._id),
@@ -148,7 +256,7 @@ export function transformToGraphData(params: {
   }))
 
   const layoutEdges = rawEdges.map((e) => ({ from: e.from, to: e.to }))
-  const { positions, canvasW, canvasH } = computeLayout(layoutNodes, layoutEdges)
+  const { positions, canvasW, canvasH, regions: rawRegions } = computeLayout(layoutNodes, layoutEdges)
 
   // Build branch_key → branch title map
   const branchTitleMap = new Map<string, string>()
@@ -164,6 +272,9 @@ export function transformToGraphData(params: {
     const id = String(t._id)
     const pos = positions.get(id) ?? { x: 60, y: 60, w: 178 }
     const branchKey = String(t.branch_id)
+    const state = toGraphState(t.state)
+    const exam = lastExamByTopic.get(id) ?? null
+    const lastActivity = exam?.completedAt ?? (t.created_at instanceof Date ? t.created_at : null)
 
     return {
       id,
@@ -175,12 +286,18 @@ export function transformToGraphData(params: {
       y: pos.y,
       w: pos.w,
       importance: toImportance(Number(t.position ?? 0)),
-      state: toGraphState(t.state),
+      state,
       difficulty: toDifficulty(t.estimated_pages),
       mastery: toMastery(t.understanding_level),
       suggested: Boolean(t.suggested),
       misconception: Boolean(t.misconception),
       current: activeSingleTopicId ? id === activeSingleTopicId : Boolean(t.current),
+      // Intelligence layer
+      vulnerabilityRisk: Math.round(vulnerabilityRisks.get(id) ?? 0),
+      downstreamImpact:  downstreamImpacts.get(id) ?? 0,
+      decayScore:        computeDecayScore(String(t.state), lastActivity),
+      doubtCount:        doubtCountByTopic.get(id) ?? 0,
+      falseConfidence:   exam?.falseConfidence ?? false,
     }
   })
 
@@ -217,5 +334,11 @@ export function transformToGraphData(params: {
     ...counts,
   }
 
-  return { course, branches: graphBranches, nodes, edges, canvasW, canvasH }
+  // Resolve region labels — replace raw branch_id with the real branch title
+  const regions = rawRegions.map((r) => ({
+    ...r,
+    label: branchTitleMap.get(r.id) ?? r.id,
+  }))
+
+  return { course, branches: graphBranches, nodes, edges, canvasW, canvasH, regions }
 }

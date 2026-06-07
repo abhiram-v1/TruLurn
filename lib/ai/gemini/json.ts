@@ -1,9 +1,14 @@
 export function parseGeminiJson<T>(text: string): T {
   const trimmed = text.trim()
 
-  // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/)
-  const source = fenced?.[1] ?? trimmed
+  // Only strip code fences when the ENTIRE response is wrapped in them (starts with ```).
+  // Do NOT apply when the response is JSON that contains code blocks inside string values —
+  // the greedy regex would incorrectly extract the inner code instead of the outer JSON.
+  let source = trimmed
+  if (trimmed.startsWith('```')) {
+    const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```\s*$/)
+    if (fenced?.[1]) source = fenced[1].trim()
+  }
 
   const firstBrace   = source.indexOf('{')
   const firstBracket = source.indexOf('[')

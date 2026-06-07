@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server'
-import { generateAndPersistCourse } from '@/lib/course-generation/generateCourse'
+import { getDb } from '@/lib/db'
 import { readCourseGenerationInput, validateCourseGenerationInput } from '@/lib/course-generation/input'
-import { validateTopicSuitability } from '@/lib/course-generation/topicValidator'
 import { getRequiredUserId } from '@/lib/server/currentUser'
-
-const UNSUITABLE_MESSAGE =
-  'This topic is not suitable for structured course creation. Please enter a subject that can be taught through multiple lessons, such as programming, mathematics, design, business, science, languages, or other professional skills.'
+import crypto from 'crypto'
 
 export async function POST(request: Request) {
   try {
+    const userId = await getRequiredUserId()
     const input = await readCourseGenerationInput(request)
     const validationError = validateCourseGenerationInput(input)
 
@@ -16,23 +14,35 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
-    // Skip AI suitability check for source-grounded mode — the uploaded content defines scope.
-    if (input.mode !== 'source_grounded') {
-      const suitability = await validateTopicSuitability(input.goals)
-      if (!suitability.valid) {
-        return NextResponse.json(
-          { error: UNSUITABLE_MESSAGE, code: 'TOPIC_UNSUITABLE' },
-          { status: 422 }
-        )
-      }
+    const db = await getDb()
+    const jobId = crypto.randomUUID()
+
+    const jobDoc = {
+      _id: jobId,
+      user_id: userId,
+      status: 'queued',
+      stage: 'validating_input',
+      stage_label: 'Validating Input',
+      message: 'Reviewing course topic and goals...',
+      completed_stages: [],
+      course_id: null,
+      error: null,
+      input: {
+        goals: input.goals,
+        mode: input.mode,
+        learningControl: input.learningControl,
+        courseDepth: input.courseDepth,
+        sourceText: input.sourceText || null,
+        sourceLimitations: input.sourceLimitations || [],
+      },
+      created_at: new Date(),
+      updated_at: new Date(),
     }
 
-    const userId = await getRequiredUserId()
-    const generated = await generateAndPersistCourse({ ...input, userId })
+    await db.collection('generationJobs').insertOne(jobDoc as any)
 
     return NextResponse.json({
-      ...generated,
-      redirectTo: `/course/${generated.courseId}`,
+      jobId,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown course generation error'

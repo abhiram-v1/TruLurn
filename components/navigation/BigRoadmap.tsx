@@ -222,10 +222,14 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
           const isHovered = hoveredIndex === i
           const progressPct = branch.topic_count > 0 ? (branch.mastered_count / branch.topic_count) * 100 : 0
 
+          const dest = branch.active_topic_id
+            ? `/learn/${courseId}/${encodeURIComponent(branch.active_topic_id)}`
+            : `/course/${courseId}`
+
           return (
             <Link
               key={branch.id}
-              href={`/learn/${courseId}/${branch.active_topic_id}`}
+              href={dest}
               data-state={branch.state}
               className={`roadmap-card ${isLeft ? 'card-left' : 'card-right'} ${isVisible ? 'card-visible' : ''} ${isHovered ? 'card-hovered' : ''}`}
               style={{

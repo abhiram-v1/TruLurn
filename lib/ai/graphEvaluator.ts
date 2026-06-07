@@ -101,7 +101,7 @@ Which topic ID should the student study next?`,
     : `You're building understanding of ${event.topicTitle}. Review the gaps and try again.`
 
   try {
-    const raw = await generateWithGemini({ ...prompt, model: 'gemini-2.0-flash-lite', purpose: 'agent' })
+    const raw = await generateWithGemini({ ...prompt, model: 'gemini-2.0-flash-lite', purpose: 'agent', responseMimeType: 'text/plain' })
     const parsed = parseGeminiJson<{ nextTopicId?: string | null; summary?: string }>(raw)
 
     if (parsed.nextTopicId && courseTopics.some((t) => t.id === parsed.nextTopicId)) {

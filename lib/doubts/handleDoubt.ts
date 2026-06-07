@@ -3,7 +3,7 @@ import type { Db } from 'mongodb'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
 import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
-import { buildDoubtPrompt } from '@/lib/doubts/context'
+import { buildDoubtPrompt, type TopicStateSnapshot } from '@/lib/doubts/context'
 import { extractForwardRef, storeForwardRef } from '@/lib/agent/forwardRefs'
 import {
   computeGlobalPagePosition,
@@ -174,6 +174,45 @@ async function fetchExplicitPageReferences({
   return blocks.join('\n\n')
 }
 
+// Cheap always-on fetch — gives the agent live topic state, mastery level,
+// and last quiz result without waiting for keyword-triggered workspace context.
+async function fetchTopicState(
+  db: Db,
+  courseId: string,
+  topicId: string,
+  userId: string,
+): Promise<TopicStateSnapshot> {
+  const [topic, lastSession] = await Promise.all([
+    db.collection('topics').findOne(
+      { _id: topicId as any, course_id: courseId },
+      { projection: { state: 1, understanding_level: 1, needs_review: 1, review_gaps: 1, misconception: 1 } },
+    ),
+    db.collection('examSessions').findOne(
+      { course_id: courseId, topic_id: topicId, user_id: userId, status: 'completed' },
+      { sort: { completed_at: -1 }, projection: { summary: 1 } },
+    ),
+  ])
+
+  const examSummary = lastSession?.summary ?? null
+
+  return {
+    state: topic?.state ?? null,
+    understanding_level: typeof topic?.understanding_level === 'number' ? topic.understanding_level : null,
+    needs_review: topic?.needs_review ?? null,
+    review_gaps: Array.isArray(topic?.review_gaps) ? topic.review_gaps : null,
+    misconception: topic?.misconception ?? null,
+    lastExam: examSummary
+      ? {
+          passed: Boolean(examSummary.passed),
+          overall_level: typeof examSummary.overall_level === 'number' ? examSummary.overall_level : undefined,
+          strong_concepts: Array.isArray(examSummary.strong_concepts) ? examSummary.strong_concepts : undefined,
+          review_concepts: Array.isArray(examSummary.review_concepts) ? examSummary.review_concepts : undefined,
+          student_summary: typeof examSummary.student_summary === 'string' ? examSummary.student_summary : undefined,
+        }
+      : null,
+  }
+}
+
 async function fetchRecentHistory(db: Db, courseId: string, userId: string) {
   const messages = await db.collection('doubtMessages')
     .find({ course_id: courseId, user_id: userId })
@@ -212,6 +251,7 @@ async function generateAnswer({
   currentPage,
   recentHistory,
   conceptMap,
+  topicState,
   relevantPages,
   memory,
 }: {
@@ -226,6 +266,7 @@ async function generateAnswer({
   currentPage: Awaited<ReturnType<typeof fetchCurrentPosition>>['promptPage']
   recentHistory: Awaited<ReturnType<typeof fetchRecentHistory>>
   conceptMap: string[]
+  topicState: TopicStateSnapshot
   relevantPages: RelevantPage[]
   memory: CourseMemoryContext
 }) {
@@ -237,6 +278,7 @@ async function generateAnswer({
     currentPage,
     recentHistory,
     conceptMap,
+    topicState,
     relevantPages,
     relevantDoubts: memory.doubtMessages,
     relevantSources: memory.sourceChunks,
@@ -273,6 +315,7 @@ async function generateAnswer({
       currentPage,
       recentHistory,
       conceptMap,
+      topicState,
       relevantPages: retryPages,
       memory,
     })
@@ -333,12 +376,13 @@ export async function handleDoubt(input: HandleDoubtInput) {
   // Saves 3 DB reads (topics + topicSummaries + pageSummaries) per GK question.
   const needsConceptMap = input.preClassifiedType !== 'general_knowledge'
 
-  const [position, recentHistory, conceptMap] = await Promise.all([
+  const [position, recentHistory, conceptMap, topicState] = await Promise.all([
     fetchCurrentPosition(input.db, input.courseId, input.topicId, input.pageNumber, input.userId),
     fetchRecentHistory(input.db, input.courseId, input.userId),
     needsConceptMap
       ? getConceptMap(input.db, input.courseId)
       : Promise.resolve([] as string[]),
+    fetchTopicState(input.db, input.courseId, input.topicId, input.userId),
   ])
 
   // Use pre-classified type from the combined intent classifier if available —
@@ -414,6 +458,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
     currentPage: position.promptPage,
     recentHistory,
     conceptMap,
+    topicState,
     relevantPages,
     memory,
   })

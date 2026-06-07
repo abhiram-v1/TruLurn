@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { DoubtChat } from '@/components/learn/DoubtChat'
 import { LessonPage } from '@/components/learn/LessonPage'
@@ -173,15 +173,48 @@ export function LearnExperience({
     setLessonPageIndex(0)
   }, [page.id])
 
-  // Pre-generation is intentionally NOT done here as a background useEffect.
-  // Structured pages have exactly one screen (isLastScreen=true immediately), so a
-  // mount-time effect would race with MissingPageGenerator and create duplicate page
-  // documents in MongoDB — causing the wrong content to appear in the next page slot.
-  //
-  // Instead: next-page generation is driven on demand by MissingPageGenerator when the
-  // student explicitly navigates to a page that doesn't exist yet. See:
-  //   app/learn/[courseId]/[topicId]/page.tsx — renders MissingPageGenerator
-  //   components/learn/MissingPageGenerator.tsx — generates + refreshes
+  // Rolling batch prefetch: when the student reaches page 2 or 3 within the current
+  // batch, silently prefetch the next batch in the background. This ensures pages 5-8
+  // are ready before the student finishes pages 1-4, and so on for larger topics.
+  // Uses a ref to avoid double-firing the same batch on page-2 AND page-3 triggers.
+  const prefetchedBatchStartRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    const BATCH_SIZE = 4
+    const currentPage = page.page_number
+    // Position within the current batch (1=first, 2=second, 3=third, 4=last)
+    const batchPosition = ((currentPage - 1) % BATCH_SIZE) + 1
+    if (batchPosition !== 2 && batchPosition !== 3) return
+
+    const currentBatch = Math.ceil(currentPage / BATCH_SIZE)
+    const nextBatchStart = currentBatch * BATCH_SIZE + 1
+    if (nextBatchStart > estimatedPages) return
+    if (prefetchedBatchStartRef.current.has(nextBatchStart)) return
+    prefetchedBatchStartRef.current.add(nextBatchStart)
+
+    const nextBatchEnd = Math.min(nextBatchStart + BATCH_SIZE - 1, estimatedPages, 15)
+    ;(async () => {
+      for (let p = nextBatchStart; p <= nextBatchEnd; p++) {
+        try {
+          const res = await fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ courseId, pageNumber: p }),
+          })
+          if (res.ok) {
+            const data = await res.json()
+            if (data.skipped) break
+          }
+        } catch {
+          break
+        }
+      }
+    })()
+  }, [page.page_number, topic.id, courseId, estimatedPages])
+
+  // Note: mount-time pre-generation is intentionally avoided here to prevent races
+  // with MissingPageGenerator (structured pages have isLastScreen=true immediately,
+  // which would trigger duplicate documents). The initial batch is handled by
+  // MissingPageGenerator after page 1 generates. Rolling prefetch above handles the rest.
 
   return (
     <div className="study-shell">

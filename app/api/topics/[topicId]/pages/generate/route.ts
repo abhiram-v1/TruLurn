@@ -7,6 +7,8 @@ import { buildGenerationPointer, firstTeachableDescendant, isContainerTopic, nex
 import { buildSequenceContextPack } from '@/lib/traccia/sequenceContext'
 import { embedPageById, retrieveCourseMemory } from '@/lib/vector/retrieval'
 import { invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
+import { analyzeLearningArchitecture, validateGeneratedPageAgainstArchitecture } from '@/lib/learning-architecture/analyzePage'
+import { researchLessonConcept } from '@/lib/course-generation/research'
 
 type GeneratePageBody = {
   courseId?: string
@@ -23,6 +25,11 @@ function isBlankGeneratedPage(page: any) {
     : ''
 
   return content.length < 60 && sectionContent.length < 60
+}
+
+function fallbackPageFocus(topic: any, pageNumber: number) {
+  if (pageNumber === 1) return `Introduce ${topic.title}, its role in the course, and the core intuition.`
+  return `Continue ${topic.title} with the next necessary concept slice.`
 }
 
 export async function POST(
@@ -143,6 +150,36 @@ export async function POST(
       previousPages,
       memory,
     })
+    const plannedPages = topic.estimated_pages ?? topic.total_pages_planned ?? 3
+    const focus = customInstruction
+      ? customInstruction
+      : (topic.page_focuses?.[pageNumber - 1]?.focus ?? fallbackPageFocus(topic, pageNumber))
+
+    // If the student failed a quiz on this topic and no manual approach was chosen,
+    // automatically use the approach the exam engine identified as most useful.
+    const effectiveApproach: typeof approach = approach
+      ?? (topic.needs_review && !customInstruction ? topic.review_approach ?? 'explain_again' : undefined)
+
+    // Run architecture analysis and lesson concept search in parallel — both only
+    // need the topic/focus context that is already ready at this point.
+    const [learningArchitecture, lessonResearch] = await Promise.all([
+      analyzeLearningArchitecture({
+        course,
+        topic,
+        pageNumber,
+        plannedPages,
+        focus,
+        previousPages,
+        memory,
+        mapPointer: pointer.text,
+        sequenceContext: sequenceContext.text,
+      }),
+      researchLessonConcept({
+        courseTitle: course.title ?? course.topic ?? '',
+        topicTitle: topic.title ?? '',
+        focus,
+      }),
+    ])
 
     const generated = await generateTopicPage({
       course,
@@ -152,9 +189,18 @@ export async function POST(
       memory,
       mapPointer: pointer.text,
       sequenceContext: sequenceContext.text,
-      approach,
+      learningArchitecture,
+      approach: effectiveApproach,
       customInstruction,
+      lessonResearch: lessonResearch.found ? lessonResearch.context : undefined,
     })
+
+    // Validate page against architecture brief. Mismatches are warnings, not hard errors —
+    // the brief is a teaching guide, not a contract the generator must satisfy perfectly.
+    const architectureWarnings = validateGeneratedPageAgainstArchitecture(generated, learningArchitecture)
+    if (architectureWarnings.length) {
+      console.warn('[pageGen] Architecture validation warnings for topic', params.topicId, ':', architectureWarnings)
+    }
 
     if (!generated.should_generate_page || generated.content_kind === 'skip') {
       const nextTopic = nextRecommendedTeachableTopic(branchTopics as any, String(topic._id))
@@ -168,6 +214,9 @@ export async function POST(
         content_kind: generated.content_kind,
         reason: generated.decision_reason,
         next_topic_id: nextTopic ? String(nextTopic._id) : null,
+        learning_architecture: learningArchitecture,
+        target_understanding: learningArchitecture.target_understanding,
+        retention_hooks: learningArchitecture.retention_hooks,
         created_at: new Date(),
       })
       await db.collection('topics').updateOne(
@@ -209,6 +258,12 @@ export async function POST(
       reused_concepts: generated.reused_concepts,
       reminder_concepts: generated.reminder_concepts,
       example_refs: generated.example_refs,
+      learning_architecture: generated.learning_architecture ?? null,
+      target_understanding: generated.learning_architecture?.target_understanding ?? null,
+      success_criteria: generated.learning_architecture?.success_criteria ?? [],
+      active_processing: generated.learning_architecture?.active_processing ?? null,
+      retention_hooks: generated.learning_architecture?.retention_hooks ?? null,
+      page_sequence_role: generated.learning_architecture?.page_sequence_role ?? null,
       created_at: new Date(),
     })
     // Run both concept-map writes in parallel — independent collections.
@@ -250,6 +305,55 @@ export async function POST(
         example_refs: generated.example_refs,
         created_at: new Date(),
       })
+    }
+    const architectureEvents = [
+      {
+        event_type: 'learning_architecture_created',
+        target_understanding: learningArchitecture.target_understanding,
+        page_sequence_role: learningArchitecture.page_sequence_role,
+        recommended_content_kind: learningArchitecture.recommended_content_kind,
+      },
+      learningArchitecture.prior_knowledge_repair.length
+        ? {
+            event_type: 'prior_knowledge_repair_planned',
+            prior_knowledge_repair: learningArchitecture.prior_knowledge_repair,
+          }
+        : null,
+      learningArchitecture.likely_misconceptions.length
+        ? {
+            event_type: 'misconception_risk_identified',
+            likely_misconceptions: learningArchitecture.likely_misconceptions,
+          }
+        : null,
+      learningArchitecture.retention_hooks.retrieval_prompt
+        ? {
+            event_type: 'retrieval_hook_created',
+            retrieval_prompt: learningArchitecture.retention_hooks.retrieval_prompt,
+            revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
+          }
+        : null,
+      learningArchitecture.retention_hooks.transfer_prompt
+        ? {
+            event_type: 'transfer_hook_created',
+            transfer_prompt: learningArchitecture.retention_hooks.transfer_prompt,
+            revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
+          }
+        : null,
+    ].filter(Boolean)
+
+    if (architectureEvents.length) {
+      await db.collection('learningEvents').insertMany(
+        architectureEvents.map((event: any) => ({
+          _id: crypto.randomUUID() as any,
+          course_id: courseId,
+          topic_id: params.topicId,
+          user_id: userId,
+          page_id: String(pageDocument._id),
+          page_number: generated.page_number,
+          ...event,
+          created_at: new Date(),
+        })),
+      )
     }
 
     embedPageById(db, String(pageDocument._id)).catch((error) => {

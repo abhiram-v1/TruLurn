@@ -90,9 +90,10 @@ export function nextRecommendedTeachableTopic<T extends TopicLike>(
 
   const currentIndex = ordered.findIndex((topic) => idOf(topic) === currentTopicId)
   const afterCurrent = currentIndex >= 0 ? ordered.slice(currentIndex + 1) : ordered
-  return afterCurrent.find((topic) => isAvailableStudyTopic(topic, allowLocked))
-    ?? ordered.find((topic) => isAvailableStudyTopic(topic, allowLocked))
-    ?? null
+  // Only look forward — never wrap back to the start of the course.
+  // If nothing is available after the current topic, return null so the UI
+  // shows "Back to Atlas" instead of incorrectly looping to the first topic.
+  return afterCurrent.find((topic) => isAvailableStudyTopic(topic, allowLocked)) ?? null
 }
 
 export function previousTeachableTopic<T extends TopicLike>(topics: T[], currentTopicId: string) {

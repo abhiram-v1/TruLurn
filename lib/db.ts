@@ -1,4 +1,5 @@
 import { MongoClient } from 'mongodb'
+import { ensureIndexes } from '@/lib/db-indexes'
 
 if (!process.env.MONGODB_URI) {
   throw new Error('Invalid/Missing environment variable: "MONGODB_URI"')
@@ -30,7 +31,14 @@ if (process.env.NODE_ENV === 'development') {
 
 export default clientPromise
 
+let _indexesInitiated = false
+
 export async function getDb(dbName = 'trulurn') {
   const client = await clientPromise
-  return client.db(dbName)
+  const db = client.db(dbName)
+  if (!_indexesInitiated) {
+    _indexesInitiated = true
+    ensureIndexes(db).catch((err) => console.warn('[db] Index initialization failed:', err))
+  }
+  return db
 }

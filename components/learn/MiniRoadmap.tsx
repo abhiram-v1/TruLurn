@@ -130,7 +130,11 @@ export function MiniRoadmap({
 
         {lockedTopicId === topic.id ? (
           <div className="locked-message">
-            Complete {topic.prerequisites[0] ?? 'the prerequisite'} first.
+            Complete{' '}
+            <strong>
+              {topicById.get(topic.prerequisites[0])?.title ?? 'the prerequisite topic'}
+            </strong>{' '}
+            first.
           </div>
         ) : null}
 
@@ -235,7 +239,11 @@ export function MiniRoadmap({
                             </button>
                             {lockedTopicId === topic.id ? (
                               <div className="locked-message">
-                                Complete {topic.prerequisites[0] ?? 'the prerequisite'} first.
+                                Complete{' '}
+                                <strong>
+                                  {topicById.get(topic.prerequisites[0])?.title ?? 'the prerequisite topic'}
+                                </strong>{' '}
+                                first.
                               </div>
                             ) : null}
                           </div>

@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { LearnExperience } from '@/components/learn/LearnExperience'
 import { MissingPageGenerator } from '@/components/learn/MissingPageGenerator'
@@ -54,19 +55,126 @@ export default async function LearnTopicPage({
   if (isContainerTopic(topic)) {
     const descendant = firstTeachableDescendant(branchTopics as any, topicId)
     if (descendant) {
+      // If the container is active but its first leaf is still locked, the map builder
+      // designated a container as the active node instead of a leaf. Auto-repair: activate
+      // the leaf so the student can actually open the lesson.
+      if (String(descendant.state) === 'locked' && String(topic.state) === 'active') {
+        await db.collection('topics').updateOne(
+          { _id: String(descendant._id) as any, course_id: params.courseId },
+          { $set: { state: 'active', updated_at: new Date() } },
+        )
+      }
       redirect(`/learn/${params.courseId}/${encodeURIComponent(String(descendant._id))}`)
     }
   }
 
+  // Compute this early — needed by MissingPageGenerator for initial batch prefetch
+  const estimatedPages = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
+
   if (topic.state === 'locked') {
+    // Auto-repair: if any ancestor container is active, this leaf should also be active.
+    // This happens when the map builder designated a container as the active node at
+    // course creation — the container got activated but its leaf children didn't.
+    // Activate the leaf now and redirect to self so the lesson renders normally.
+    const ancestorIds: string[] = Array.isArray(topic.path_ids)
+      ? topic.path_ids.map(String).filter((id) => id !== topicId)
+      : []
+    if (ancestorIds.length > 0) {
+      const activeAncestor = await db.collection('topics').findOne({
+        _id: { $in: ancestorIds as any[] },
+        course_id: params.courseId,
+        state: 'active',
+      })
+      if (activeAncestor) {
+        await db.collection('topics').updateOne(
+          { _id: topicId as any, course_id: params.courseId },
+          { $set: { state: 'active', updated_at: new Date() } },
+        )
+        redirect(`/learn/${params.courseId}/${encodeURIComponent(topicId)}`)
+      }
+    }
+
+    // ── Guidance: resolve prerequisites and find the nearest topic to start with ──
+    // Fetch the whole course's topic graph (small) so we can name prerequisites and
+    // walk the prerequisite chain back to something the student can actually open.
+    const allTopics = await db.collection('topics')
+      .find({ course_id: params.courseId })
+      .project({ _id: 1, title: 1, state: 1, prerequisites: 1 })
+      .toArray()
+    const topicById = new Map(allTopics.map((t) => [String(t._id), t]))
+
+    // Direct prerequisites of this locked topic, with their titles + states.
+    const directPrereqs = (Array.isArray(topic.prerequisites) ? topic.prerequisites : [])
+      .map((id: string) => topicById.get(String(id)))
+      .filter(Boolean) as Array<{ _id: string; title: string; state: string }>
+
+    // Backward BFS through prerequisites to find the nearest OPENABLE topic
+    // (active, or any non-locked state). This is the concrete "do this first" target.
+    function findNearestOpenable(startId: string): { _id: string; title: string } | null {
+      const queue: string[] = [...((topicById.get(startId)?.prerequisites ?? []).map(String))]
+      const seen = new Set<string>([startId])
+      while (queue.length) {
+        const cur = queue.shift()!
+        if (seen.has(cur)) continue
+        seen.add(cur)
+        const node = topicById.get(cur)
+        if (!node) continue
+        if (String(node.state) !== 'locked') {
+          return { _id: String(node._id), title: String(node.title) }
+        }
+        for (const p of node.prerequisites ?? []) queue.push(String(p))
+      }
+      return null
+    }
+
+    // Best target: a non-locked direct prerequisite, else nearest openable up the chain,
+    // else the course's current active topic as a safe "continue here" fallback.
+    let startHere = directPrereqs.find((p) => String(p.state) !== 'locked') ?? null
+    let startHereResolved = startHere
+      ? { _id: String(startHere._id), title: String(startHere.title) }
+      : findNearestOpenable(topicId)
+    if (!startHereResolved) {
+      const activeTopic = allTopics.find((t) => String(t.state) === 'active')
+      if (activeTopic) startHereResolved = { _id: String(activeTopic._id), title: String(activeTopic.title) }
+    }
+
     return (
       <main className="missing-page-shell">
         <section className="missing-page-panel">
           <p className="eyebrow">Locked topic</p>
           <h1 className="page-heading">{topic.title}</h1>
           <p className="page-subtitle">
-            Complete the prerequisite topic first. TruLurn does not open locked Traccia nodes out of order.
+            This topic builds on earlier material. Finish what it depends on first and it unlocks automatically.
           </p>
+
+          {directPrereqs.length > 0 && (
+            <div className="locked-prereq-list">
+              <span className="locked-prereq-label">Depends on</span>
+              {directPrereqs.map((p) => (
+                <div key={String(p._id)} className={`locked-prereq-item ${String(p.state) !== 'locked' ? 'ready' : 'pending'}`}>
+                  <span className="locked-prereq-dot" />
+                  <span className="locked-prereq-title">{p.title}</span>
+                  <span className="locked-prereq-state">
+                    {String(p.state) === 'locked' ? 'Locked' : String(p.state) === 'active' ? 'In progress' : 'Done'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="locked-actions">
+            {startHereResolved && (
+              <Link
+                className="button"
+                href={`/learn/${params.courseId}/${encodeURIComponent(startHereResolved._id)}`}
+              >
+                Start with: {startHereResolved.title} →
+              </Link>
+            )}
+            <Link className="button-subtle" href={`/course/${params.courseId}`}>
+              Back to Atlas
+            </Link>
+          </div>
         </section>
         <BottomNav courseId={params.courseId} />
       </main>
@@ -111,12 +219,9 @@ export default async function LearnTopicPage({
     return true
   })
 
-  // How many pages the AI planned for this topic (from curriculum generation)
-  const estimatedPages = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
-
   const requestedPage = Math.max(1, Number(searchParams?.page ?? '1'))
 
-  // No pages at all → generate page 1
+  // No pages at all → generate page 1, then batch-prefetch pages 2-4 in background
   if (!pages.length) {
     return (
       <MissingPageGenerator
@@ -124,6 +229,7 @@ export default async function LearnTopicPage({
         topicId={topicId}
         topicTitle={topic.title}
         pageNumber={1}
+        estimatedPages={estimatedPages}
       />
     )
   }

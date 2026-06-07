@@ -12,6 +12,7 @@ type QuizLibraryRow = {
   title: string
   section: string
   status: QuizStatus
+  displayStatus: 'Available' | 'Continue' | 'Review' | 'Completed'
   questionCount: number
   generatedAt: Date | null
   attemptedAt: Date | null
@@ -152,7 +153,7 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     sessionsByTopic.set(topicId, [...(sessionsByTopic.get(topicId) ?? []), session])
   }
 
-  const rows: QuizLibraryRow[] = topics.map((topic) => {
+  const rows = topics.map((topic) => {
     const topicId = String(topic._id)
     const quiz = questionsByTopic.get(topicId)
     const topicAttempts = attemptsByTopic.get(topicId) ?? []
@@ -187,11 +188,25 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     const topicState = String(topic.state ?? 'active')
     const isActiveSession = latestSession?.status === 'active'
 
+    const status: QuizStatus = topicState === 'locked' ? 'locked' : isActiveSession ? 'unfinished' : passed ? 'done' : latestSession?.status === 'completed' || latestAttempt ? 'review' : quiz ? 'unfinished' : 'ready'
+
+    let displayStatus: 'Available' | 'Continue' | 'Review' | 'Completed' | 'Hidden' = 'Hidden'
+    if (status === 'done') {
+      displayStatus = 'Completed'
+    } else if (status === 'review') {
+      displayStatus = 'Review'
+    } else if (status === 'unfinished') {
+      displayStatus = 'Continue'
+    } else if (status === 'ready') {
+      displayStatus = 'Available'
+    }
+
     return {
       topicId,
       title: String(topic.title ?? 'Untitled topic'),
       section: String(topic.section ?? course.title ?? 'Course topic'),
-      status: topicState === 'locked' ? 'locked' : isActiveSession ? 'unfinished' : passed ? 'done' : latestSession?.status === 'completed' || latestAttempt ? 'review' : quiz ? 'unfinished' : 'ready',
+      status,
+      displayStatus,
       questionCount: typeof sessionSummary?.total_questions === 'number' ? sessionSummary.total_questions : quiz?.count ?? 0,
       generatedAt,
       attemptedAt,
@@ -205,9 +220,15 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
     }
   })
 
-  const availableCount = rows.filter((row) => row.status !== 'locked').length
-  const doneCount = rows.filter((row) => row.status === 'done').length
-  const reviewCount = rows.filter((row) => row.status === 'review').length
+  // Filter only 'Available', 'Continue', 'Review', or 'Completed' quizzes.
+  const filteredRows: QuizLibraryRow[] = rows.filter(
+    (row): row is QuizLibraryRow & { displayStatus: 'Available' | 'Continue' | 'Review' | 'Completed' } =>
+      row.displayStatus !== 'Hidden'
+  )
+
+  const availableCount = filteredRows.filter((row) => row.displayStatus === 'Available' || row.displayStatus === 'Continue').length
+  const completedCount = filteredRows.filter((row) => row.displayStatus === 'Completed').length
+  const reviewCount = filteredRows.filter((row) => row.displayStatus === 'Review').length
 
   return (
     <AppFrame
@@ -231,21 +252,22 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
             <span>available</span>
           </div>
           <div>
-            <strong>{doneCount}</strong>
+            <strong>{completedCount}</strong>
             <span>completed</span>
           </div>
           <div>
             <strong>{reviewCount}</strong>
-            <span>needs review</span>
+            <span>review</span>
           </div>
         </section>
 
         <section className="quiz-long-list" aria-label="Course quizzes">
-          {rows.map((row, index) => {
+          {filteredRows.map((row, index) => {
+            const statusClass = row.displayStatus.toLowerCase()
             const content = (
               <>
                 <span className="quiz-list-index">{String(index + 1).padStart(2, '0')}</span>
-                <span className={`quiz-status ${row.status}`}>{statusLabel(row.status)}</span>
+                <span className={`quiz-status ${statusClass}`}>{row.displayStatus}</span>
                 <span className="quiz-row-main">
                   <strong>{row.title}</strong>
                   <span>{statusDescription(row)}</span>
@@ -255,15 +277,11 @@ export default async function CourseQuizzesPage({ params }: { params: { courseId
                   <strong>{scoreLabel(row)}</strong>
                   <span>{row.attempts ? `${row.attempts} attempt${row.attempts === 1 ? '' : 's'}` : 'No attempts'}</span>
                 </span>
-                <span className={`quiz-row-action ${row.status}`}>{actionLabel(row.status)}</span>
+                <span className={`quiz-row-action ${statusClass}`}>{actionLabel(row.status)}</span>
               </>
             )
 
-            return row.status === 'locked' ? (
-              <div className="quiz-long-row locked" key={row.topicId}>
-                {content}
-              </div>
-            ) : (
+            return (
               <Link className="quiz-long-row" href={`/quiz/${encodeURIComponent(row.topicId)}`} key={row.topicId}>
                 {content}
               </Link>

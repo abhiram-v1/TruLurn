@@ -1,10 +1,19 @@
 import type { CurriculumSkillInput, SkillPrompt } from '@/lib/ai/skills/types'
 
 export function curriculumBuilderSkill(input: CurriculumSkillInput): SkillPrompt {
+  const researchRule = input.curriculumResearchBrief?.trim()
+    ? `Research-backed curriculum evidence:
+---
+${input.curriculumResearchBrief}
+---
+
+Use this evidence as calibration for the roadmap. Preserve high-consensus, domain-defining concepts and sequencing patterns. If the evidence says a concept is a missing-risk item, do not skip it unless it is clearly outside the learner's goal. Avoid generic prerequisite padding that reputable curricula do not emphasize for this subject.`
+    : 'No external curriculum research brief was supplied.'
+
   const sourceRule =
     input.mode === 'source_grounded'
       ? 'Use only the supplied source text. If the source does not contain enough information, say what is missing in the JSON.'
-      : 'Use general model knowledge. Be accurate and do not over-promise.'
+      : 'Use the research-backed curriculum evidence plus general model knowledge. Be accurate and do not over-promise.'
   const depthRule = {
     low: `Course depth: Low.
 - Optimize for overview-level understanding and fast completion.
@@ -68,9 +77,11 @@ Source text, if any:
 ${input.sourceText ?? 'No source text supplied.'}
 ---
 
+${input.mode === 'source_grounded' ? 'External web research is intentionally not used for source-grounded mode.' : researchRule}
+
 Return this exact JSON shape:
 {
-  "title": "course title",
+  "title": "short course name, 3-7 words",
   "complexity": "narrow|standard|deep|expert",
   "structure_reasoning": "why this roadmap size and depth fits the goal",
   "branches": [
@@ -114,6 +125,9 @@ Return this exact JSON shape:
 }
 
 Rules:
+- The title must be a concise course name, not the user's full request.
+- Good titles: "Deep Learning from First Principles", "Machine Learning Foundations", "Practical Database Systems".
+- Bad titles: long sentences, learning goals, instructions, or anything longer than 60 characters unless absolutely necessary.
 - Determine the number of branches, sections, and topics from the subject difficulty, target depth, and source volume.
 - Use enough topics to avoid shallow coverage, but do not split tiny ideas into artificial fragments.
 - A narrow practical topic may have fewer branches. A deep academic or technical topic needs more breadth and depth.
@@ -128,6 +142,14 @@ Rules:
 - For Guided, critical prerequisites may use the high end of the range.
 - For Balanced, prefer the middle/lower range unless the topic is conceptually dense.
 - For Open, prefer 1-2 pages for basics and let later agent requests add depth on demand.
-- Do not include user mastery or progress claims. This is the fixed subject roadmap only.`,
+- Do not include user mastery or progress claims. This is the fixed subject roadmap only.
+
+PREREQUISITE DESIGN — design prerequisites as a knowledge graph, not a chain:
+- A prerequisite means: the student genuinely cannot understand this topic without the prerequisite. Not just "it comes earlier in the outline."
+- Topics in the same section that cover parallel aspects of the same domain should share a common prerequisite — they should NOT depend on each other. Chaining siblings (A→B→C where A, B, C are peers) creates a false linear dependency.
+- A foundational topic (e.g. Variables, Functions, Core Syntax) should appear as a prerequisite for many topics. This is correct — it creates a fan-out in the graph.
+- An integration topic (e.g. Building a Full Project, Capstone) should list several prerequisites because it genuinely requires multiple prior threads. This is correct — it creates a fan-in.
+- Ask yourself: "If a student already knows X, can they learn this topic without also knowing Y?" If yes, Y is not a prerequisite of this topic, even if Y comes earlier in your outline.
+- The resulting prerequisite structure should look like a DAG with 2-4 conceptual layers, not a linked list.`,
   }
 }

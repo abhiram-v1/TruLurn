@@ -51,6 +51,8 @@ interface KnowledgeGraphProps {
   showLocked: boolean
   view: { x: number; y: number; k: number }
   setView: React.Dispatch<React.SetStateAction<{ x: number; y: number; k: number }>>
+  criticalPathNodes?: Set<string>
+  criticalPathEdges?: Set<string>
 }
 
 export function KnowledgeGraph({
@@ -61,10 +63,13 @@ export function KnowledgeGraph({
   hoverId,
   setHoverId,
   showCritical,
+  showRegions,
   showRecommended,
   showWeak,
   view,
   setView,
+  criticalPathNodes = new Set(),
+  criticalPathEdges = new Set(),
 }: KnowledgeGraphProps) {
   const stageRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<{ x: number; y: number; startX: number; startY: number } | null>(null)
@@ -172,18 +177,32 @@ export function KnowledgeGraph({
         }}
       >
         <svg width={CANVAS_W} height={CANVAS_H} style={{ display: 'block', overflow: 'visible' }}>
+          {/* Branch swim-lane region bands */}
+          {showRegions && data.regions?.map((r) => (
+            <g key={r.id}>
+              <rect
+                className="kg-region"
+                x={r.x} y={r.y} width={r.w} height={r.h}
+                rx="14" ry="14"
+              />
+              <text
+                className="kg-region-label"
+                x={r.x + 18}
+                y={r.y + 24}
+              >
+                {r.label}
+              </text>
+            </g>
+          ))}
           <defs>
-            <marker
-              id="kg-edge-arrow"
-              markerHeight="5"
-              markerUnits="userSpaceOnUse"
-              markerWidth="5"
-              orient="auto"
-              refX="4.6"
-              refY="2.5"
-              viewBox="0 0 5 5"
-            >
+            <marker id="kg-edge-arrow" markerHeight="5" markerUnits="userSpaceOnUse" markerWidth="5" orient="auto" refX="4.6" refY="2.5" viewBox="0 0 5 5">
               <path className="kg-edge-arrow" d="M0.4,0.7 L4.6,2.5 L0.4,4.3 Z" />
+            </marker>
+            <marker id="kg-edge-arrow-highlight" markerHeight="5" markerUnits="userSpaceOnUse" markerWidth="5" orient="auto" refX="4.6" refY="2.5" viewBox="0 0 5 5">
+              <path className="kg-edge-arrow-highlight" d="M0.4,0.7 L4.6,2.5 L0.4,4.3 Z" />
+            </marker>
+            <marker id="kg-edge-arrow-path" markerHeight="5" markerUnits="userSpaceOnUse" markerWidth="5" orient="auto" refX="4.6" refY="2.5" viewBox="0 0 5 5">
+              <path style={{ fill: 'var(--kg-path-color)' }} d="M0.4,0.7 L4.6,2.5 L0.4,4.3 Z" />
             </marker>
           </defs>
           {/* Edges */}
@@ -192,19 +211,25 @@ export function KnowledgeGraph({
               const isLit = litEdges?.has(i)
               const isFaded = egoSet && !(egoSet.has(e.from) && egoSet.has(e.to))
               const isCritical = showCritical && e.critical
+              const isOnPath = criticalPathEdges.has(`${e.from}::${e.to}`)
               const cls = [
                 'kg-edge',
                 e.strength,
                 isCritical ? 'critical' : '',
                 isLit ? 'highlight' : '',
                 isFaded ? 'faded' : '',
+                isOnPath ? 'critical-path' : '',
               ].filter(Boolean).join(' ')
               return (
                 <path
                   key={i}
                   className={cls}
                   d={e.path}
-                  markerEnd={isLit || e.strength !== 'weak' ? 'url(#kg-edge-arrow)' : undefined}
+                  markerEnd={
+                    isOnPath ? 'url(#kg-edge-arrow-path)' :
+                    isLit ? 'url(#kg-edge-arrow-highlight)' :
+                    e.strength !== 'weak' ? 'url(#kg-edge-arrow)' : undefined
+                  }
                 />
               )
             })}
@@ -218,6 +243,14 @@ export function KnowledgeGraph({
               const isFaded = egoSet && !egoSet.has(n.id)
               const isSuggested = showRecommended && n.suggested
               const isSearchDim = Boolean((n as GraphNode & { _dim?: boolean })._dim)
+              const isOnPath = criticalPathNodes.has(n.id)
+              // Vulnerability: show at-risk class when own risk >0 OR inherited risk >25
+              const isAtRisk = n.state !== 'locked' && n.vulnerabilityRisk > 25
+              // Decay: show for reviewed nodes that are going stale
+              const isDecaying = ['mastered', 'functional', 'partial'].includes(n.state) && n.decayScore < 45
+              // Bottleneck: top nodes by downstream impact (impact > 4 and not yet mastered)
+              const isBottleneck = n.downstreamImpact >= 4 && !['mastered', 'locked'].includes(n.state)
+
               const cls = [
                 'kg-node-card',
                 `state-${n.state}`,
@@ -227,6 +260,10 @@ export function KnowledgeGraph({
                 n.misconception ? 'misconception' : '',
                 isFaded ? 'faded' : '',
                 isSearchDim ? 'search-dim' : '',
+                isOnPath ? 'critical-path' : '',
+                isAtRisk && !isOnPath ? 'at-risk' : '',
+                isDecaying ? 'decaying' : '',
+                n.falseConfidence ? 'false-confidence' : '',
               ].filter(Boolean).join(' ')
 
               return (
@@ -246,7 +283,19 @@ export function KnowledgeGraph({
                   >
                     <div className="kg-node-head">
                       <span className="kg-node-title" title={n.title}>{n.title}</span>
-                      <ImportanceStack value={n.importance} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+                        {isBottleneck && (
+                          <span className="kg-badge bottleneck" title={`Unlocks ${n.downstreamImpact} concepts`}>
+                            {n.downstreamImpact}
+                          </span>
+                        )}
+                        {n.doubtCount > 0 && (
+                          <span className="kg-badge doubts" title={`${n.doubtCount} questions asked here`}>
+                            ?
+                          </span>
+                        )}
+                        <ImportanceStack value={n.importance} />
+                      </div>
                     </div>
                     <div className="kg-node-meta">
                       <StatePill state={n.state} />
@@ -255,6 +304,11 @@ export function KnowledgeGraph({
                     {showProgress(n.state) && (
                       <div className={`kg-node-prog ${n.state}`}>
                         <span style={{ width: `${n.mastery}%` }} />
+                      </div>
+                    )}
+                    {isDecaying && (
+                      <div className="kg-decay-bar">
+                        <span style={{ width: `${n.decayScore}%` }} />
                       </div>
                     )}
                   </div>

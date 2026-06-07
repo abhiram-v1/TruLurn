@@ -34,6 +34,9 @@ ACTION labels (student is issuing an unambiguous command at the lesson):
   GENERATE_PAGE   — generate a new custom page
 
   SKIP_CURRENT    - student says they already understand this and wants to move on or skip remaining ungenerated pages
+  CHANGE_STYLE    - student wants to change how ALL future lessons are written (more math, more code, more practical, etc.)
+                    Key signal: refers to "lessons", "pages" (plural), "the course", "from now on", "going forward"
+                    NOT this action: "can you make this more practical?" or "show more examples here" (those are current_page)
 
 RULES:
 - Default to current_page when ambiguous. Only choose an ACTION for clear, unambiguous commands.
@@ -57,16 +60,17 @@ Extra command examples:
 const DOUBT_LABELS = new Set<string>(['current_page', 'general_knowledge', 'course_specific'])
 
 const INTENT_MAP: Record<string, ActionIntent> = {
-  EXPLAIN_AGAIN: 'explain_again',
-  GO_DEEPER:     'go_deeper',
-  SIMPLIFY:      'simplify',
-  NEXT_TOPIC:    'next_topic',
-  PREV_TOPIC:    'prev_topic',
-  QUIZ_REQUEST:  'quiz_request',
-  CUSTOM_QUIZ:   'custom_quiz',
-  GO_TO_TOPIC:   'go_to_topic',
-  GENERATE_PAGE: 'generate_page',
-  SKIP_CURRENT:  'skip_current',
+  EXPLAIN_AGAIN:       'explain_again',
+  GO_DEEPER:           'go_deeper',
+  SIMPLIFY:            'simplify',
+  NEXT_TOPIC:          'next_topic',
+  PREV_TOPIC:          'prev_topic',
+  QUIZ_REQUEST:        'quiz_request',
+  CUSTOM_QUIZ:         'custom_quiz',
+  GO_TO_TOPIC:         'go_to_topic',
+  GENERATE_PAGE:       'generate_page',
+  SKIP_CURRENT:        'skip_current',
+  CHANGE_STYLE:        'change_lesson_style',
 }
 
 function normalizeMessage(message: string) {
