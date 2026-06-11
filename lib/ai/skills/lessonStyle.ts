@@ -10,6 +10,14 @@ export type LessonStyle =
   | 'applied_professional'  // Scenarios, decisions, real-world framing
   | 'explanatory_narrative' // Argument, narrative, prose — no formalism
   | 'procedural_reference'  // Steps, sequences, conditions, checklists
+  // ── Personal teaching styles (user-selectable) ──
+  | 'first_principles'      // Derive everything from axioms the student already accepts
+  | 'visual_analogy'        // Mental pictures and analogies carry the teaching
+  | 'socratic'              // Guided questions the student answers before the reveal
+  | 'project_based'         // Concepts taught inside a running build
+  | 'exam_oriented'         // Optimized for test performance and scoring patterns
+  | 'concise_speed'         // Maximum signal, minimum words — for fast movers
+  | 'deep_conceptual'       // Slow, thorough, multiple angles per concept
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 // Human-readable names and short descriptions used by both the selector
@@ -39,6 +47,34 @@ export const STYLE_CATALOG: Record<LessonStyle, { name: string; description: str
   procedural_reference: {
     name: 'Procedural & Reference',
     description: 'Steps, decision points, and conditions are first-class content. When-to-use-what matters as much as how.',
+  },
+  first_principles: {
+    name: 'First Principles',
+    description: 'Every concept is rebuilt from things you already accept as true. No formula or rule arrives without its derivation from the ground up.',
+  },
+  visual_analogy: {
+    name: 'Visual & Analogy Driven',
+    description: 'Mental pictures first. Every abstract idea gets a concrete analogy or visual scene before any formal treatment.',
+  },
+  socratic: {
+    name: 'Socratic Questioning',
+    description: 'Lessons teach by asking. You reason through guided questions before the answer is revealed, so understanding is earned, not given.',
+  },
+  project_based: {
+    name: 'Practical & Project-Based',
+    description: 'Concepts are taught inside a running project. You learn each idea at the moment the build needs it.',
+  },
+  exam_oriented: {
+    name: 'Exam-Oriented',
+    description: 'Optimized for test performance: definitions in markable form, solved problems in exam format, common traps and scoring patterns.',
+  },
+  concise_speed: {
+    name: 'Concise & High-Speed',
+    description: 'Maximum signal, minimum words. Compressed explanations for fast movers who fill gaps themselves.',
+  },
+  deep_conceptual: {
+    name: 'Deep Conceptual Learning',
+    description: 'Slow and thorough. Each concept from multiple angles — intuition, formalism, edge cases, connections — until it is genuinely owned.',
   },
 }
 
@@ -106,6 +142,79 @@ Primary medium: numbered steps, decision conditions, and structured sequences.
 - Use numbered lists for ordered steps; use conditional notes for branching paths
 - Checkpoints sections are standard on procedural pages — active self-testing prevents procedural mistakes
 - Do not describe a procedure entirely in prose when numbered steps would be clearer and safer to follow`,
+
+  first_principles: `LESSON STYLE — First Principles (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: derivation from foundations the student already accepts.
+- Open by identifying the smallest set of facts/axioms this concept rests on — name them explicitly
+- Build the concept step by step FROM those foundations; every step must follow from the previous one with no leaps
+- Never present a formula, rule, or convention as given — show why it must be that way, or say honestly that it is a convention
+- When a standard explanation hides an assumption, surface the assumption and test it
+- Prefer "what would happen if we didn't have X?" reasoning to motivate why X exists
+- Anchor each derivation's conclusion back to the practical idea it produces
+- Do not skip a derivation step because it seems obvious — obvious steps are where first-principles understanding silently breaks`,
+
+  visual_analogy: `LESSON STYLE — Visual & Analogy Driven (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: mental pictures, analogies, and spatial/visual descriptions.
+- Every abstract concept gets a concrete analogy or visual scene BEFORE any formal treatment
+- Choose analogies from everyday physical experience (nature, motion, containers, maps, machines) and reuse a good analogy across pages so the mental model compounds
+- Describe what things would LOOK like: shapes, flows, sizes, directions — write so the student can sketch it
+- When notation is necessary, map each symbol back to its place in the picture ("$w$ is the knob you turn")
+- Tables and structured comparisons are visual tools — use them for contrasts
+- State each analogy's breaking point: where the picture stops matching reality
+- Do not stack two different analogies for the same concept on one page — one strong picture beats two weak ones`,
+
+  socratic: `LESSON STYLE — Socratic Questioning (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: guided questions the student reasons through before answers are revealed.
+- Teach through question sequences: pose a question, leave thinking space, then walk through the reasoning to the answer
+- Open each concept with the puzzle it solves, phrased as a question the student can attack with what they already know
+- After establishing something, immediately ask the next natural question ("So if that's true, what happens when…?")
+- Wrong-but-tempting answers are teaching material: pose them, let the student feel the pull, then dismantle them
+- Use "Think before you read on:" markers before reveals, and blockquote hints rather than instant answers
+- Checkpoints sections fit this style on most pages — they ARE the style
+- Do not turn every sentence into a question — rhetorical question spam is noise. Each question must genuinely advance the reasoning chain`,
+
+  project_based: `LESSON STYLE — Practical & Project-Based (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: a running build the concepts serve.
+- Frame the topic's pages around a small, concrete, realistic project thread; introduce each concept at the exact moment the build needs it
+- Open pages with the build problem at hand ("our model trains but the loss explodes — here's why"), not with definitions
+- Every concept must answer "what does this let me build or fix?" — if it doesn't change what the student does, compress it
+- Show real artifacts: code, configs, schemas, sketches of the thing being built — with realistic names and data
+- End pages with the next concrete build step or a small hands-on task the student can actually do
+- Theory appears just-in-time and just-enough — link forward ("we'll need the math when we tune it")
+- Do not abandon the project thread for a page of pure theory; weave the theory into the build's needs`,
+
+  exam_oriented: `LESSON STYLE — Exam-Oriented (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: exam-format mastery — definitions in markable form, solved problems, traps.
+- Present each definition/theorem in the precise, compact form an examiner expects to see reproduced
+- Include at least one fully worked, exam-style problem per substantial concept — numbered steps, marks-worthy structure
+- Call out the standard question patterns for this concept ("this is usually asked as: derive X / compare X and Y / find the error")
+- Name the classic traps and lost-marks mistakes explicitly, and how to avoid them
+- Mnemonic structures, compact comparison tables, and "must-write keywords" lists are first-class content
+- Time-efficiency matters: show the fast correct method, then mention the slow one only if it builds understanding
+- Misconceptions and checkpoints sections earn their place on most pages in this style
+- Do not pad with material that cannot plausibly be examined — exam relevance is the filter`,
+
+  concise_speed: `LESSON STYLE — Concise & High-Speed (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: compressed, high-density explanation for a fast mover.
+- Target roughly half the words of a normal page; every sentence must carry new information
+- Lead with the sharpest one-line statement of the concept, then only the detail that prevents misuse
+- Prefer tight bullets and compact tables over flowing prose; cut transitions, recaps, and motivational framing
+- One example maximum per concept, chosen for maximum coverage — no example variations
+- Skip what a smart reader can infer; explicitly flag only the genuinely non-obvious ("counterintuitive: …")
+- Keep precision while compressing — terse must never become vague or wrong
+- estimated_length should lean "short"; a dense half-page beats a comfortable full page
+- Do not compress safety-critical caveats or the single key insight — those keep full weight`,
+
+  deep_conceptual: `LESSON STYLE — Deep Conceptual Learning (bias strength 6-7/10 — use your own judgment to deviate when a specific concept genuinely calls for a different approach):
+Primary medium: thorough multi-angle treatment until the concept is owned, not borrowed.
+- Approach each significant concept from at least two angles: intuition AND formalism, or mechanism AND consequence
+- Always answer "why is it this way and not the obvious alternative?" — contrast with the naive design that doesn't work
+- Surface the boundaries: where the concept stops applying, edge cases, and what breaks when assumptions fail
+- Connect explicitly to neighboring concepts the student has seen — understanding is the connections
+- Worked examples should expose the concept's behavior, not just its procedure (show WHY each step changes what it changes)
+- Misconceptions, key_ideas, and checkpoints sections all fit naturally here when the page is substantial
+- Re-state the core insight in different words at the close — one compression after the full treatment
+- Do not rush; depth is the point. But depth means more angles and connections, never word-padding`,
 }
 
 export function buildStyleDirective(style: LessonStyle | null | undefined): string {

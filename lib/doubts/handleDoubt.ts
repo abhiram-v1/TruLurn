@@ -5,6 +5,7 @@ import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQ
 import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
 import { buildDoubtPrompt, type TopicStateSnapshot } from '@/lib/doubts/context'
 import { extractForwardRef, storeForwardRef } from '@/lib/agent/forwardRefs'
+import { applyStyleAdjustment, detectStyleAdjustment } from '@/lib/agent/styleControl'
 import {
   computeGlobalPagePosition,
   findTopicPageByGlobalNumber,
@@ -185,15 +186,43 @@ async function fetchTopicState(
   const [topic, lastSession] = await Promise.all([
     db.collection('topics').findOne(
       { _id: topicId as any, course_id: courseId },
-      { projection: { state: 1, understanding_level: 1, needs_review: 1, review_gaps: 1, misconception: 1 } },
+      { projection: { state: 1, understanding_level: 1, needs_review: 1, review_gaps: 1, misconception: 1, prerequisite_gap: 1 } },
     ),
     db.collection('examSessions').findOne(
       { course_id: courseId, topic_id: topicId, user_id: userId, status: 'completed' },
-      { sort: { completed_at: -1 }, projection: { summary: 1 } },
+      { sort: { completed_at: -1 }, projection: { summary: 1, _id: 1 } },
     ),
   ])
 
   const examSummary = lastSession?.summary ?? null
+
+  // Pull the actual missed questions from the most recent completed exam so the
+  // tutor can address the precise point of confusion, not just a concept label.
+  let wrongAnswers: TopicStateSnapshot['wrongAnswers'] = null
+  if (lastSession?._id) {
+    const failedTurns = await db.collection('examTurns')
+      .find({ session_id: String(lastSession._id), 'evaluation.passed': false })
+      .sort({ turn_index: 1 })
+      .limit(4)
+      .project({ concept: 1, question: 1, answer: 1, 'evaluation.gap': 1 })
+      .toArray()
+
+    if (failedTurns.length) {
+      wrongAnswers = failedTurns.map((turn) => ({
+        concept: String(turn.concept ?? 'concept'),
+        question: compactForPrompt(turn.question ?? '', 320),
+        studentAnswer: compactForPrompt(turn.answer ?? '', 240),
+        gap: turn.evaluation?.gap ? String(turn.evaluation.gap) : null,
+      }))
+    }
+  }
+
+  const prereqGap = topic?.prerequisite_gap && typeof topic.prerequisite_gap === 'object'
+    ? {
+        title: String((topic.prerequisite_gap as any).title ?? ''),
+        reason: (topic.prerequisite_gap as any).reason ? String((topic.prerequisite_gap as any).reason) : null,
+      }
+    : null
 
   return {
     state: topic?.state ?? null,
@@ -201,6 +230,8 @@ async function fetchTopicState(
     needs_review: topic?.needs_review ?? null,
     review_gaps: Array.isArray(topic?.review_gaps) ? topic.review_gaps : null,
     misconception: topic?.misconception ?? null,
+    prerequisite_gap: prereqGap && prereqGap.title ? prereqGap : null,
+    wrongAnswers,
     lastExam: examSummary
       ? {
           passed: Boolean(examSummary.passed),
@@ -393,7 +424,9 @@ export async function handleDoubt(input: HandleDoubtInput) {
 
   // Parallelize workspace context reads alongside question type resolution
   // instead of running them sequentially after classification.
-  const [type, workspaceContext, explicitPageContext] = await Promise.all([
+  // Style detection rides the same parallel batch — it's keyword-gated, so the
+  // extra model call only happens when the message plausibly asks for a style change.
+  const [type, workspaceContext, explicitPageContext, styleAdjustment] = await Promise.all([
     typePromise,
     buildAgentWorkspaceContext({
       db: input.db,
@@ -409,9 +442,30 @@ export async function handleDoubt(input: HandleDoubtInput) {
       orderedTopics: position.orderedTopics,
       branches: position.branches,
     }),
+    detectStyleAdjustment(question),
   ])
 
-  const combinedWorkspaceContext = [workspaceContext, explicitPageContext]
+  // The agent ACTS on style feedback, not just answers it: persist the change so
+  // every future page generation follows it, and tell the model to acknowledge.
+  let styleContext = ''
+  if (styleAdjustment) {
+    await applyStyleAdjustment({
+      db: input.db,
+      courseId: input.courseId,
+      userId: input.userId,
+      topicId: input.topicId,
+      adjustment: styleAdjustment,
+    }).catch((err) => console.warn('Failed to apply style adjustment.', err))
+    styleContext = [
+      'STYLE ADJUSTMENT JUST APPLIED (you did this — own it):',
+      `- New persistent lesson directive: "${styleAdjustment.directive}"`,
+      styleAdjustment.knowledgeLevel ? `- Course knowledge level set to: ${styleAdjustment.knowledgeLevel}` : null,
+      'Briefly confirm to the student that all lesson pages generated from now on will follow this.',
+      'Mention that already-generated pages stay as they are unless regenerated (the regenerate options on each page apply the new style).',
+    ].filter(Boolean).join('\n')
+  }
+
+  const combinedWorkspaceContext = [workspaceContext, explicitPageContext, styleContext]
     .filter((block) => block && block.trim())
     .join('\n\n')
 

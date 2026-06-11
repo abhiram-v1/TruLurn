@@ -1,4 +1,6 @@
 import { AppFrame } from '@/components/navigation/AppFrame'
+import { RecallBreakSetting } from '@/components/settings/RecallBreakSetting'
+import { ThemeSetting } from '@/components/settings/ThemeSetting'
 
 export default function SettingsPage() {
   return (
@@ -6,11 +8,20 @@ export default function SettingsPage() {
       <main className="settings-page">
         <div className="page-header narrow">
           <p className="eyebrow">Settings</p>
-          <h1 className="page-heading">Product controls stay quiet and explicit.</h1>
+          <h1 className="page-heading">Make TruLurn feel like yours.</h1>
           <p className="page-subtitle">
-            These are placeholders for account, model provider, data export, and evidence-language preferences.
+            Appearance preferences are stored on this device. Light mode remains the default.
           </p>
         </div>
+        <p className="section-label compact">Appearance</p>
+        <div className="settings-list">
+          <ThemeSetting />
+        </div>
+        <p className="section-label">Learning</p>
+        <div className="settings-list">
+          <RecallBreakSetting />
+        </div>
+        <p className="section-label">Product</p>
         <div className="settings-list">
           <div className="settings-row">
             <span>

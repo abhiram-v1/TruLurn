@@ -72,12 +72,8 @@ export function CourseDepthSelector({
             aria-checked={value === option.value}
             onClick={() => onChange(option.value)}
           >
-            <div className="control-mode-option-header">
-              {getDepthIcon(option.value)}
-              <span className="control-mode-title">{option.title}</span>
-            </div>
-            <span className="control-mode-copy">{option.copy}</span>
-            <span className="control-mode-meta">{option.meta}</span>
+            {getDepthIcon(option.value)}
+            <span className="control-mode-title">{option.title}</span>
           </button>
         ))}
       </div>

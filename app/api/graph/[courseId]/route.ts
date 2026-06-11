@@ -1,15 +1,26 @@
-﻿import { NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
-import { transformToGraphData } from '@/lib/graph/transform'
+import { normalizeGraphTopicHierarchy, transformToGraphData, type RawRecallStats } from '@/lib/graph/transform'
+
+// GET /api/graph/[courseId]?view=knowledge|reference
+//
+// knowledge (default) — the learner's personal graph: only concepts they have
+//   actually touched (learned, in progress, or needing review), the connections
+//   they created themselves, and the AI prerequisite links between touched
+//   concepts as faint guidance. Grows as they learn.
+// reference — the full AI-generated map: every planned concept and dependency.
+//   Kept as a lightweight orientation layer, not the primary representation.
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: { courseId: string } },
 ) {
   try {
     const userId = await getRequiredUserId()
     const { courseId } = params
+    const url = new URL(request.url)
+    const view = url.searchParams.get('view') === 'reference' ? 'reference' : 'knowledge'
     const db = await getDb()
 
     const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
@@ -17,7 +28,7 @@ export async function GET(
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
 
-    const [topics, branches, topicEdges, examSessions, doubtAgg] = await Promise.all([
+    const [topics, branches, topicEdges, examSessions, doubtAgg, userConnections] = await Promise.all([
       db.collection('topics').find({ course_id: courseId }).sort({ position: 1 }).toArray(),
       db.collection('branches').find({ course_id: courseId }).toArray(),
       db.collection('topicEdges').find({ course_id: courseId }).toArray(),
@@ -33,6 +44,10 @@ export async function GET(
           { $match: { course_id: courseId, user_id: userId } },
           { $group: { _id: '$topic_id', count: { $sum: 1 } } },
         ])
+        .toArray(),
+      // Learner-created concept connections
+      db.collection('userConnections')
+        .find({ course_id: courseId, user_id: userId })
         .toArray(),
     ])
 
@@ -63,31 +78,104 @@ export async function GET(
       doubtCountByTopic.set(String(row._id), Number(row.count ?? 0))
     }
 
-    const graphTopics = topics.filter((topic) =>
-      String(topic.node_type ?? '') !== 'container' && Number(topic.children_count ?? 0) <= 0,
-    )
+    // Per-topic recall-break performance (strengthens nodes in the personal graph)
+    const recallStatsByTopic = new Map<string, RawRecallStats>()
+    for (const t of topics) {
+      const stats = (t as any).recall_stats
+      if (stats && Number(stats.attempts ?? 0) > 0) {
+        recallStatsByTopic.set(String(t._id), {
+          attempts: Number(stats.attempts ?? 0),
+          hits: Number(stats.hits ?? 0),
+          misses: Number(stats.misses ?? 0),
+        })
+      }
+    }
+
+    // Recursive-spine layout needs the full containment tree. The transform also
+    // reconstructs missing container metadata for older persisted courses.
+    let graphTopics = normalizeGraphTopicHierarchy(topics as any)
+
+    // ── Knowledge view: only concepts the learner has actually touched ──
+    // Touched = any non-locked state (active, partial, functional, mastered,
+    // unstable, done). Ancestor containers of touched leaves are kept so the
+    // layout's containment tree stays intact.
+    if (view === 'knowledge') {
+      const touched = graphTopics.filter((t) => String(t.state ?? 'locked') !== 'locked')
+      const keep = new Set<string>(touched.map((t) => String(t._id)))
+      const byId = new Map(graphTopics.map((t) => [String(t._id), t]))
+      for (const t of touched) {
+        const pathIds: string[] = Array.isArray((t as any).path_ids) ? (t as any).path_ids.map(String) : []
+        for (const ancestorId of pathIds) {
+          if (byId.has(ancestorId)) keep.add(ancestorId)
+        }
+        let parentId = t.parent_id ? String(t.parent_id) : null
+        while (parentId && byId.has(parentId) && !keep.has(parentId)) {
+          keep.add(parentId)
+          const parent = byId.get(parentId)
+          parentId = parent?.parent_id ? String(parent.parent_id) : null
+        }
+      }
+      graphTopics = graphTopics.filter((t) => keep.has(String(t._id)))
+      // Containers whose children were all filtered out shouldn't render as
+      // boxes with phantom counts — recompute hierarchy metadata on the subset.
+      graphTopics = normalizeGraphTopicHierarchy(graphTopics)
+    }
+
     const graphTopicIds = new Set(graphTopics.map((topic) => String(topic._id)))
+    // Only pass through known visual edge types — drops legacy hierarchy edges and any
+    // unknown types. Both endpoints must be topics that exist in the graph.
+    const GRAPH_EDGE_TYPES = new Set(['sequence', 'prerequisite', 'recommended', 'semantic'])
     const graphEdges = topicEdges.filter((edge) => {
-      if (String(edge.edge_type ?? 'semantic') === 'hierarchy') return false
+      if (!GRAPH_EDGE_TYPES.has(String(edge.edge_type ?? 'semantic'))) return false
+      const isLegacyManufacturedSequence =
+        String(edge.edge_type) === 'sequence'
+        && String(course.mode ?? '') !== 'source_grounded'
+        && /^Study ".+" before ".+"\.$/.test(String(edge.reason ?? ''))
+      if (isLegacyManufacturedSequence) return false
       return graphTopicIds.has(String(edge.from_topic_id)) && graphTopicIds.has(String(edge.to_topic_id))
     })
 
-    // Find the topic the user is currently studying (first active teachable one)
-    const activeTopic = graphTopics.find((t) => t.state === 'active')
+    // User connections whose endpoints exist in the current view
+    const visibleConnections = userConnections.filter(
+      (conn) => graphTopicIds.has(String(conn.from_topic_id)) && graphTopicIds.has(String(conn.to_topic_id)),
+    )
+
+    // Find the topic the user is currently studying (first active teachable leaf)
+    const activeTopic = graphTopics.find(
+      (t) => t.state === 'active' && String(t.node_type ?? '') !== 'container',
+    )
     const activeSingleTopicId = activeTopic ? String(activeTopic._id) : null
+
+    // Knowledge view: hide branches the learner hasn't entered yet.
+    const visibleBranchKeys = new Set(graphTopics.map((t) => String(t.branch_id)))
+    const visibleBranches = view === 'knowledge'
+      ? branches.filter((b) => visibleBranchKeys.has(String((b as any).branch_key ?? b._id)))
+      : branches
 
     const graphData = transformToGraphData({
       courseId,
       courseTitle: course.title ?? course.topic ?? 'Untitled',
       topics: graphTopics as any,
-      branches: branches as any,
+      branches: visibleBranches as any,
       topicEdges: graphEdges as any,
       activeSingleTopicId,
       lastExamByTopic,
       doubtCountByTopic,
+      userConnections: visibleConnections as any,
+      recallStatsByTopic,
     })
 
-    return NextResponse.json(graphData)
+    return NextResponse.json({
+      ...graphData,
+      view,
+      // Total concepts in the full course — lets the knowledge view show
+      // "12 of 64 concepts on your map" without a second request.
+      fullTopicCount: topics.filter((t) => {
+        const nodeType = String((t as any).node_type ?? 'learning_unit')
+        const childCount = Number((t as any).children_count ?? 0)
+        return nodeType !== 'container' && childCount <= 0
+      }).length,
+    })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     const status = message.includes('sign in') ? 401 : 500

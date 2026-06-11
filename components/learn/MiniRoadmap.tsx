@@ -1,13 +1,17 @@
 'use client'
 
 import {
+  IconArrowRight,
+  IconCheck,
   IconChevronDown,
   IconChevronRight,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconLock,
+  IconTopologyStar3,
 } from '@tabler/icons-react'
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Topic } from '@/types'
 
 function isContainer(topic: Topic) {
@@ -16,6 +20,13 @@ function isContainer(topic: Topic) {
 
 function topicIsCurrentPath(topic: Topic, currentTopicId: string) {
   return topic.id === currentTopicId || (topic.path_ids ?? []).includes(currentTopicId)
+}
+
+// States that count as "behind you" for progress purposes.
+const COMPLETE_STATES = new Set(['mastered', 'functional', 'done'])
+
+function isComplete(topic: Topic) {
+  return COMPLETE_STATES.has(String(topic.state))
 }
 
 function sortTopics(topics: Topic[]) {
@@ -45,17 +56,24 @@ export function MiniRoadmap({
   courseId,
   collapsed = false,
   onToggle,
+  currentPageNumber,
+  totalPlannedPages,
 }: {
   topics: Topic[]
   currentTopicId: string
   courseId: string
   collapsed?: boolean
   onToggle?: () => void
+  /** Page the learner is reading inside the current topic (1-based). */
+  currentPageNumber?: number
+  /** Planned page count of the current topic. */
+  totalPlannedPages?: number
 }) {
   const [lockedTopicId, setLockedTopicId] = useState<string | null>(null)
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(
     () => initialExpandedTopics(topics, currentTopicId),
   )
+  const currentRowRef = useRef<HTMLDivElement>(null)
   const sections = Array.from(new Set(topics.map((topic) => topic.section)))
   const visibleRailTopics = topics.slice(0, 12)
   const hasRecursiveTraccia = topics.some((topic) =>
@@ -74,6 +92,20 @@ export function MiniRoadmap({
     childrenByParent.set(parentId, sortTopics(children))
   }
 
+  // ── Journey context: progress + what comes after the current topic ──
+  const teachable = sortTopics(topics.filter((topic) => !isContainer(topic)))
+  const completedCount = teachable.filter(isComplete).length
+  const progressPct = teachable.length ? Math.round((completedCount / teachable.length) * 100) : 0
+  const currentIndex = teachable.findIndex((topic) => topic.id === currentTopicId)
+  const nextTopic = currentIndex >= 0 ? teachable[currentIndex + 1] ?? null : null
+  const nextIsLocked = nextTopic?.state === 'locked'
+
+  // Keep the current topic visible — the list can hold dozens of topics.
+  useEffect(() => {
+    if (collapsed) return
+    currentRowRef.current?.scrollIntoView({ block: 'center' })
+  }, [currentTopicId, collapsed])
+
   function toggleTopic(topicId: string) {
     setExpandedTopicIds((current) => {
       const next = new Set(current)
@@ -86,6 +118,28 @@ export function MiniRoadmap({
     })
   }
 
+  function rowAdornment(topic: Topic, current: boolean) {
+    if (topic.state === 'locked') {
+      return <IconLock className="topic-adorn" size={12} stroke={1.8} aria-label="Locked" />
+    }
+    if (isComplete(topic)) {
+      return <IconCheck className="topic-adorn complete" size={13} stroke={2.2} aria-label="Completed" />
+    }
+    return null
+  }
+
+  // Page progress shown under the current topic row ("Page 3 of 7").
+  function currentPageProgress() {
+    if (!currentPageNumber || !totalPlannedPages || totalPlannedPages < 1) return null
+    const pct = Math.min(100, Math.round((currentPageNumber / totalPlannedPages) * 100))
+    return (
+      <div className="topic-page-progress" aria-label={`Page ${currentPageNumber} of ${totalPlannedPages}`}>
+        <span className="tpp-bar"><span style={{ width: `${pct}%` }} /></span>
+        <span className="tpp-text">Page {currentPageNumber} of {totalPlannedPages}</span>
+      </div>
+    )
+  }
+
   function renderTopicRow(topic: Topic, level = 0) {
     const locked = topic.state === 'locked'
     const current = topic.id === currentTopicId
@@ -96,7 +150,11 @@ export function MiniRoadmap({
     const dotState = current ? 'active' : topic.state
 
     return (
-      <div className={`topic-tree-row level-${Math.min(level, 2)}`} key={topic.id}>
+      <div
+        className={`topic-tree-row level-${Math.min(level, 2)}`}
+        key={topic.id}
+        ref={current ? currentRowRef : undefined}
+      >
         {container ? (
           <button
             className={`topic-container ${currentPath ? 'current-path' : ''} ${current ? 'current' : ''}`}
@@ -113,10 +171,11 @@ export function MiniRoadmap({
           <button
             className={`topic-locked ${current ? 'current' : ''}`}
             type="button"
-            onClick={() => setLockedTopicId(topic.id)}
+            onClick={() => setLockedTopicId(lockedTopicId === topic.id ? null : topic.id)}
           >
             <span className={`state-dot ${dotState}`} />
             <span className="topic-name">{topic.title}</span>
+            {rowAdornment(topic, current)}
           </button>
         ) : (
           <Link
@@ -125,8 +184,11 @@ export function MiniRoadmap({
           >
             <span className={`state-dot ${dotState}`} />
             <span className="topic-name">{topic.title}</span>
+            {rowAdornment(topic, current)}
           </Link>
         )}
+
+        {current && !container ? currentPageProgress() : null}
 
         {lockedTopicId === topic.id ? (
           <div className="locked-message">
@@ -144,6 +206,17 @@ export function MiniRoadmap({
           </div>
         ) : null}
       </div>
+    )
+  }
+
+  function sectionProgress(section: string) {
+    const inSection = teachable.filter((topic) => topic.section === section)
+    if (!inSection.length) return null
+    const done = inSection.filter(isComplete).length
+    return (
+      <span className="roadmap-section-count">
+        {done}/{inSection.length}
+      </span>
     )
   }
 
@@ -208,10 +281,23 @@ export function MiniRoadmap({
         </>
       ) : (
         <>
+          {/* Course progress — always visible above the list */}
+          <div className="roadmap-progress" aria-label={`${completedCount} of ${teachable.length} topics completed`}>
+            <div className="roadmap-progress-bar">
+              <span style={{ width: `${progressPct}%` }} />
+            </div>
+            <span className="roadmap-progress-text">
+              {completedCount}/{teachable.length} topics
+            </span>
+          </div>
+
           <div className="roadmap-scroll">
             {sections.map((section) => (
               <div className="topic-group" key={section}>
-                <div className="roadmap-section-label">{section}</div>
+                <div className="roadmap-section-label">
+                  <span className="roadmap-section-name">{section}</span>
+                  {sectionProgress(section)}
+                </div>
                 <div className="topic-list">
                   {hasRecursiveTraccia ? (
                     sortTopics(topics.filter((topic) => {
@@ -219,57 +305,42 @@ export function MiniRoadmap({
                       return !topic.parent_id || !topicById.has(topic.parent_id)
                     })).map((topic) => renderTopicRow(topic))
                   ) : (
-                    topics
-                    .filter((topic) => topic.section === section)
-                    .map((topic) => {
-                      const locked = topic.state === 'locked'
-                      const current = topic.id === currentTopicId
-                      const dotState = current ? 'active' : topic.state
-
-                      if (locked) {
-                        return (
-                          <div key={topic.id}>
-                            <button
-                              className="topic-locked"
-                              type="button"
-                              onClick={() => setLockedTopicId(topic.id)}
-                            >
-                              <span className={`state-dot ${dotState}`} />
-                              <span className="topic-name">{topic.title}</span>
-                            </button>
-                            {lockedTopicId === topic.id ? (
-                              <div className="locked-message">
-                                Complete{' '}
-                                <strong>
-                                  {topicById.get(topic.prerequisites[0])?.title ?? 'the prerequisite topic'}
-                                </strong>{' '}
-                                first.
-                              </div>
-                            ) : null}
-                          </div>
-                        )
-                      }
-
-                      return (
-                        <Link
-                          className={`topic-link ${current ? 'current' : ''}`}
-                          href={`/learn/${courseId}/${topic.id}`}
-                          key={topic.id}
-                        >
-                          <span className={`state-dot ${dotState}`} />
-                          <span className="topic-name">{topic.title}</span>
-                        </Link>
-                      )
-                    })
+                    sortTopics(topics.filter((topic) => topic.section === section))
+                      .map((topic) => renderTopicRow(topic))
                   )}
                 </div>
               </div>
             ))}
           </div>
-          <Link className="roadmap-footer" href={`/graph/${courseId}`}>
-            <span>Weakest connection</span>
-            <strong>Feature scaling is isolated</strong>
-          </Link>
+
+          {/* Journey footer — what comes after this topic */}
+          <div className="roadmap-footer-stack">
+            {nextTopic ? (
+              nextIsLocked ? (
+                <div className="roadmap-next is-locked" title="Unlocks as you progress">
+                  <span className="roadmap-next-label">Up next</span>
+                  <span className="roadmap-next-title">
+                    <IconLock size={12} stroke={1.8} /> {nextTopic.title}
+                  </span>
+                </div>
+              ) : (
+                <Link className="roadmap-next" href={`/learn/${courseId}/${nextTopic.id}`}>
+                  <span className="roadmap-next-label">Up next</span>
+                  <span className="roadmap-next-title">
+                    {nextTopic.title} <IconArrowRight size={13} stroke={2} className="roadmap-next-arrow" />
+                  </span>
+                </Link>
+              )
+            ) : currentIndex >= 0 ? (
+              <div className="roadmap-next is-locked">
+                <span className="roadmap-next-label">Up next</span>
+                <span className="roadmap-next-title">Final topic — you&apos;re at the end of the path</span>
+              </div>
+            ) : null}
+            <Link className="roadmap-graph-link" href={`/graph/${courseId}`}>
+              <IconTopologyStar3 size={13} stroke={1.8} /> Open knowledge graph
+            </Link>
+          </div>
         </>
       )}
     </>

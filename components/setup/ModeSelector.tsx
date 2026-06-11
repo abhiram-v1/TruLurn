@@ -36,9 +36,9 @@ export function ModeSelector({
           <svg className="mode-icon" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5h10.5a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0017.25 4.5H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25z" />
           </svg>
-          <div className="mode-title">Source Grounded</div>
+          <div className="mode-title">Source-Based Learning</div>
         </div>
-        <div className="mode-copy">Upload documents or notes. TruLurn builds the curriculum from your material.</div>
+        <div className="mode-copy">Upload documents or notes. TruLurn builds lessons only from your material — every lesson stays traceable to your sources.</div>
       </button>
     </div>
   )

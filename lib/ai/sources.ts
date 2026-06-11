@@ -54,9 +54,12 @@ async function convertViaMarkItDown(file: File): Promise<string | null> {
 export async function extractSourceTextFromFormData(formData: FormData): Promise<SourceExtraction> {
   const limitations: string[] = []
   const chunks: string[] = []
+  let sourceIndex = 0
 
   for (const [key, value] of formData.entries()) {
     if (!(value instanceof File) || key !== 'sources') continue
+    sourceIndex += 1
+    const sourceHeader = `Source ${sourceIndex}: ${value.name}`
 
     // ── Plain text files — read directly ─────────────────────────────────────
     if (isTextSource(value)) {
@@ -65,7 +68,7 @@ export async function extractSourceTextFromFormData(formData: FormData): Promise
         limitations.push(`${value.name} was empty.`)
         continue
       }
-      chunks.push(`Source: ${value.name}\n${text.trim()}`)
+      chunks.push(`${sourceHeader}\n${text.trim()}`)
       continue
     }
 
@@ -74,7 +77,7 @@ export async function extractSourceTextFromFormData(formData: FormData): Promise
       const markdown = await convertViaMarkItDown(value)
 
       if (markdown) {
-        chunks.push(`Source: ${value.name}\n${markdown.trim()}`)
+        chunks.push(`${sourceHeader}\n${markdown.trim()}`)
       } else if (!process.env.MARKITDOWN_SERVICE_URL) {
         limitations.push(
           `${value.name} was skipped — rich document conversion is not configured. ` +

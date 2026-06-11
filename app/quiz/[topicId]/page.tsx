@@ -34,8 +34,15 @@ function QuizShell({
   )
 }
 
-export default async function QuizPage({ params }: { params: { topicId: string } }) {
+export default async function QuizPage({
+  params,
+  searchParams,
+}: {
+  params: { topicId: string }
+  searchParams: { review?: string }
+}) {
   const topicId = decodeURIComponent(params.topicId)
+  const isReview = searchParams?.review === '1'
   const db = await getDb()
   const userId = await getRequiredUserId()
 
@@ -67,15 +74,20 @@ export default async function QuizPage({ params }: { params: { topicId: string }
   return (
     <QuizShell courseId={courseId} topicId={topicId}>
       <div style={{ marginTop: 34 }}>
+        {isReview ? <p className="eyebrow">Spaced review</p> : null}
         <h1 className="page-heading">{topic.title}</h1>
         <p className="page-subtitle">
-          One question at a time. The engine uses your Traccia path, lesson pages, and prior evidence to choose what to ask.
+          {isReview
+            ? 'A quick retrieval check to keep this topic fresh. Pass it and the next review moves further out; miss it and it comes back sooner.'
+            : 'One question at a time. The engine uses your Traccia path, lesson pages, and prior evidence to choose what to ask.'}
         </p>
       </div>
       <QuizSession
         topicId={topicId}
         topicTitle={String(topic.title ?? 'Current topic')}
         courseId={courseId}
+        mode={isReview ? 'spot_check' : 'full_topic'}
+        isReview={isReview}
       />
     </QuizShell>
   )

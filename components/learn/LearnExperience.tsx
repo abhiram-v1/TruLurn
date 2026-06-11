@@ -5,12 +5,15 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { DoubtChat } from '@/components/learn/DoubtChat'
 import { LessonPage } from '@/components/learn/LessonPage'
+import { LessonFeedback } from '@/components/learn/LessonFeedback'
 import { LessonSelectionToolbar, type TransformAction } from '@/components/learn/LessonSelectionToolbar'
 import type { SectionOverride } from '@/components/learn/LessonSections'
 import { MiniRoadmap } from '@/components/learn/MiniRoadmap'
 import { ThreePanelLayout } from '@/components/learn/ThreePanelLayout'
 import { BackButton } from '@/components/navigation/BackButton'
 import { BottomNav } from '@/components/navigation/BottomNav'
+import { RecallBreakBanner, RecallBreakOverlay } from '@/components/recall/RecallBreakOverlay'
+import { useRecallBreak } from '@/components/recall/useRecallBreak'
 import { paginateLessonMarkdown } from '@/lib/lesson-pagination'
 import type { DoubtMessage, Page, Topic } from '@/types'
 
@@ -78,6 +81,15 @@ export function LearnExperience({
   const [draftSeed, setDraftSeed] = useState<{ id: number; value: string } | null>(null)
   const [selectedChatContext, setSelectedChatContext] = useState<{ id: number; text: string } | null>(null)
   const [sectionOverrides, setSectionOverrides] = useState<Map<number, SectionOverride>>(new Map())
+
+  const recall = useRecallBreak({
+    courseId,
+    topicId: topic.id,
+    topicTitle: topic.title,
+    pageNumber: page.page_number,
+    keyConcepts: page.key_concepts,
+    pageSummary: page.summary ?? null,
+  })
 
   // Clear overrides whenever the page changes
   useEffect(() => {
@@ -228,6 +240,8 @@ export function LearnExperience({
             courseId={courseId}
             collapsed={roadmapCollapsed}
             onToggle={() => setRoadmapCollapsed((collapsed) => !collapsed)}
+            currentPageNumber={page.page_number}
+            totalPlannedPages={totalPlanned}
           />
         }
         middle={
@@ -239,6 +253,15 @@ export function LearnExperience({
               <button
                 className="lesson-regen-btn"
                 type="button"
+                onClick={() => recall.startBreak(true)}
+                disabled={recall.loading || Boolean(recall.overlay)}
+                title="Pause and actively recall what you covered in this session"
+              >
+                {recall.loading ? 'Preparing…' : '◉ Recall'}
+              </button>
+              <button
+                className="lesson-regen-btn"
+                type="button"
                 onClick={() => regeneratePage()}
                 disabled={isRegenerating}
                 title="Delete and regenerate this page with fresh AI content"
@@ -246,6 +269,18 @@ export function LearnExperience({
                 {isRegenerating ? 'Regenerating…' : '↺ Regen'}
               </button>
             </div>
+
+            {recall.breakDue && !recall.overlay ? (
+              <RecallBreakBanner
+                reason={recall.breakReason}
+                loading={recall.loading}
+                onStart={() => recall.startBreak(false)}
+                onSnooze={recall.snoozeBreak}
+              />
+            ) : null}
+            {recall.error && !recall.overlay ? (
+              <div className="recall-inline-error">{recall.error}</div>
+            ) : null}
 
             <LessonPage
               page={page}
@@ -255,7 +290,15 @@ export function LearnExperience({
               screenPageCount={lessonPages.length}
               sectionOverrides={sectionOverrides}
               onRestoreSection={restoreSection}
-            />
+            >
+              <LessonFeedback
+                courseId={courseId}
+                topicId={topic.id}
+                pageNumber={page.page_number}
+                onReexplain={regeneratePage}
+                isRegenerating={isRegenerating}
+              />
+            </LessonPage>
             <LessonSelectionToolbar
               topicId={topic.id}
               courseId={courseId}
@@ -370,6 +413,13 @@ export function LearnExperience({
           />
         }
       />
+      {recall.overlay ? (
+        <RecallBreakOverlay
+          content={recall.overlay}
+          onComplete={recall.completeBreak}
+          onDismiss={recall.dismissOverlay}
+        />
+      ) : null}
       <BottomNav courseId={courseId} />
     </div>
   )

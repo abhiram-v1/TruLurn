@@ -7,8 +7,10 @@ import { buildGenerationPointer, firstTeachableDescendant, isContainerTopic, nex
 import { buildSequenceContextPack } from '@/lib/traccia/sequenceContext'
 import { embedPageById, retrieveCourseMemory } from '@/lib/vector/retrieval'
 import { invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
-import { analyzeLearningArchitecture, validateGeneratedPageAgainstArchitecture } from '@/lib/learning-architecture/analyzePage'
+import { analyzeLearningArchitecture, validateGeneratedPageAgainstArchitecture, type LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
+import { analyzeTopicPlan, type TopicLessonPlan } from '@/lib/learning-architecture/analyzeTopicPlan'
 import { researchLessonConcept } from '@/lib/course-generation/research'
+import { buildPersonalizationDirective, getLearnerProfile } from '@/lib/personalization/engine'
 
 type GeneratePageBody = {
   courseId?: string
@@ -112,9 +114,10 @@ export async function POST(
       `page ${pageNumber}`,
     ].filter(Boolean).join(' | ')
 
-    // Fetch previous pages and course memory in parallel — independent operations.
-    // Project only the fields formatPreviousPages uses; sections (largest field) excluded.
-    const [previousPages, memory] = await Promise.all([
+    // Fetch previous pages, course memory, and the learner profile in parallel —
+    // independent operations. Project only the fields formatPreviousPages uses;
+    // sections (largest field) excluded. The profile is cached, so this is cheap.
+    const [previousPages, memory, learnerProfile] = await Promise.all([
       db.collection('pages')
         .find({
           course_id: courseId,
@@ -132,7 +135,13 @@ export async function POST(
         currentTopicId: params.topicId,
         pageLimit: 3,
         doubtLimit: 3,
-        sourceLimit: 3,
+        // Source-based courses lean much harder on source excerpts — they are
+        // the only permitted content, so retrieve more of them.
+        sourceLimit: String(course.mode ?? '') === 'source_grounded' ? 8 : 3,
+      }),
+      getLearnerProfile(db, userId, courseId).catch((error) => {
+        console.warn('[pageGen] Learner profile unavailable — generating without personalization.', error)
+        return null
       }),
     ])
     const pointer = await buildGenerationPointer({
@@ -160,26 +169,72 @@ export async function POST(
     const effectiveApproach: typeof approach = approach
       ?? (topic.needs_review && !customInstruction ? topic.review_approach ?? 'explain_again' : undefined)
 
-    // Run architecture analysis and lesson concept search in parallel — both only
-    // need the topic/focus context that is already ready at this point.
-    const [learningArchitecture, lessonResearch] = await Promise.all([
-      analyzeLearningArchitecture({
-        course,
-        topic,
-        pageNumber,
-        plannedPages,
-        focus,
-        previousPages,
-        memory,
-        mapPointer: pointer.text,
-        sequenceContext: sequenceContext.text,
-      }),
-      researchLessonConcept({
-        courseTitle: course.title ?? course.topic ?? '',
-        topicTitle: topic.title ?? '',
-        focus,
-      }),
-    ])
+    const perPageBriefArgs = {
+      course,
+      topic,
+      pageNumber,
+      plannedPages,
+      focus,
+      previousPages,
+      memory,
+      mapPointer: pointer.text,
+      sequenceContext: sequenceContext.text,
+    }
+
+    // Topic-level plan: ONE call per topic, cached on the topic document, replacing
+    // the per-page architecture brief. Generated lazily on first touch.
+    const planTopic = topic
+    async function ensureTopicPlan(): Promise<TopicLessonPlan> {
+      const existing = planTopic.lesson_plan as TopicLessonPlan | undefined
+      if (existing && Array.isArray(existing.pages) && existing.pages.length >= plannedPages) {
+        return existing
+      }
+      const pageFocuses: string[] = Array.isArray(planTopic.page_focuses) && planTopic.page_focuses.length
+        ? planTopic.page_focuses.map((entry: any, i: number) => String(entry?.focus ?? fallbackPageFocus(planTopic, i + 1)))
+        : Array.from({ length: plannedPages }, (_, i) => fallbackPageFocus(planTopic, i + 1))
+      const plan = await analyzeTopicPlan({
+        course, topic: planTopic, plannedPages, pageFocuses, mapPointer: pointer.text, memory,
+      })
+      await db.collection('topics').updateOne(
+        { _id: params.topicId as any, course_id: courseId },
+        { $set: { lesson_plan: plan, updated_at: new Date() } },
+      )
+      return plan
+    }
+
+    // Lesson research runs in parallel with whatever architecture work we do.
+    // Source-based courses skip it entirely — lessons must stay traceable to
+    // the uploaded material, and web research would inject outside content.
+    const researchPromise = String(course.mode ?? '') === 'source_grounded'
+      ? Promise.resolve({ found: false, context: '', sources: [] })
+      : researchLessonConcept({
+          courseTitle: course.title ?? course.topic ?? '',
+          topicTitle: topic.title ?? '',
+          focus,
+        })
+
+    // Ad-hoc requests (custom focus / regeneration) get a fresh per-page brief —
+    // the cached topic plan didn't account for the ad-hoc intent.
+    const isAdHoc = Boolean(customInstruction || effectiveApproach)
+    let learningArchitecture: LearningArchitectureBrief | undefined
+    if (isAdHoc) {
+      learningArchitecture = await analyzeLearningArchitecture(perPageBriefArgs)
+    } else {
+      const plan = await ensureTopicPlan()
+      const planned = plan.pages.find((p) => p.page_number === pageNumber)
+      if (!planned) {
+        // page beyond the planned range → fall back to a per-page brief
+        learningArchitecture = await analyzeLearningArchitecture(perPageBriefArgs)
+      } else if (planned.content_kind === 'full_page') {
+        // full pages use the planned brief; if the plan couldn't produce a valid one, repair lazily
+        learningArchitecture = planned.brief ?? await analyzeLearningArchitecture(perPageBriefArgs)
+      } else {
+        // simple page (bridge/section/example/skip) → no architecture brief needed (#3)
+        learningArchitecture = undefined
+      }
+    }
+
+    const lessonResearch = await researchPromise
 
     const generated = await generateTopicPage({
       course,
@@ -193,13 +248,17 @@ export async function POST(
       approach: effectiveApproach,
       customInstruction,
       lessonResearch: lessonResearch.found ? lessonResearch.context : undefined,
+      personalizationDirective: buildPersonalizationDirective(learnerProfile),
     })
 
     // Validate page against architecture brief. Mismatches are warnings, not hard errors —
     // the brief is a teaching guide, not a contract the generator must satisfy perfectly.
-    const architectureWarnings = validateGeneratedPageAgainstArchitecture(generated, learningArchitecture)
-    if (architectureWarnings.length) {
-      console.warn('[pageGen] Architecture validation warnings for topic', params.topicId, ':', architectureWarnings)
+    // Simple pages carry no brief, so there is nothing to validate against.
+    if (learningArchitecture) {
+      const architectureWarnings = validateGeneratedPageAgainstArchitecture(generated, learningArchitecture)
+      if (architectureWarnings.length) {
+        console.warn('[pageGen] Architecture validation warnings for topic', params.topicId, ':', architectureWarnings)
+      }
     }
 
     if (!generated.should_generate_page || generated.content_kind === 'skip') {
@@ -214,9 +273,9 @@ export async function POST(
         content_kind: generated.content_kind,
         reason: generated.decision_reason,
         next_topic_id: nextTopic ? String(nextTopic._id) : null,
-        learning_architecture: learningArchitecture,
-        target_understanding: learningArchitecture.target_understanding,
-        retention_hooks: learningArchitecture.retention_hooks,
+        learning_architecture: learningArchitecture ?? null,
+        target_understanding: learningArchitecture?.target_understanding ?? null,
+        retention_hooks: learningArchitecture?.retention_hooks ?? null,
         created_at: new Date(),
       })
       await db.collection('topics').updateOne(
@@ -306,40 +365,42 @@ export async function POST(
         created_at: new Date(),
       })
     }
-    const architectureEvents = [
-      {
-        event_type: 'learning_architecture_created',
-        target_understanding: learningArchitecture.target_understanding,
-        page_sequence_role: learningArchitecture.page_sequence_role,
-        recommended_content_kind: learningArchitecture.recommended_content_kind,
-      },
-      learningArchitecture.prior_knowledge_repair.length
-        ? {
-            event_type: 'prior_knowledge_repair_planned',
-            prior_knowledge_repair: learningArchitecture.prior_knowledge_repair,
-          }
-        : null,
-      learningArchitecture.likely_misconceptions.length
-        ? {
-            event_type: 'misconception_risk_identified',
-            likely_misconceptions: learningArchitecture.likely_misconceptions,
-          }
-        : null,
-      learningArchitecture.retention_hooks.retrieval_prompt
-        ? {
-            event_type: 'retrieval_hook_created',
-            retrieval_prompt: learningArchitecture.retention_hooks.retrieval_prompt,
-            revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
-          }
-        : null,
-      learningArchitecture.retention_hooks.transfer_prompt
-        ? {
-            event_type: 'transfer_hook_created',
-            transfer_prompt: learningArchitecture.retention_hooks.transfer_prompt,
-            revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
-          }
-        : null,
-    ].filter(Boolean)
+    const architectureEvents = learningArchitecture
+      ? [
+          {
+            event_type: 'learning_architecture_created',
+            target_understanding: learningArchitecture.target_understanding,
+            page_sequence_role: learningArchitecture.page_sequence_role,
+            recommended_content_kind: learningArchitecture.recommended_content_kind,
+          },
+          learningArchitecture.prior_knowledge_repair.length
+            ? {
+                event_type: 'prior_knowledge_repair_planned',
+                prior_knowledge_repair: learningArchitecture.prior_knowledge_repair,
+              }
+            : null,
+          learningArchitecture.likely_misconceptions.length
+            ? {
+                event_type: 'misconception_risk_identified',
+                likely_misconceptions: learningArchitecture.likely_misconceptions,
+              }
+            : null,
+          learningArchitecture.retention_hooks.retrieval_prompt
+            ? {
+                event_type: 'retrieval_hook_created',
+                retrieval_prompt: learningArchitecture.retention_hooks.retrieval_prompt,
+                revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
+              }
+            : null,
+          learningArchitecture.retention_hooks.transfer_prompt
+            ? {
+                event_type: 'transfer_hook_created',
+                transfer_prompt: learningArchitecture.retention_hooks.transfer_prompt,
+                revisit_concepts: learningArchitecture.retention_hooks.revisit_concepts,
+              }
+            : null,
+        ].filter(Boolean)
+      : []
 
     if (architectureEvents.length) {
       await db.collection('learningEvents').insertMany(

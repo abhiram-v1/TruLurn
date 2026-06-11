@@ -1,7 +1,7 @@
 import type { SkillPrompt } from '@/lib/ai/skills/types'
 
-// Strip fields the map builder never reads: description, structure_reasoning,
-// source_limitations, complexity narrative. Only structural data is needed.
+// Strip fields the map builder never reads. Keep source_sequence_policy because
+// source-grounded exam material should preserve uploaded order when appropriate.
 function slimCurriculum(raw: unknown): unknown {
   if (!raw || typeof raw !== 'object') return raw
   const c = raw as any
@@ -13,12 +13,18 @@ function slimCurriculum(raw: unknown): unknown {
     depth: t.depth,
     estimated_pages: t.estimated_pages,
     node_type: t.node_type,
+    importance: t.importance,
+    role: t.role,
+    spine_candidate: Boolean(t.spine_candidate),
+    spine_level: Number.isFinite(t.spine_level) ? Number(t.spine_level) : 0,
+    prerequisite_strength: t.prerequisite_strength ?? {},
     initial_state: t.initial_state,
     children: Array.isArray(t.children) ? t.children.map(slimTopic) : [],
   })
 
   return {
     title: c.title,
+    source_sequence_policy: c.source_sequence_policy,
     branches: Array.isArray(c.branches)
       ? c.branches.map((b: any) => ({
           id: b.id,
@@ -26,7 +32,7 @@ function slimCurriculum(raw: unknown): unknown {
           sections: Array.isArray(b.sections)
             ? b.sections.map((s: any) => ({
                 title: s.title,
-              topics: Array.isArray(s.topics)
+                topics: Array.isArray(s.topics)
                   ? s.topics.map(slimTopic)
                   : [],
               }))
@@ -77,6 +83,11 @@ Return:
       "learning_depth": "overview|standard|deep",
       "sequence_index": 0,
       "recommended_next_ids": ["next topic id"],
+      "importance": "core|supporting",
+      "role": "foundation|mechanism|application|tool|theory",
+      "spine_candidate": false,
+      "spine_level": 0,
+      "prerequisite_strength": { "prerequisite topic id": "hard|soft" },
       "is_optional": false,
       "covered_by_node_id": null,
       "prerequisites": ["topic id"],
@@ -88,62 +99,54 @@ Return:
     {
       "from_topic_id": "topic id",
       "to_topic_id": "topic id",
-      "edge_type": "hierarchy|prerequisite|semantic",
+      "edge_type": "hierarchy|prerequisite|recommended|semantic",
       "reason": "dependency reason"
     }
   ]
 }
 
-GRAPH TOPOLOGY — this is the most important section. Read it carefully before assigning prerequisites and recommended_next_ids.
+GRAPH TOPOLOGY
+- Truth beats visual complexity. Use a network only when the subject really has parallel prerequisites, fan-in, fan-out, or useful semantic links.
+- If source_sequence_policy is "preserve_uploaded_source_order", preserve the source/study order as the primary spine.
+- For source-grounded semester or exam material, the uploaded order is a strong signal. A mostly linear sequence is acceptable when it matches the documents.
+- For small curricula with fewer than 6 teachable topics, do not force fan-out or semantic links. Use the minimum edges needed to represent true sequence and dependency.
+- For broad technical courses, avoid fake linked lists. Use hub-and-spoke, layered DAG, or converging tracks when those structures are genuinely present.
 
-The graph rendered from this data must look like a knowledge network, not a linear chain.
-A chain (A→B→C→D→E→F) means every topic depends only on the one before it. This is almost never accurate and produces a useless graph. Avoid it.
+PREREQUISITE RULES
+- A prerequisite means the student genuinely cannot understand this topic without the prerequisite. It does not merely mean "this came earlier".
+- Sibling topics usually share a common prerequisite; they do not automatically depend on each other.
+- Foundational topics can enable multiple later topics. This creates useful fan-out when it is real.
+- Integration topics can require several earlier threads. This creates useful fan-in when it is real.
+- If uploaded sources are ordered Hashing, Indexing, Transactions, preserve that order unless the text explicitly states another prerequisite relationship.
 
-PREREQUISITE RULES — prerequisites must reflect genuine conceptual dependency:
-- Only list a topic as a prerequisite if the student genuinely cannot understand this topic without it. Not just "it comes earlier."
-- Most topics at the same conceptual level share the same prerequisites — they do NOT depend on each other.
-- A foundational topic (e.g. "Variables", "Functions") will be a prerequisite for MANY later topics. This is correct and desirable — it creates a fan-out shape.
-- An advanced topic that synthesises multiple threads will list several prerequisites. This creates a fan-in shape.
-- Siblings in the same section usually share a common prerequisite but do NOT depend on each other. Do not chain them.
-- If Topic A and Topic B are both required before Topic C, list both A and B as prerequisites of C.
+RECOMMENDED_NEXT_IDS RULES
+- Use recommended_next_ids as a study-sequence recommendation, not as proof of mastery or strict locking.
+- For source-grounded exam material, a single next pointer is valid when it follows the uploaded/source order.
+- For genuinely parallel topics, a foundational node may point to multiple directly enabled topics.
+- Do not create a single chain for broad courses just because arrays need an order.
 
-RECOMMENDED_NEXT_IDS RULES:
-- A foundational topic should point to ALL topics it directly enables — often 2-5 topics at once.
-- Do not reduce a fan-out to one link just because of ordering. If "Variables" enables both "Conditionals" and "Functions", point to both.
-- Avoid making recommended_next_ids a simple serial chain. That produces a linear linked list graph.
-- Only use a single next pointer when the subject is genuinely linear (e.g. a strict proof sequence).
-
-STRUCTURAL EDGE RULES:
-- Use prerequisite edges for every prerequisite relationship (not just hierarchy).
-- Use semantic edges to connect topics from different branches that share a concept or are commonly studied together.
-- Semantic edges make the graph network-like even across branches. Include at least one semantic edge per branch pair when there is a genuine conceptual link.
-- Avoid adding semantic edges just to add density. Each edge must have a real reason.
-
-GRAPH SHAPE TARGETS — aim for one of these topologies depending on the subject:
-- Hub-and-spoke: a few foundational nodes each fan out to a cluster of dependent topics. Common in most technical courses.
-- Layered DAG: 3-5 conceptual layers where each layer has multiple parallel topics. Avoid having all layers contain only one topic.
-- Converging tracks: two or more independent early tracks that merge at an integration topic. Common in courses combining theory and practice.
-- Linear (acceptable only): genuinely sequential subjects where each concept strictly requires the previous — proofs, algorithms, language learning stages. If the subject is linear, produce a linear graph. Do not force artificial branching.
-
-WHAT TO AVOID:
-- A→B→C→D→E→F→G (pure chain) — almost always wrong unless the subject is genuinely sequential
-- Every topic having exactly one prerequisite and one recommended_next — this means you created a linked list
-- Topics in the same section all depending on each other — they should share a common prerequisite instead
+STRUCTURAL EDGE RULES
+- Use hierarchy edges for parent -> child.
+- Use prerequisite edges only for true conceptual prerequisites.
+- Use recommended edges for useful next-study choices that are not hard prerequisites.
+- Use semantic edges only when the relationship would help learning, retrieval, or review.
+- Small source-grounded courses may have zero semantic edges.
+- Do not add semantic edges merely to make the graph look dense.
 
 Rules:
 - Preserve the curriculum's adaptive size. Do not compress it to a fixed number of topics.
 - Flatten recursive Traccia into the topics array while preserving parent_id, path_ids, path_titles, depth_level, is_leaf, and children_count.
+- Preserve importance, role, spine_candidate, spine_level, and prerequisite_strength from the curriculum. Do not silently replace them.
 - Containers are structural/context nodes. Teachable leaves should be learning_unit, bridge, example_unit, or assessment_unit.
 - Make positions zero-based among siblings under the same parent.
 - sequence_index is the recommended study order across teachable nodes in the branch; containers may share the order of their first child.
-- Create hierarchy edges for parent -> child, prerequisite edges for all prerequisite relationships, and semantic edges for cross-branch conceptual links.
-- Exactly one teachable LEAF should start as active: the first reachable leaf in the first branch. Do NOT set a container as the active node — containers cannot be opened directly.
+- Exactly one teachable LEAF should start as active: the first reachable leaf in the first branch. Do not set a container as the active node.
 - Locked topics must keep their prerequisites.
 
-BRANCH ID CONSISTENCY — CRITICAL:
+BRANCH ID CONSISTENCY - CRITICAL:
 - Every topic's branch_id MUST exactly match the id field of the branch it belongs to.
-- Copy the branch id string character-for-character into branch_id. Do NOT change dashes to underscores, do NOT change case, do NOT add prefixes.
-- Example: if the branch is { "id": "python-basics" }, every topic in that branch must have "branch_id": "python-basics" — not "python_basics", not "Python-Basics", not anything else.
+- Copy the branch id string character-for-character into branch_id. Do not change dashes to underscores, do not change case, do not add prefixes.
+- Example: if the branch is { "id": "python-basics" }, every topic in that branch must have "branch_id": "python-basics".
 - Mismatched branch_id causes the Atlas navigation to break.`,
   }
 }

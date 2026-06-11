@@ -1,8 +1,12 @@
+import { createHash } from 'crypto'
+
 type OpenAIGenerateInput = {
   system: string
   user: string
   model?: string
   purpose?: 'primary' | 'agent'
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  signal?: AbortSignal
   responseMimeType?: 'application/json' | 'text/plain'
   // When provided, uses json_schema structured output instead of json_object mode.
   // More reliable than json_object — enforces exact shape regardless of prompt length.
@@ -29,9 +33,31 @@ type OpenAIResponse = {
       sources?: Array<Record<string, unknown>>
     }
   }>
+  usage?: {
+    input_tokens?: number
+    output_tokens?: number
+    input_tokens_details?: { cached_tokens?: number }
+  }
   error?: {
     message?: string
   }
+}
+
+// Stable cache key per distinct system prompt — groups same-prefix requests so
+// OpenAI routes them to the same prompt cache, improving the hit rate on top of
+// the automatic prefix caching. Different prompt families (writer, planner,
+// graph, quiz) hash to different keys automatically.
+function promptCacheKey(system: string) {
+  return `tl_${createHash('sha1').update(system).digest('hex').slice(0, 24)}`
+}
+
+// Log prompt-cache effectiveness so caching is observable. Set LOG_AI_USAGE=1 to enable.
+function logOpenAIUsage(model: string, data: OpenAIResponse) {
+  if (process.env.LOG_AI_USAGE !== '1' || !data.usage) return
+  const input = data.usage.input_tokens ?? 0
+  const cached = data.usage.input_tokens_details?.cached_tokens ?? 0
+  const pct = input > 0 ? Math.round((cached / input) * 100) : 0
+  console.info(`[ai] ${model} input=${input} cached=${cached} (${pct}%) output=${data.usage.output_tokens ?? 0}`)
 }
 
 export type OpenAIWebSource = {
@@ -127,12 +153,14 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
     throw new Error('Missing OPENAI_API_KEY in .env.local')
   }
 
+  const model = selectOpenAIModel(input)
   const body: Record<string, unknown> = {
-    model: selectOpenAIModel(input),
+    model,
     input: [
       { role: 'system', content: input.system },
       { role: 'user', content: input.user },
     ],
+    prompt_cache_key: promptCacheKey(input.system),
   }
 
   if (input.responseSchema) {
@@ -153,6 +181,9 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       },
     }
   }
+  if (input.reasoningEffort) {
+    body.reasoning = { effort: input.reasoningEffort }
+  }
 
   const response = await fetch(OPENAI_ENDPOINT, {
     method: 'POST',
@@ -161,6 +192,7 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: input.signal,
   })
 
   const data = (await response.json()) as OpenAIResponse
@@ -168,6 +200,8 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
   if (!response.ok) {
     throw new Error(data.error?.message ?? `OpenAI request failed with status ${response.status}`)
   }
+
+  logOpenAIUsage(model, data)
 
   const text = extractOutputText(data)
 
@@ -188,9 +222,10 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
     throw new Error('Missing OPENAI_API_KEY in .env.local')
   }
 
+  const model = input.model ?? process.env.OPENAI_RESEARCH_MODEL ?? selectOpenAIModel(input)
   async function send(toolType: 'web_search' | 'web_search_preview') {
     const body: Record<string, unknown> = {
-      model: input.model ?? process.env.OPENAI_RESEARCH_MODEL ?? selectOpenAIModel(input),
+      model,
       input: [
         { role: 'system', content: input.system },
         { role: 'user', content: input.user },
@@ -202,6 +237,7 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
         },
       ],
       tool_choice: { type: toolType },
+      prompt_cache_key: promptCacheKey(input.system),
     }
 
     // JSON mode (response_format: json_object) is incompatible with web search tools —
@@ -232,6 +268,8 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
   if (!response.ok) {
     throw new Error(data.error?.message ?? `OpenAI web search request failed with status ${response.status}`)
   }
+
+  logOpenAIUsage(model, data)
 
   const text = extractOutputText(data)
 

@@ -68,7 +68,11 @@ async function createSourceChunks(
     let title: string | null = null
     let body = trimmed
 
-    if (firstLine.startsWith('Source: ')) {
+    const numberedSource = firstLine.match(/^Source\s+\d+:\s*(.+)$/i)
+    if (numberedSource) {
+      title = numberedSource[1]?.trim() || null
+      body = firstNewline >= 0 ? trimmed.slice(firstNewline + 1).trim() : ''
+    } else if (firstLine.startsWith('Source: ')) {
       title = firstLine.slice('Source: '.length).trim() || null
       body = firstNewline >= 0 ? trimmed.slice(firstNewline + 1).trim() : ''
     }
@@ -199,6 +203,73 @@ function findCurriculumTopic(curriculum: any, topicId: string) {
   return null
 }
 
+/**
+ * Walk the curriculum tree and build a canonical topicId → branchId map.
+ *
+ * The curriculum is the authoritative source for which branch every topic
+ * belongs to. Using this instead of trusting the map builder's topic.branch_id
+ * eliminates the entire class of dash/underscore/case inconsistency bugs — the
+ * map builder AI never needs to copy the branch id string correctly because we
+ * never use what it wrote for branch assignment.
+ */
+function buildTopicToBranchMap(curriculum: any): Map<string, string> {
+  const result = new Map<string, string>()
+
+  function visitTopic(topic: any, branchId: string) {
+    if (!topic?.id) return
+    result.set(String(topic.id), branchId)
+    for (const child of topic.children ?? []) {
+      visitTopic(child, branchId)
+    }
+  }
+
+  for (const branch of curriculum?.branches ?? []) {
+    const branchId = String(branch.id ?? '')
+    if (!branchId) continue
+    for (const section of branch.sections ?? []) {
+      for (const topic of section.topics ?? []) {
+        visitTopic(topic, branchId)
+      }
+    }
+  }
+
+  return result
+}
+
+/**
+ * Walk the curriculum tree in study order and build topicId → global sequence.
+ *
+ * The curriculum's traversal order (branch → section → topic → children) IS the
+ * intended study sequence — it's what the learner reviewed and approved in the
+ * preview. The map builder's own sequence_index is AI output that is not
+ * guaranteed to be globally consistent across branches, and trusting it shuffles
+ * everything ordered by sequence: the Atlas, graph staging, and next-topic
+ * resolution. Like branch assignment, sequence comes from the curriculum only.
+ */
+function buildCurriculumSequenceMap(curriculum: any): Map<string, number> {
+  const result = new Map<string, number>()
+  let cursor = 0
+
+  function visitTopic(topic: any) {
+    if (!topic?.id) return
+    result.set(String(topic.id), cursor)
+    cursor += 1
+    for (const child of topic.children ?? []) {
+      visitTopic(child)
+    }
+  }
+
+  for (const branch of curriculum?.branches ?? []) {
+    for (const section of branch.sections ?? []) {
+      for (const topic of section.topics ?? []) {
+        visitTopic(topic)
+      }
+    }
+  }
+
+  return result
+}
+
 function normalizeNodeType(topic: any) {
   const type = String(topic.node_type ?? '').trim()
   if (
@@ -258,6 +329,8 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     mode: input.mode,
     learning_control: input.learningControl,
     course_depth: input.courseDepth,
+    knowledge_level: input.knowledgeLevel,
+    learning_purpose: input.learningPurpose,
     progression_policy: {
       mode: input.learningControl,
       allow_agent_pruning: input.learningControl !== 'guided',
@@ -268,16 +341,39 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     learning_style_reason: input.learningStyleReason ?? null,
     research_confidence: input.researchReport?.research_confidence ?? null,
     source_text: input.sourceText || null,
+    // Teaching-style profile of the uploaded sources — lesson generation reads
+    // this to write every page in the instructor's voice.
+    source_profile: input.sourceProfile ?? null,
     source_limitations: input.sourceLimitations,
+    // Source-based learning boundary: background the sources assume and
+    // follow-ups they only mention. Surfaced to the student, never taught.
+    out_of_scope: input.mode === 'source_grounded'
+      ? {
+          assumed_prerequisites: Array.isArray((input.curriculum as any)?.out_of_scope?.assumed_prerequisites)
+            ? (input.curriculum as any).out_of_scope.assumed_prerequisites.map(String).slice(0, 15)
+            : [],
+          mentioned_followups: Array.isArray((input.curriculum as any)?.out_of_scope?.mentioned_followups)
+            ? (input.curriculum as any).out_of_scope.mentioned_followups.map(String).slice(0, 15)
+            : [],
+        }
+      : null,
     summary: courseSummary.summary,
     complexity: courseSummary.complexity,
     structure_reasoning: courseSummary.structure_reasoning,
     branch_count: courseSummary.branch_count,
     topic_count: courseSummary.topic_count,
     status: 'ready',
+    validation_report: (input.map as any)?.validation_report ?? null,
     created_at: new Date(),
     updated_at: new Date(),
   })
+
+  // Derive canonical branchId for every topic from the curriculum tree — not from
+  // whatever the map builder AI wrote in topic.branch_id. This is the single source
+  // of truth for branch assignment and removes the dash/underscore/case class of bugs.
+  const topicToBranchMap = buildTopicToBranchMap(input.curriculum)
+  // Same principle for study order: global sequence comes from curriculum traversal.
+  const curriculumSequence = buildCurriculumSequenceMap(input.curriculum)
 
   const idMap = new Map<string, string>()
   topics.forEach((topic: any) => {
@@ -312,10 +408,49 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       ? Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
       : Math.max(0, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 0))
 
+    // Use the curriculum-derived branch id. Fall back to the map builder's value only
+    // for topics the curriculum doesn't know about (shouldn't happen, but be safe).
+    const canonicalBranchId = topicToBranchMap.get(topic.id) ?? topic.branch_id
+
+    // ── Graph tags (AI-emitted; remap any id keys to stable ids) ──
+    const importanceTag = ['core', 'supporting'].includes(String(curriculumTopic?.importance ?? topic.importance))
+      ? String(curriculumTopic?.importance ?? topic.importance)
+      : null
+    const roleTag = ['foundation', 'mechanism', 'application', 'tool', 'theory'].includes(String(curriculumTopic?.role ?? topic.role))
+      ? String(curriculumTopic?.role ?? topic.role)
+      : null
+    const spineCandidate = Boolean(curriculumTopic?.spine_candidate ?? topic.spine_candidate ?? false)
+    const spineLevel = Number.isFinite(curriculumTopic?.spine_level ?? topic.spine_level)
+      ? Number(curriculumTopic?.spine_level ?? topic.spine_level)
+      : 0
+    // Source-based courses: was this topic taught by the upload, or
+    // reconstructed to complete the subject (legacy)? Lesson generation uses
+    // this to decide how hard to lean on retrieved source chunks.
+    const sourceCoverage = ['covered', 'inferred'].includes(String(curriculumTopic?.source_coverage ?? topic.source_coverage))
+      ? String(curriculumTopic?.source_coverage ?? topic.source_coverage)
+      : null
+    // Source-based organization: prequel (foundations) / current / sequel
+    // (next steps), all detected within the uploaded material itself.
+    const conceptGroup = ['prequel', 'current', 'sequel'].includes(String(curriculumTopic?.concept_group ?? topic.concept_group))
+      ? String(curriculumTopic?.concept_group ?? topic.concept_group)
+      : null
+    const sourceAnchor = String(curriculumTopic?.source_anchor ?? topic.source_anchor ?? '').trim() || null
+    // Prefer the validated map topic's strengths (sanitizeGeneratedMap rewrote them);
+    // fall back to the raw curriculum tag only when validation didn't run.
+    const rawStrength = (topic.prerequisite_strength ?? curriculumTopic?.prerequisite_strength) as
+      | Record<string, string> | undefined
+    const prerequisiteStrength: Record<string, string> = {}
+    if (rawStrength && typeof rawStrength === 'object') {
+      for (const [rawId, strength] of Object.entries(rawStrength)) {
+        if (strength !== 'hard' && strength !== 'soft') continue
+        prerequisiteStrength[idMap.get(rawId) ?? rawId] = strength
+      }
+    }
+
     return {
       _id: topicId as any,
       course_id: courseId,
-      branch_id: topic.branch_id,
+      branch_id: canonicalBranchId,
       section: topic.section || 'Core',
       title: topic.title,
       description,
@@ -329,15 +464,27 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       children_count: childrenCount,
       learning_depth: topic.learning_depth ?? (topic.depth === 'critical' ? 'deep' : topic.depth === 'light' ? 'overview' : 'standard'),
       position: Number.isFinite(topic.position) ? topic.position : index,
-      sequence_index: Number.isFinite(topic.sequence_index) ? Number(topic.sequence_index) : index,
+      // Curriculum traversal order first; the map builder's own sequence_index is
+      // only a fallback for topics the curriculum doesn't know about.
+      sequence_index: curriculumSequence.get(String(topic.id))
+        ?? (Number.isFinite(topic.sequence_index) ? Number(topic.sequence_index) : index),
       recommended_next_ids: (topic.recommended_next_ids || []).map((id: string) => idMap.get(id) ?? id),
       is_optional: Boolean(topic.is_optional),
       covered_by_node_id: topic.covered_by_node_id ? idMap.get(topic.covered_by_node_id) ?? topic.covered_by_node_id : null,
       state: 'locked' as const,    // all start locked; exactly one is activated below
       understanding_level: null,
       prerequisites: (topic.prerequisites || []).map((id: string) => idMap.get(id) ?? id),
+      prerequisite_strength: prerequisiteStrength,
       depth: topic.depth ?? null,
       estimated_pages: estimatedPages,
+      // AI graph tags (null when the AI did not supply them — graph falls back to heuristics)
+      importance_tag: importanceTag,
+      role: roleTag,
+      spine_candidate: spineCandidate,
+      spine_level: spineLevel,
+      source_coverage: sourceCoverage,
+      concept_group: conceptGroup,
+      source_anchor: sourceAnchor,
       created_at: new Date(),
       updated_at: new Date(),
     }
@@ -358,20 +505,23 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     ? mapActiveCandidate
     : null
 
-  // Normalise helper for the branch-id match below (reused in branchesToInsert too).
-  function normaliseBranchSlugForActive(raw: string) {
-    return String(raw ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-  }
-  const normFirstBranch = normaliseBranchSlugForActive(firstBranch.id)
+  // The first branch's canonical id — topics now carry exactly this string.
+  const firstBranchCanonicalId = String(
+    (input.curriculum?.branches ?? [])[0]?.id ?? firstBranch.id ?? ''
+  )
 
+  // Fallbacks resolve in study order (sequence_index), not map-array order.
+  const bySequence = (candidates: any[]) =>
+    candidates.reduce(
+      (best: any, t: any) =>
+        !best || Number(t.sequence_index ?? 0) < Number(best.sequence_index ?? 0) ? t : best,
+      null,
+    )
   const firstActiveTopic =
     mapActiveLeaf
-    ?? topicsToInsert.find((t: any) => {
-        const nb = normaliseBranchSlugForActive(String(t.branch_id ?? ''))
-        return (nb === normFirstBranch || nb.endsWith(`-${normFirstBranch}`) || normFirstBranch.endsWith(`-${nb}`))
-          && isTeachableTopic(t)
-      })
-    ?? topicsToInsert.find((t: any) => isTeachableTopic(t))
+    // topics now carry the canonical branch id, so a simple equality check is enough.
+    ?? bySequence(topicsToInsert.filter((t: any) => t.branch_id === firstBranchCanonicalId && isTeachableTopic(t)))
+    ?? bySequence(topicsToInsert.filter((t: any) => isTeachableTopic(t)))
     ?? topicsToInsert[0]
 
   // Mutate the chosen leaf and all its ancestor containers to active.
@@ -389,28 +539,51 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     return String(raw ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
   }
 
+  // "First branch" means the CURRICULUM's first branch — the map builder's branch
+  // array order is AI output and may differ. Fall back to map index 0 only when no
+  // map branch resolves to the curriculum's first branch.
+  const normFirstBranch = normaliseBranchSlug(firstBranchCanonicalId)
+  const canonicalIdOfMapBranch = (branch: any): string => {
+    const curriculumBranch = (input.curriculum?.branches ?? []).find(
+      (b: any) => normaliseBranchSlug(String(b.id ?? '')) === normaliseBranchSlug(String(branch.id ?? ''))
+    )
+    return String(curriculumBranch?.id ?? branch.id ?? '')
+  }
+  const anyBranchMatchesFirst = branches.some(
+    (branch: any) => normaliseBranchSlug(canonicalIdOfMapBranch(branch)) === normFirstBranch,
+  )
+
   const branchesToInsert = branches.map((branch: any, index: number) => {
-    const normBranchId = normaliseBranchSlug(branch.id)
+    // Canonical branch id from the curriculum (same source topics now use).
+    // Use the curriculum branch record directly so the stored branch_key is always
+    // the curriculum's own id, never the potentially-inconsistent map builder copy.
+    const canonicalBranchId = canonicalIdOfMapBranch(branch)
+    const curriculumBranch = (input.curriculum?.branches ?? []).find(
+      (b: any) => normaliseBranchSlug(String(b.id ?? '')) === normaliseBranchSlug(String(canonicalBranchId))
+    )
+
+    // Topics were written with canonicalBranchId from the curriculum map, so a
+    // simple normalised-exact match is now sufficient — no fuzzy endsWith needed.
+    const normBranchId = normaliseBranchSlug(canonicalBranchId)
     const branchTopics = topicsToInsert.filter((topic: any) => {
-      const normTopicBranchId = normaliseBranchSlug(String(topic.branch_id ?? ''))
-      // Exact match after normalisation, or topic branch_id is a courseId-prefixed slug that
-      // ends with the normalised branch id (e.g. "courseId:python-basics" → "python-basics").
-      return (
-        normTopicBranchId === normBranchId ||
-        normTopicBranchId.endsWith(`-${normBranchId}`) ||
-        normBranchId.endsWith(`-${normTopicBranchId}`)
-      )
+      return normaliseBranchSlug(String(topic.branch_id ?? '')) === normBranchId
     })
-    const isFirst = index === 0
-    const teachableBranchTopics = branchTopics.filter(isTeachableTopic)
+    const isFirst = anyBranchMatchesFirst
+      ? normBranchId === normFirstBranch
+      : index === 0
+    // Study order, not map-array order — the branch entry point is its first
+    // teachable topic in the curriculum sequence.
+    const teachableBranchTopics = branchTopics
+      .filter(isTeachableTopic)
+      .sort((a: any, b: any) => Number(a.sequence_index ?? 0) - Number(b.sequence_index ?? 0))
     const activeTopic = isFirst ? firstActiveTopic : teachableBranchTopics[0] ?? branchTopics[0]
 
     return {
-      _id: makeStableNodeId(courseId, branch.id) as any,
-      branch_key: branch.id,
+      _id: makeStableNodeId(courseId, canonicalBranchId) as any,
+      branch_key: canonicalBranchId,
       course_id: courseId,
-      title: branch.title,
-      description: input.curriculum?.branches?.find((item: any) => item.id === branch.id)?.description || branch.description || branch.title,
+      title: curriculumBranch?.title ?? branch.title,
+      description: curriculumBranch?.description ?? branch.description ?? branch.title,
       state: isFirst ? 'in_progress' : 'not_started',
       active_topic_id: activeTopic ? String(activeTopic._id) : null,
       topic_count: teachableBranchTopics.length || branchTopics.length,
@@ -424,36 +597,23 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   const edgesToInsert = structuralEdges.map((edge: any) => {
     const from = idMap.get(edge.from_topic_id) ?? edge.from_topic_id
     const to = idMap.get(edge.to_topic_id) ?? edge.to_topic_id
-    edgeKeys.add(`${from}::${to}::${edge.edge_type ?? 'semantic'}`)
+    const edgeType = ['hierarchy', 'prerequisite', 'recommended', 'semantic'].includes(String(edge.edge_type))
+      ? String(edge.edge_type)
+      : 'semantic'
+    edgeKeys.add(`${from}::${to}::${edgeType}`)
     return {
-    _id: crypto.randomUUID() as any,
-    course_id: courseId,
-    from_topic_id: from,
-    to_topic_id: to,
-    edge_type: edge.edge_type ?? 'semantic',
-    reason: edge.reason ?? null,
-    strength: 1,
-    created_at: new Date(),
-  }})
+      _id: crypto.randomUUID() as any,
+      course_id: courseId,
+      from_topic_id: from,
+      to_topic_id: to,
+      edge_type: edgeType,
+      reason: edge.reason ?? null,
+      strength: edgeType === 'prerequisite' ? 3 : edgeType === 'recommended' ? 2 : 1,
+      created_at: new Date(),
+    }
+  })
 
   for (const topic of topicsToInsert) {
-    if (topic.parent_id) {
-      const key = `${topic.parent_id}::${topic._id}::hierarchy`
-      if (!edgeKeys.has(key)) {
-        edgeKeys.add(key)
-        edgesToInsert.push({
-          _id: crypto.randomUUID() as any,
-          course_id: courseId,
-          from_topic_id: String(topic.parent_id),
-          to_topic_id: String(topic._id),
-          edge_type: 'hierarchy',
-          reason: `${topic.title} belongs under ${topic.path_titles?.at(-2) ?? 'its parent'}.`,
-          strength: 1,
-          created_at: new Date(),
-        })
-      }
-    }
-
     for (const prereqId of topic.prerequisites ?? []) {
       const key = `${prereqId}::${topic._id}::prerequisite`
       if (!edgeKeys.has(key)) {
@@ -465,7 +625,61 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
           to_topic_id: String(topic._id),
           edge_type: 'prerequisite',
           reason: `${prereqId} is a prerequisite for ${topic.title}.`,
-          strength: 2,
+          // Match structural prerequisite edges (strength 3) — the same relationship
+          // must not render at a different weight depending on which source emitted it.
+          strength: 3,
+          created_at: new Date(),
+        })
+      }
+    }
+  }
+
+  // Preserve explicit recommendations from the curriculum rather than manufacturing
+  // a learning chain for every pair of neighboring topics.
+  for (const topic of topicsToInsert) {
+    for (const nextId of topic.recommended_next_ids ?? []) {
+      if (!topicsToInsert.some((candidate: any) => String(candidate._id) === String(nextId))) continue
+      const key = `${topic._id}::${nextId}::recommended`
+      if (edgeKeys.has(key)) continue
+      edgeKeys.add(key)
+      edgesToInsert.push({
+        _id: crypto.randomUUID() as any,
+        course_id: courseId,
+        from_topic_id: String(topic._id),
+        to_topic_id: String(nextId),
+        edge_type: 'recommended',
+        reason: `"${topic.title}" is a useful next step before continuing the course.`,
+        strength: 2,
+        created_at: new Date(),
+      })
+    }
+  }
+
+  if (input.mode === 'source_grounded') {
+    const teachableByBranch = new Map<string, Array<(typeof topicsToInsert)[number]>>()
+    for (const topic of topicsToInsert) {
+      if (!isTeachableTopic(topic)) continue
+      const branchId = String(topic.branch_id)
+      if (!teachableByBranch.has(branchId)) teachableByBranch.set(branchId, [])
+      teachableByBranch.get(branchId)!.push(topic)
+    }
+
+    for (const orderedTopics of teachableByBranch.values()) {
+      orderedTopics.sort((a, b) => Number(a.sequence_index ?? a.position ?? 0) - Number(b.sequence_index ?? b.position ?? 0))
+      for (let i = 0; i < orderedTopics.length - 1; i++) {
+        const from = String(orderedTopics[i]._id)
+        const to = String(orderedTopics[i + 1]._id)
+        const key = `${from}::${to}::sequence`
+        if (edgeKeys.has(key)) continue
+        edgeKeys.add(key)
+        edgesToInsert.push({
+          _id: crypto.randomUUID() as any,
+          course_id: courseId,
+          from_topic_id: from,
+          to_topic_id: to,
+          edge_type: 'sequence',
+          reason: `The uploaded material places "${orderedTopics[i].title}" before "${orderedTopics[i + 1].title}".`,
+          strength: 3,
           created_at: new Date(),
         })
       }
@@ -477,6 +691,14 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   if (edgesToInsert.length) {
     await db.collection('topicEdges').insertMany(edgesToInsert)
   }
+  // Preserve the raw curriculum tree and map output for future graph re-derivation.
+  await db.collection('curricula').insertOne({
+    _id: courseId as any,
+    course_id: courseId,
+    curriculum: input.curriculum ?? null,
+    map: input.map ?? null,
+    created_at: new Date(),
+  })
   await db.collection('courseSummaries').insertOne({
     _id: crypto.randomUUID() as any,
     course_id: courseId,

@@ -337,6 +337,8 @@ export default async function LearnTopicPage({
     page_number: activePage.page_number,
     content: activePage.content,
     created_at: activePage.created_at.toISOString(),
+    key_concepts: Array.isArray(activePage.key_concepts) ? activePage.key_concepts.map(String) : undefined,
+    summary: activePage.summary ? String(activePage.summary) : null,
     topic_depth: activePage.topic_depth ?? undefined,
     concept_kind: activePage.concept_kind ?? undefined,
     content_kind: activePage.content_kind ?? undefined,

@@ -9,6 +9,8 @@ import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { parseGeminiJson } from '@/lib/ai/gemini/json'
 import { determineLessonStyle } from '@/lib/ai/skills/lessonStyle'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
+import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
+import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
 
 const UNSUITABLE_MESSAGE =
   'This topic is not suitable for structured course creation. Please enter a subject that can be taught through multiple lessons, such as programming, mathematics, design, business, science, languages, or other professional skills.'
@@ -32,6 +34,7 @@ async function updateJobStage(
     extracting_sources: 'Extracting Sources',
     researching_curriculum: 'Researching Curriculum',
     building_curriculum: 'Building Curriculum',
+    awaiting_curriculum_approval: 'Awaiting Your Review',
     building_atlas: 'Building Atlas',
     building_traccia: 'Building Traccia',
     connecting_prerequisites: 'Connecting Prerequisites',
@@ -131,7 +134,7 @@ export async function GET(
         }
 
         // Run worker logic
-        const input = currentJob.input
+        let input = currentJob.input
         const completedStages = currentJob.completed_stages || []
 
         // Stage 1: validating_input
@@ -150,10 +153,22 @@ export async function GET(
         }
 
         // Stage 2: extracting_sources
+        // Ordering rewrites the source sequence; profiling learns how the material
+        // teaches and which full subject it belongs to. Independent — run in parallel.
         if (input.mode === 'source_grounded' && !completedStages.includes('extracting_sources')) {
-          await updateStage('extracting_sources', 'Parsing uploaded documents and notes...', completedStages)
+          await updateStage('extracting_sources', 'Studying how your material teaches and inferring source order...', completedStages)
+          const baseInput = {
+            ...input,
+            topic: input.topic ?? input.goals,
+            sourceLimitations: input.sourceLimitations ?? [],
+          }
+          const [orderedInput, sourceProfile] = await Promise.all([
+            orderSourceGroundedInput(baseInput),
+            analyzeSourceProfile({ goals: baseInput.goals, sourceText: baseInput.sourceText ?? '' }),
+          ])
+          input = { ...orderedInput, sourceProfile }
           completedStages.push('extracting_sources')
-          await updateStage('extracting_sources', 'Sources extracted successfully.', completedStages)
+          await updateStage('extracting_sources', 'Sources analyzed: teaching style extracted and order inferred.', completedStages, { input })
         }
 
         // Stage 3: researching_curriculum
@@ -191,6 +206,31 @@ export async function GET(
 
         currentJob = await db.collection('generationJobs').findOne({ _id: jobId, user_id: userId })
 
+        // Curriculum preview gate: pause here so the learner can review and edit the
+        // roadmap before we commit to building the atlas, traccia, and pages. The job
+        // resumes from this exact point once the curriculum is approved (the approval
+        // endpoint sets curriculum_approved + status:running and the client reconnects).
+        if (input.previewCurriculum !== false && !currentJob?.curriculum_approved) {
+          if (!isClosed) {
+            const awaitingJob = await updateJobStage(
+              db,
+              jobId,
+              userId,
+              'awaiting_curriculum_approval',
+              'Curriculum ready for your review.',
+              completedStages,
+              { status: 'awaiting_approval' },
+            )
+            if (awaitingJob) {
+              sendSSE(controller, 'update', awaitingJob)
+            }
+          }
+          clearInterval(heartbeatInterval)
+          try { controller.close() } catch (e) {}
+          isClosed = true
+          return
+        }
+
         // Stage 5: building_atlas
         if (!completedStages.includes('building_atlas')) {
           await updateStage('building_atlas', 'Mapping prerequisites and dependency connections...', completedStages)
@@ -210,6 +250,11 @@ export async function GET(
           await updateStage('building_traccia', 'Ordering topics so each idea prepares you for the next...', completedStages)
           let learningStyle = currentJob.learningStyle
           let learningStyleReason = currentJob.learningStyleReason
+          if (!learningStyle && input.teachingStyle && input.teachingStyle !== 'auto') {
+            // The student picked a teaching style at setup — skip the classifier.
+            learningStyle = input.teachingStyle
+            learningStyleReason = 'Chosen by the student at course setup.'
+          }
           if (!learningStyle) {
             const branchTitles = Array.isArray(currentJob.curriculum?.branches)
               ? currentJob.curriculum.branches.map((b: any) => String(b?.title ?? '')).filter(Boolean)

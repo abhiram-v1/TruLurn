@@ -14,7 +14,6 @@ export default function SetupPage({ searchParams }: { searchParams?: { job?: str
             TruLurn
           </Link>
         </div>
-        <Link className="button-subtle" href="/">Home</Link>
       </header>
       <div style={{ marginTop: 34 }}>
         <h1 className="page-heading">Build a curriculum</h1>

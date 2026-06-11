@@ -3,10 +3,45 @@ import { normalizeLessonMarkdown } from '@/lib/lesson-markdown'
 const DEFAULT_PAGE_CHAR_LIMIT = 1900
 
 function splitBlocks(markdown: string) {
-  return markdown
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean)
+  const source = normalizeLessonMarkdown(markdown)
+  const blocks: string[] = []
+  const lines = source.split(/\r?\n/)
+  let current: string[] = []
+  let table: string[] = []
+
+  function flushCurrent() {
+    const block = current.join('\n').trim()
+    if (block) blocks.push(block)
+    current = []
+  }
+
+  function flushTable() {
+    const block = table.join('\n').trim()
+    if (block) blocks.push(block)
+    table = []
+  }
+
+  for (const line of lines) {
+    const isTableLine = /^\s*\|.*\|\s*$/.test(line)
+    if (isTableLine) {
+      flushCurrent()
+      table.push(line)
+      continue
+    }
+
+    if (table.length) flushTable()
+
+    if (!line.trim()) {
+      flushCurrent()
+      continue
+    }
+
+    current.push(line)
+  }
+
+  flushTable()
+  flushCurrent()
+  return blocks
 }
 
 function isHeading(block: string) {
@@ -21,7 +56,7 @@ export function paginateLessonMarkdown(
   markdown: string,
   charLimit = DEFAULT_PAGE_CHAR_LIMIT,
 ) {
-  const blocks = splitBlocks(normalizeLessonMarkdown(markdown))
+  const blocks = splitBlocks(markdown)
   const pages: string[] = []
   let current: string[] = []
   let currentLength = 0

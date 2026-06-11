@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { CurriculumPreview } from '@/components/setup/CurriculumPreview'
 
 const REAL_STAGES = [
   {
@@ -11,8 +12,8 @@ const REAL_STAGES = [
   },
   {
     id: 'extracting_sources',
-    label: 'Extracting source documents',
-    status: 'Parsing uploaded materials and establishing boundaries...',
+    label: 'Analyzing source documents',
+    status: 'Learning how your material teaches and inferring its curriculum...',
     glyph: 'papers',
   },
   {
@@ -144,11 +145,18 @@ export function GeneratingOverlay({
   const [elapsed, setElapsed] = useState(0)
   const [quoteIndex, setQuoteIndex] = useState(0)
   const [quoteVisible, setQuoteVisible] = useState(true)
+  // Bumped after the user approves the curriculum, to re-open the SSE stream and
+  // let the worker resume from the curriculum-preview gate.
+  const [reconnectNonce, setReconnectNonce] = useState(0)
+  // Tracks whether we're paused at the curriculum gate, so the connection's
+  // close/onerror does not spin up a redundant polling loop while the user edits.
+  const awaitingRef = useRef(false)
 
   // Fetch / Connect SSE
   useEffect(() => {
     let eventSource: EventSource | null = null
     let pollInterval: NodeJS.Timeout | null = null
+    awaitingRef.current = false
 
     // Fetch initial state first
     fetch(`/api/generation-jobs/${jobId}`)
@@ -156,6 +164,7 @@ export function GeneratingOverlay({
       .then((data) => {
         if (data && !data.error) {
           setJob(data)
+          if (data.status === 'awaiting_approval') awaitingRef.current = true
         }
       })
       .catch((err) => console.error('Error fetching initial job status:', err))
@@ -174,6 +183,11 @@ export function GeneratingOverlay({
             }, 1000)
           } else if (updatedJob.status === 'failed') {
             eventSource?.close()
+          } else if (updatedJob.status === 'awaiting_approval') {
+            // Paused for review — close the stream and wait for the user to approve.
+            awaitingRef.current = true
+            eventSource?.close()
+            if (pollInterval) { clearInterval(pollInterval); pollInterval = null }
           }
         } catch (err) {
           console.error('Error parsing SSE update:', err)
@@ -182,6 +196,8 @@ export function GeneratingOverlay({
 
       eventSource.onerror = () => {
         eventSource?.close()
+        // Don't poll while paused at the curriculum gate — there's nothing to advance.
+        if (awaitingRef.current) return
         // Start polling fallback
         if (!pollInterval) {
           pollInterval = setInterval(async () => {
@@ -197,6 +213,10 @@ export function GeneratingOverlay({
                   }, 1000)
                 } else if (latestJob.status === 'failed') {
                   clearInterval(pollInterval!)
+                } else if (latestJob.status === 'awaiting_approval') {
+                  awaitingRef.current = true
+                  clearInterval(pollInterval!)
+                  pollInterval = null
                 }
               }
             } catch (err) {
@@ -213,7 +233,7 @@ export function GeneratingOverlay({
       eventSource?.close()
       if (pollInterval) clearInterval(pollInterval)
     }
-  }, [jobId])
+  }, [jobId, reconnectNonce])
 
   // Elapsed timer
   useEffect(() => {
@@ -272,6 +292,32 @@ export function GeneratingOverlay({
           <section className="course-gen-center">
             <p className="course-gen-status">Establishing connection to course architect...</p>
           </section>
+        </main>
+      </div>
+    )
+  }
+
+  // Curriculum review gate — show the editor instead of the progress spinner.
+  if (job.status === 'awaiting_approval' && job.curriculum) {
+    return (
+      <div className="course-gen-overlay course-gen-overlay--review" role="dialog" aria-label="Review curriculum">
+        <header className="course-gen-chrome">
+          <div className="course-gen-brand">
+            <span className="course-gen-brand-mark">T</span>
+            <span>TruLurn</span>
+          </div>
+          <span className="course-gen-running-label">Review curriculum</span>
+        </header>
+        <main className="course-gen-stage course-gen-stage--review">
+          <CurriculumPreview
+            jobId={jobId}
+            curriculum={job.curriculum}
+            onApproved={() => {
+              awaitingRef.current = false
+              setJob((prev: any) => ({ ...prev, status: 'running', stage: 'building_atlas' }))
+              setReconnectNonce((n) => n + 1)
+            }}
+          />
         </main>
       </div>
     )

@@ -89,7 +89,7 @@ function normalizeRole(value: unknown): PageSequenceRole {
   return 'introduce'
 }
 
-function normalizeBrief(raw: any): LearningArchitectureBrief {
+export function normalizeBrief(raw: any): LearningArchitectureBrief {
   const exampleStrategy = raw?.example_strategy ?? {}
   const activeProcessing = raw?.active_processing ?? {}
   const retentionHooks = raw?.retention_hooks ?? {}

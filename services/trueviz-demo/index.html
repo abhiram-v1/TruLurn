@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TruViz Preview — Neural Network Renderer</title>
+  <style>
+    :root {
+      --bg:     #fdf7ed;
+      --bg2:    #f4e3b2;
+      --text:   #050517;
+      --sub:    #7a7a7a;
+      --accent: #d36d4a;
+      --border: #d3d5d7;
+      --radius: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    /* ── Header ── */
+    .header {
+      padding: 20px 32px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+    }
+    .header h1 { font-size: 18px; font-weight: 700; }
+    .header span { color: var(--sub); font-size: 13px; }
+
+    /* ── Layout ── */
+    .shell {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 0;
+      min-height: calc(100vh - 57px);
+    }
+
+    /* ── Editor panel ── */
+    .editor-panel {
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+    }
+    .editor-header {
+      padding: 12px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--sub);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .editor-error {
+      padding: 8px 14px;
+      background: #fef9c3;
+      border-bottom: 1px solid #fde047;
+      font-size: 12px;
+      color: #713f12;
+      min-height: 32px;
+    }
+    .editor-textarea {
+      flex: 1;
+      border: none;
+      outline: none;
+      resize: none;
+      background: #0b0d16;
+      color: #e2e8f0;
+      font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 12.5px;
+      line-height: 1.7;
+      padding: 16px;
+      min-height: 340px;
+    }
+    .preset-list {
+      border-top: 1px solid var(--border);
+      overflow-y: auto;
+      max-height: 320px;
+    }
+    .preset-label {
+      padding: 8px 16px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--sub);
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .preset-btn {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 8px 16px;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      background: none;
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--text);
+      transition: background 0.1s;
+    }
+    .preset-btn:hover { background: var(--bg2); }
+    .preset-btn.active { background: rgba(211,109,74,0.1); color: var(--accent); font-weight: 500; }
+    .preset-name { display: block; font-weight: 500; }
+    .preset-desc { display: block; font-size: 11px; color: var(--sub); margin-top: 1px; }
+
+    /* ── Preview panel ── */
+    .preview-panel {
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .preview-label {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--sub);
+      margin-bottom: 16px;
+    }
+    .preview-output {
+      max-width: 700px;
+    }
+
+    /* ── TruViz card (matches globals.css) ── */
+    .trueviz-wrap {
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 12px rgba(5,5,23,0.14), 0 1px 3px rgba(5,5,23,0.08);
+    }
+    .trueviz-error {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5em;
+      padding: 10px 14px;
+      background: #fef9c3;
+      border: 1px solid #fde047;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #713f12;
+    }
+    .trueviz-error-label {
+      font-weight: 700;
+      font-size: 10px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: #92400e;
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>TruViz Preview</h1>
+  <span>Neural network renderer · standalone test page</span>
+</div>
+
+<div class="shell">
+
+  <!-- Left: editor -->
+  <div class="editor-panel">
+    <div class="editor-header">
+      <span>JSON spec</span>
+      <span style="font-weight:400;text-transform:none;letter-spacing:0">live preview →</span>
+    </div>
+    <div class="editor-error" id="parse-error"></div>
+    <textarea class="editor-textarea" id="spec-input" spellcheck="false"></textarea>
+    <div class="preset-list">
+      <div class="preset-label">Presets</div>
+      <div id="preset-buttons"></div>
+    </div>
+  </div>
+
+  <!-- Right: preview -->
+  <div class="preview-panel">
+    <div class="preview-label">Rendered output</div>
+    <div class="preview-output" id="preview-root"></div>
+  </div>
+
+</div>
+
+<!-- React + Babel (CDN, no install needed) -->
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LAYOUT = {
+  R: 22, LAYER_GAP: 160, NODE_GAP: 56,
+  PAD_X: 80, PAD_TOP: 20, TITLE_H: 38, LABEL_H: 52, PAD_BOTTOM: 18,
+  MAX_FULL: 7, E_TOP: 3, E_BTM: 2,
+}
+const COMPACT = {
+  R: 16, LAYER_GAP: 116, NODE_GAP: 42,
+  PAD_X: 60, PAD_TOP: 18, TITLE_H: 34, LABEL_H: 44, PAD_BOTTOM: 14,
+  MAX_FULL: 7, E_TOP: 3, E_BTM: 2,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Palette  (dark card on TruLurn's warm-cream page)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const P = {
+  bg:          '#0b0d16',
+  border:      '#1a1d2e',
+  input:       { fill: '#0f766e', stroke: '#2dd4bf', text: '#2dd4bf' },
+  hidden:      { fill: '#3730a3', stroke: '#818cf8', text: '#818cf8' },
+  output:      { fill: '#9a3412', stroke: '#ea580c', text: '#ea580c' },
+  hl:          { fill: '#92400e', stroke: '#fbbf24', text: '#fbbf24' },
+  conn:        'rgba(255,255,255,0.065)',
+  connHl:      '#fbbf24',
+  titleText:   '#e2e8f0',
+  subtitleText:'#64748b',
+  labelText:   '#94a3b8',
+  ellipsis:    '#475569',
+}
+
+function nodeColors(li, L, hl) {
+  if (hl)         return P.hl
+  if (li === 0)   return P.input
+  if (li === L-1) return P.output
+  return P.hidden
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Highlight helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function isHlNode(li, ni, spec) {
+  if (spec.layers[li]?.highlight) return true
+  if (spec.highlightLayers?.includes(li)) return true
+  if (spec.highlightNodes?.some(([a,b]) => a===li && b===ni)) return true
+  if (spec.highlightPath?.nodes.some(([a,b]) => a===li && b===ni)) return true
+  return false
+}
+
+function isHlConn(li1, ni1, li2, ni2, spec) {
+  const path = spec.highlightPath?.nodes
+  if (!path) return false
+  for (let i = 0; i < path.length - 1; i++) {
+    const [a,b] = path[i], [c,d] = path[i+1]
+    if (a===li1 && b===ni1 && c===li2 && d===ni2) return true
+  }
+  return false
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Layout computation
+// ─────────────────────────────────────────────────────────────────────────────
+
+function buildLayout(spec) {
+  const isCompact = spec.compact ?? spec.layers.length > 7
+  const lc = isCompact ? COMPACT : LAYOUT
+  const { R, LAYER_GAP, NODE_GAP, PAD_X, PAD_TOP, TITLE_H, LABEL_H, PAD_BOTTOM, MAX_FULL, E_TOP, E_BTM } = lc
+  const L = spec.layers.length
+  const hasTitleArea = Boolean(spec.title || spec.subtitle)
+
+  const displayCounts = spec.layers.map(l => l.size <= MAX_FULL ? l.size : E_TOP + 1 + E_BTM)
+  const maxDC = Math.max(...displayCounts)
+
+  const contentH = (maxDC - 1) * NODE_GAP
+  const titleArea = hasTitleArea ? TITLE_H : PAD_TOP
+  const svgH = PAD_TOP + titleArea + contentH + LABEL_H + PAD_BOTTOM
+  const svgW = PAD_X * 2 + (L - 1) * LAYER_GAP
+  const contentCenterY = PAD_TOP + titleArea + contentH / 2
+  const labelY = PAD_TOP + titleArea + contentH + R + 14
+
+  const nodes = []
+  for (let li = 0; li < L; li++) {
+    const layer = spec.layers[li]
+    const dc = displayCounts[li]
+    const collapsed = layer.size > MAX_FULL
+    const x = PAD_X + li * LAYER_GAP
+    const startY = contentCenterY - ((dc - 1) * NODE_GAP) / 2
+
+    for (let di = 0; di < dc; di++) {
+      const y = startY + di * NODE_GAP
+      const isEllipsis = collapsed && di === E_TOP
+      let ni
+      if (!collapsed)       ni = di
+      else if (di < E_TOP)  ni = di
+      else if (isEllipsis)  ni = -1
+      else                  ni = layer.size - E_BTM + (di - E_TOP - 1)
+
+      const label = ni >= 0 ? layer.nodeLabels?.[ni] : undefined
+      nodes.push({ li, ni, x, y, isEllipsis, label })
+    }
+  }
+
+  const conns = []
+  if (spec.connections !== 'none') {
+    const byLayer = new Map()
+    for (const n of nodes) {
+      if (n.isEllipsis) continue
+      if (!byLayer.has(n.li)) byLayer.set(n.li, [])
+      byLayer.get(n.li).push(n)
+    }
+    for (let li = 0; li < L - 1; li++) {
+      const from = byLayer.get(li) ?? []
+      const to   = byLayer.get(li + 1) ?? []
+      for (const fn of from)
+        for (const tn of to)
+          conns.push({ x1:fn.x, y1:fn.y, x2:tn.x, y2:tn.y,
+            hl: isHlConn(fn.li, fn.ni, tn.li, tn.ni, spec) })
+    }
+  }
+
+  return { svgW, svgH, labelY, nodes, conns, lc }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NeuralNet renderer
+// ─────────────────────────────────────────────────────────────────────────────
+
+function NeuralNet({ spec }) {
+  const { svgW, svgH, labelY, nodes, conns, lc } = React.useMemo(() => buildLayout(spec), [spec])
+  const { R, PAD_X, LAYER_GAP, PAD_TOP, TITLE_H } = lc
+  const L = spec.layers.length
+  const hasTitleArea = Boolean(spec.title || spec.subtitle)
+  const titleBaseY = PAD_TOP + 16
+  const filterId = `glow-${Math.random().toString(36).slice(2,7)}`
+
+  return (
+    <div className="trueviz-wrap">
+      <svg viewBox={`0 0 ${svgW} ${svgH}`} width="100%"
+        style={{ maxWidth: svgW, display: 'block', margin: '0 auto' }}>
+        <defs>
+          <filter id={filterId} x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+            <feFlood floodColor="#fbbf24" floodOpacity="0.55" result="color"/>
+            <feComposite in="color" in2="blur" operator="in" result="glow"/>
+            <feMerge>
+              <feMergeNode in="glow"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+
+        {/* Background card */}
+        <rect x={0} y={0} width={svgW} height={svgH}
+          fill={P.bg} rx={10} stroke={P.border} strokeWidth={1}/>
+
+        {/* Title */}
+        {spec.title && (
+          <text x={svgW/2} y={titleBaseY} textAnchor="middle"
+            fontSize={13} fontWeight={600} fill={P.titleText}
+            fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+            {spec.title}
+          </text>
+        )}
+        {spec.subtitle && (
+          <text x={svgW/2} y={titleBaseY + (spec.title ? 17 : 0)}
+            textAnchor="middle" fontSize={11} fill={P.subtitleText}
+            fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+            {spec.subtitle}
+          </text>
+        )}
+
+        {/* Regular connections */}
+        {conns.filter(c => !c.hl).map((c,i) => (
+          <line key={`c${i}`} x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
+            stroke={P.conn} strokeWidth={0.9}/>
+        ))}
+
+        {/* Highlighted connections */}
+        {conns.filter(c => c.hl).map((c,i) => (
+          <line key={`ch${i}`} x1={c.x1} y1={c.y1} x2={c.x2} y2={c.y2}
+            stroke={P.connHl} strokeWidth={2} opacity={0.8}
+            filter={`url(#${filterId})`}/>
+        ))}
+
+        {/* Nodes */}
+        {nodes.map((node, i) => {
+          if (node.isEllipsis) return (
+            <g key={`e${i}`}>
+              {[-6,0,6].map(o => (
+                <circle key={o} cx={node.x+o} cy={node.y} r={2.5} fill={P.ellipsis}/>
+              ))}
+            </g>
+          )
+          const hl = isHlNode(node.li, node.ni, spec)
+          const c  = nodeColors(node.li, L, hl)
+          const inside = node.label && node.label.length <= 4
+          return (
+            <g key={`n${i}`}>
+              {hl && (
+                <circle cx={node.x} cy={node.y} r={R+6} fill="none"
+                  stroke={c.stroke} strokeWidth={1} opacity={0.3}
+                  filter={`url(#${filterId})`}/>
+              )}
+              <circle cx={node.x} cy={node.y} r={R}
+                fill={c.fill} fillOpacity={0.22}
+                stroke={c.stroke} strokeWidth={1.6}/>
+              {inside && (
+                <text x={node.x} y={node.y} textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={10} fontWeight={500} fill={c.text}
+                  fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+                  {node.label}
+                </text>
+              )}
+              {node.label && !inside && (
+                <text x={node.x} y={node.y+R+11} textAnchor="middle"
+                  fontSize={9} fill={P.labelText}
+                  fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+                  {node.label}
+                </text>
+              )}
+            </g>
+          )
+        })}
+
+        {/* Layer labels */}
+        {spec.layers.map((layer, li) => {
+          const x = PAD_X + li * LAYER_GAP
+          const def = li === 0 ? 'Input' : li === L-1 ? 'Output' : 'Hidden'
+          const col = layer.size > lc.MAX_FULL
+            ? `${layer.label ?? def} (${layer.size})` : (layer.label ?? def)
+          return (
+            <g key={`lbl${li}`}>
+              <text x={x} y={labelY} textAnchor="middle"
+                fontSize={11} fontWeight={500} fill={P.labelText}
+                fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+                {col}
+              </text>
+              {layer.activation && (
+                <text x={x} y={labelY+15} textAnchor="middle"
+                  fontSize={9.5} fill={P.subtitleText}
+                  fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+                  {layer.activation}
+                </text>
+              )}
+            </g>
+          )
+        })}
+      </svg>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parser
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseTruViz(raw) {
+  const trimmed = raw.trim()
+  if (!trimmed) return { ok: false, error: 'Empty spec.' }
+  let obj
+  try { obj = JSON.parse(trimmed) } catch (e) {
+    return { ok: false, error: `JSON error: ${e.message}` }
+  }
+  if (typeof obj !== 'object' || !obj || Array.isArray(obj))
+    return { ok: false, error: 'Spec must be a JSON object.' }
+  if (!obj.type)
+    return { ok: false, error: 'Missing "type" field.' }
+  if (obj.type === 'neural-net') {
+    if (!Array.isArray(obj.layers) || obj.layers.length < 2)
+      return { ok: false, error: 'Need at least 2 layers.' }
+    for (let i = 0; i < obj.layers.length; i++) {
+      const l = obj.layers[i]
+      if (!l || typeof l.size !== 'number' || l.size < 1)
+        return { ok: false, error: `Layer ${i}: "size" must be a positive number.` }
+    }
+    return { ok: true, spec: obj }
+  }
+  return { ok: false, error: `Unknown type: "${obj.type}". Currently supported: "neural-net".` }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TruViz entry point
+// ─────────────────────────────────────────────────────────────────────────────
+
+function TruViz({ raw }) {
+  const result = React.useMemo(() => parseTruViz(raw), [raw])
+  if (!result.ok) return (
+    <div className="trueviz-error">
+      <span className="trueviz-error-label">TruViz</span>
+      {result.error}
+    </div>
+  )
+  if (result.spec.type === 'neural-net') return <NeuralNet spec={result.spec} />
+  return <div className="trueviz-error">Unsupported type.</div>
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Presets
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRESETS = [
+  {
+    name: 'Basic feedforward',
+    desc: '3 → 4 → 2 — the classic intro diagram',
+    spec: {
+      type: 'neural-net',
+      title: '3-4-2 Feedforward Network',
+      layers: [
+        { size: 3, label: 'Input',  nodeLabels: ['x₁','x₂','x₃'] },
+        { size: 4, label: 'Hidden', activation: 'ReLU' },
+        { size: 2, label: 'Output', activation: 'Softmax', nodeLabels: ['ŷ₁','ŷ₂'] },
+      ],
+    },
+  },
+  {
+    name: 'Forward pass highlight',
+    desc: 'Signal path lit up through the network',
+    spec: {
+      type: 'neural-net',
+      title: 'Forward Pass — one signal path',
+      subtitle: 'Highlighted: x₂ → h₃ → ŷ₁',
+      layers: [
+        { size: 3, label: 'Input',  nodeLabels: ['x₁','x₂','x₃'] },
+        { size: 4, label: 'Hidden', activation: 'ReLU' },
+        { size: 2, label: 'Output', activation: 'Softmax', nodeLabels: ['ŷ₁','ŷ₂'] },
+      ],
+      highlightPath: { nodes: [[0,1],[1,2],[2,0]] },
+    },
+  },
+  {
+    name: 'Highlighted layer',
+    desc: 'Draw attention to a specific layer',
+    spec: {
+      type: 'neural-net',
+      title: 'The Hidden Layer',
+      subtitle: 'This is where feature learning happens',
+      layers: [
+        { size: 4, label: 'Input' },
+        { size: 6, label: 'Hidden', activation: 'ReLU', highlight: true },
+        { size: 2, label: 'Output', activation: 'Sigmoid' },
+      ],
+    },
+  },
+  {
+    name: 'Deep network',
+    desc: '5 layers — auto-compact activates',
+    spec: {
+      type: 'neural-net',
+      title: 'Deeper Feedforward Network',
+      layers: [
+        { size: 4, label: 'Input' },
+        { size: 8, label: 'Hidden 1', activation: 'ReLU' },
+        { size: 8, label: 'Hidden 2', activation: 'ReLU' },
+        { size: 4, label: 'Hidden 3', activation: 'ReLU' },
+        { size: 2, label: 'Output',   activation: 'Softmax' },
+      ],
+    },
+  },
+  {
+    name: 'Large layers (MNIST-style)',
+    desc: '784 → 128 → 64 → 10 — collapsed display',
+    spec: {
+      type: 'neural-net',
+      title: 'MNIST Classifier Architecture',
+      subtitle: '784-input → 128 → 64 → 10 classes',
+      layers: [
+        { size: 784, label: 'Input (28×28)' },
+        { size: 128, label: 'Hidden 1', activation: 'ReLU' },
+        { size: 64,  label: 'Hidden 2', activation: 'ReLU' },
+        { size: 10,  label: 'Output',   activation: 'Softmax' },
+      ],
+    },
+  },
+  {
+    name: 'Architecture only',
+    desc: 'No weight lines — just the structure',
+    spec: {
+      type: 'neural-net',
+      title: 'Network Structure',
+      connections: 'none',
+      layers: [
+        { size: 3, label: 'Input' },
+        { size: 5, label: 'Hidden', activation: 'Tanh' },
+        { size: 3, label: 'Output', activation: 'Softmax' },
+      ],
+    },
+  },
+  {
+    name: 'Autoencoder',
+    desc: 'Encode → bottleneck → decode shape',
+    spec: {
+      type: 'neural-net',
+      title: 'Autoencoder',
+      subtitle: 'Encoder compresses, decoder reconstructs',
+      layers: [
+        { size: 6,  label: 'Input' },
+        { size: 4,  label: 'Encoder',     activation: 'ReLU' },
+        { size: 2,  label: 'Bottleneck',  activation: 'ReLU', highlight: true },
+        { size: 4,  label: 'Decoder',     activation: 'ReLU' },
+        { size: 6,  label: 'Output',      activation: 'Sigmoid' },
+      ],
+    },
+  },
+  {
+    name: 'Binary classifier',
+    desc: 'Single output neuron, no labels',
+    spec: {
+      type: 'neural-net',
+      title: 'Binary Classification Network',
+      layers: [
+        { size: 5, label: 'Input' },
+        { size: 4, label: 'Hidden 1', activation: 'ReLU' },
+        { size: 3, label: 'Hidden 2', activation: 'ReLU' },
+        { size: 1, label: 'Output',   activation: 'Sigmoid' },
+      ],
+    },
+  },
+]
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App
+// ─────────────────────────────────────────────────────────────────────────────
+
+function App() {
+  const [raw, setRaw]             = React.useState(() => JSON.stringify(PRESETS[0].spec, null, 2))
+  const [activePreset, setPreset] = React.useState(0)
+  const [error, setError]         = React.useState('')
+
+  // Debounced parse error
+  React.useEffect(() => {
+    const id = setTimeout(() => {
+      const r = parseTruViz(raw)
+      setError(r.ok ? '' : r.error)
+    }, 300)
+    return () => clearTimeout(id)
+  }, [raw])
+
+  function loadPreset(i) {
+    setPreset(i)
+    setRaw(JSON.stringify(PRESETS[i].spec, null, 2))
+  }
+
+  return (
+    <>
+      {/* Editor panel */}
+      <div className="editor-panel">
+        <div className="editor-header">
+          <span>JSON spec</span>
+          <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>
+            edit to preview →
+          </span>
+        </div>
+        <div className="editor-error">{error}</div>
+        <textarea
+          className="editor-textarea"
+          id="spec-input"
+          spellCheck={false}
+          value={raw}
+          onChange={e => { setRaw(e.target.value); setPreset(-1) }}
+        />
+        <div className="preset-list">
+          <div className="preset-label">Presets</div>
+          <div id="preset-buttons">
+            {PRESETS.map((p, i) => (
+              <button
+                key={i}
+                className={`preset-btn${activePreset === i ? ' active' : ''}`}
+                onClick={() => loadPreset(i)}
+              >
+                <span className="preset-name">{p.name}</span>
+                <span className="preset-desc">{p.desc}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Preview panel */}
+      <div className="preview-panel">
+        <div className="preview-label">Rendered output</div>
+        <div className="preview-output">
+          <TruViz raw={raw} />
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mount
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Swap the shell div's children with the React app
+const shell = document.querySelector('.shell')
+const root = ReactDOM.createRoot(shell)
+root.render(<App />)
+
+</script>
+</body>
+</html>

@@ -4,6 +4,12 @@ export type LearningControlMode = 'guided' | 'balanced' | 'open'
 
 export type CourseDepth = 'low' | 'standard' | 'high'
 
+export type KnowledgeLevel = 'beginner' | 'intermediate' | 'expert'
+
+// Why the student is learning — orthogonal to how much they already know.
+// Explorer wants intuition, Practitioner wants to build, Researcher wants theory.
+export type LearningPurpose = 'explorer' | 'practitioner' | 'researcher'
+
 export type TopicState =
   | 'locked'
   | 'active'
@@ -38,6 +44,8 @@ export interface Course {
   course_depth?: CourseDepth
   lesson_style?: string | null
   code_language?: string | null   // e.g. 'python' — inject contextual code examples when set
+  knowledge_level?: KnowledgeLevel | null
+  learning_purpose?: LearningPurpose | null
   created_at: string
 }
 
@@ -114,6 +122,8 @@ export interface Page {
   page_number: number
   content: string       // flat markdown — kept for search / backward compat
   created_at: string
+  key_concepts?: string[]
+  summary?: string | null
   topic_depth?: TopicDepth
   concept_kind?: ConceptKind
   content_kind?: ContentKind

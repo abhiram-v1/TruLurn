@@ -559,15 +559,20 @@ button:disabled {
 }
 
 .message {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
   font-size: var(--text-sm);
   line-height: 1.5;
-  padding: 10px;
+  padding: 12px 0;
 }
 
+/* User message — clean distinguished bubble, aligned right */
 .message.user {
-  border-color: var(--color-accent);
+  background: var(--color-bg-secondary);
+  border: 0.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  padding: 10px 12px;
+  max-width: 85%;
+  justify-self: end;
 }
 
 .message-role {

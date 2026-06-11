@@ -91,6 +91,7 @@ type ExamSessionPayload = {
       review_concepts?: string[]
       student_summary?: string
       graph_update?: { summary?: string; nextSuggestedTopicId?: string | null } | null
+      prerequisite_gap?: { topic_id: string; title: string; reason: string } | null
     } | null
   }
   turn: ExamTurn | null
@@ -241,6 +242,7 @@ function ResultView({
   const turns = state.turns ?? []
   const passed = Boolean(summary?.passed)
   const nextTopicId = summary?.graph_update?.nextSuggestedTopicId ?? null
+  const prereqGap = summary?.prerequisite_gap ?? null
 
   return (
     <div className="quiz-stack">
@@ -253,6 +255,22 @@ function ResultView({
           <p style={{ marginTop: 6, fontWeight: 400 }}>{summary.graph_update.summary}</p>
         )}
       </div>
+
+      {prereqGap ? (
+        <div className="prereq-gap-card">
+          <span className="prereq-gap-label">Likely root cause</span>
+          <p className="prereq-gap-text">
+            {prereqGap.reason} The real gap looks like it&rsquo;s in an earlier topic:{' '}
+            <strong>{prereqGap.title}</strong>.
+          </p>
+          <Link
+            className="button-subtle"
+            href={`/learn/${courseId}/${encodeURIComponent(prereqGap.topic_id)}`}
+          >
+            Revisit {prereqGap.title} first →
+          </Link>
+        </div>
+      ) : null}
 
       {(summary?.strong_concepts?.length || summary?.review_concepts?.length) ? (
         <div className="question-block">
@@ -330,11 +348,13 @@ export function QuizSession({
   topicTitle,
   courseId,
   mode = 'full_topic',
+  isReview = false,
 }: {
   topicId: string
   topicTitle: string
   courseId: string
   mode?: ExamMode
+  isReview?: boolean
 }) {
   const [state, setState] = useState<ExamSessionPayload | null>(null)
   const [answer, setAnswer] = useState('')
@@ -351,7 +371,7 @@ export function QuizSession({
         const res = await fetch('/api/exams/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ courseId, topicId, mode }),
+          body: JSON.stringify({ courseId, topicId, mode, isReview }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Could not start quiz.')
@@ -369,7 +389,7 @@ export function QuizSession({
     return () => {
       alive = false
     }
-  }, [courseId, topicId, mode])
+  }, [courseId, topicId, mode, isReview])
 
   const turn = state?.turn ?? null
   const progressLabel = useMemo(() => {
@@ -393,6 +413,13 @@ export function QuizSession({
       if (!res.ok) throw new Error(data.error || 'Could not submit answer.')
       setState(data)
       setAnswer('')
+      // Feed the recall-break session tracker — answered questions count toward
+      // session activity. Fire-and-forget; never blocks the quiz flow.
+      fetch('/api/recall/track', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ courseId, event: 'question_answered', topicId }),
+      }).catch(() => {})
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not submit answer.')
     } finally {
@@ -451,10 +478,7 @@ export function QuizSession({
         </div>
 
         {error && (
-          <div
-            className="result-banner"
-            style={{ background: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5' }}
-          >
+          <div className="result-banner result-banner--error">
             {error}
           </div>
         )}

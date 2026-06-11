@@ -58,7 +58,7 @@ SyntaxHighlighter.registerLanguage('go', go)
 
 const trulurnTheme: { [key: string]: React.CSSProperties } = {
   'code[class*="language-"]': {
-    color: '#050517',
+    color: 'var(--code-text)',
     background: 'none',
     fontFamily: 'inherit',
     textAlign: 'left',
@@ -71,7 +71,7 @@ const trulurnTheme: { [key: string]: React.CSSProperties } = {
     hyphens: 'none',
   },
   'pre[class*="language-"]': {
-    color: '#050517',
+    color: 'var(--code-text)',
     background: 'none',
     textAlign: 'left',
     whiteSpace: 'pre',
@@ -84,35 +84,35 @@ const trulurnTheme: { [key: string]: React.CSSProperties } = {
     padding: '0',
     margin: '0',
   },
-  comment:    { color: '#928e82', fontStyle: 'italic' },
-  prolog:     { color: '#928e82' },
-  doctype:    { color: '#928e82' },
-  cdata:      { color: '#928e82' },
-  punctuation: { color: '#50505a' },
-  property:   { color: '#050517' },
-  tag:        { color: '#c0552a' },
-  boolean:    { color: '#c0552a' },
-  number:     { color: '#6b4c92' },
-  constant:   { color: '#6b4c92' },
-  symbol:     { color: '#6b4c92' },
-  deleted:    { color: '#b91c1c' },
-  selector:   { color: '#3a5f8a' },
-  'attr-name':  { color: '#c0552a' },
-  string:     { color: '#7a5c3f' },
-  char:       { color: '#7a5c3f' },
-  builtin:    { color: '#3a5f8a' },
-  inserted:   { color: '#3b6d11' },
-  operator:   { color: '#050517' },
-  entity:     { color: '#050517' },
-  url:        { color: '#050517' },
-  variable:   { color: '#050517' },
-  atrule:     { color: '#c0552a' },
-  'attr-value': { color: '#7a5c3f' },
-  function:   { color: '#3a5f8a' },
-  'class-name': { color: '#3a5f8a' },
-  keyword:    { color: '#c0552a', fontWeight: 'bold' },
-  regex:      { color: '#7a5c3f' },
-  important:  { color: '#c0552a', fontWeight: 'bold' },
+  comment:    { color: 'var(--code-comment)', fontStyle: 'italic' },
+  prolog:     { color: 'var(--code-comment)' },
+  doctype:    { color: 'var(--code-comment)' },
+  cdata:      { color: 'var(--code-comment)' },
+  punctuation: { color: 'var(--code-punctuation)' },
+  property:   { color: 'var(--code-text)' },
+  tag:        { color: 'var(--code-keyword)' },
+  boolean:    { color: 'var(--code-keyword)' },
+  number:     { color: 'var(--code-number)' },
+  constant:   { color: 'var(--code-number)' },
+  symbol:     { color: 'var(--code-number)' },
+  deleted:    { color: 'var(--code-deleted)' },
+  selector:   { color: 'var(--code-function)' },
+  'attr-name':  { color: 'var(--code-keyword)' },
+  string:     { color: 'var(--code-string)' },
+  char:       { color: 'var(--code-string)' },
+  builtin:    { color: 'var(--code-function)' },
+  inserted:   { color: 'var(--code-inserted)' },
+  operator:   { color: 'var(--code-text)' },
+  entity:     { color: 'var(--code-text)' },
+  url:        { color: 'var(--code-text)' },
+  variable:   { color: 'var(--code-text)' },
+  atrule:     { color: 'var(--code-keyword)' },
+  'attr-value': { color: 'var(--code-string)' },
+  function:   { color: 'var(--code-function)' },
+  'class-name': { color: 'var(--code-function)' },
+  keyword:    { color: 'var(--code-keyword)', fontWeight: 'bold' },
+  regex:      { color: 'var(--code-string)' },
+  important:  { color: 'var(--code-keyword)', fontWeight: 'bold' },
   namespace:  { opacity: 0.7 },
 }
 
@@ -231,6 +231,28 @@ const components: Components = {
   },
   li({ children }) {
     return <li className="md-li">{children}</li>
+  },
+  table({ children }) {
+    return (
+      <div className="md-table-wrap">
+        <table className="md-table">{children}</table>
+      </div>
+    )
+  },
+  thead({ children }) {
+    return <thead className="md-thead">{children}</thead>
+  },
+  tbody({ children }) {
+    return <tbody className="md-tbody">{children}</tbody>
+  },
+  tr({ children }) {
+    return <tr className="md-tr">{children}</tr>
+  },
+  th({ children, style }) {
+    return <th className="md-th" style={style}>{children}</th>
+  },
+  td({ children, style }) {
+    return <td className="md-td" style={style}>{children}</td>
   },
   h1({ children }) {
     return <h1 className="md-h1">{children}</h1>

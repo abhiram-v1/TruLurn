@@ -127,7 +127,20 @@ function fixExistingMathSpans(markdown: string) {
 }
 
 function normalizeAsciiTables(markdown: string) {
-  return markdown.replace(/\|\s*:?-{3,}:?\s*\|/g, '| --- |')
+  return markdown
+    .replace(/\|\s*:?-{3,}:?\s*\|/g, '| --- |')
+    .replace(/^\s*\|?(.+\|.+)\|?\s*\n\s*\|?(\s*:?-{3,}:?\s*\|.+)$/gm, (match) => {
+      const lines = match.split('\n')
+      if (lines.length < 2) return match
+      return lines
+        .map((line) => {
+          const trimmed = line.trim()
+          if (!trimmed.includes('|')) return line
+          const withStart = trimmed.startsWith('|') ? trimmed : `| ${trimmed}`
+          return withStart.endsWith('|') ? withStart : `${withStart} |`
+        })
+        .join('\n')
+    })
 }
 
 function removeHorizontalRuleNoise(markdown: string) {

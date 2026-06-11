@@ -8,8 +8,11 @@ import { HallucinationWarning } from '@/components/setup/HallucinationWarning'
 import { ModeSelector } from '@/components/setup/ModeSelector'
 import { LearningControlSelector } from '@/components/setup/LearningControlSelector'
 import { CourseDepthSelector } from '@/components/setup/CourseDepthSelector'
+import { KnowledgeLevelSelector } from '@/components/setup/KnowledgeLevelSelector'
+import { LearningPurposeSelector } from '@/components/setup/LearningPurposeSelector'
+import { TeachingStyleSelector, type TeachingStyleChoice } from '@/components/setup/TeachingStyleSelector'
 import { GeneratingOverlay } from '@/components/setup/GeneratingOverlay'
-import type { CourseDepth, CourseMode, LearningControlMode } from '@/types'
+import type { CourseDepth, CourseMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/types'
 
 type GenerateCourseResponse = {
   jobId?: string
@@ -27,6 +30,10 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [mode, setMode] = useState<CourseMode>('ai_teacher')
   const [learningControl, setLearningControl] = useState<LearningControlMode>('balanced')
   const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
+  const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel>('intermediate')
+  const [learningPurpose, setLearningPurpose] = useState<LearningPurpose>('practitioner')
+  const [teachingStyle, setTeachingStyle] = useState<TeachingStyleChoice>('auto')
+  const [previewCurriculum, setPreviewCurriculum] = useState(true)
   const [description, setDescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(initialJobId !== null)
   const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId)
@@ -77,6 +84,10 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       formData.append('mode', mode)
       formData.append('learningControl', learningControl)
       formData.append('courseDepth', courseDepth)
+      formData.append('knowledgeLevel', knowledgeLevel)
+      formData.append('learningPurpose', learningPurpose)
+      formData.append('teachingStyle', teachingStyle)
+      formData.append('previewCurriculum', String(previewCurriculum))
 
       if (sourceFiles) {
         Array.from(sourceFiles).forEach((file) => {
@@ -162,21 +173,38 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
               </div>
             </label>
             {sourceFiles && sourceFiles.length > 0 && (
-              <div className="file-pill-list">
+              <ol className="source-order-list" aria-label="Selected source order">
                 {Array.from(sourceFiles).map((file, idx) => (
-                  <span key={idx} className="file-pill">
+                  <li key={`${file.name}-${idx}`}>
+                    <span>{idx + 1}</span>
                     {file.name}
-                  </span>
+                  </li>
                 ))}
-              </div>
+              </ol>
             )}
             <div className="field-note">
-              Upload text, Markdown, PDF, Word, PowerPoint, Excel, or HTML files. The AI will build the course from your material.
+              {sourceFiles?.length
+                ? 'TruLurn treats the numbered list above as the source sequence.'
+                : 'Upload text, Markdown, PDF, Word, PowerPoint, Excel, or HTML files. Lessons are generated only from this material — foundations, core concepts, and next steps are organized from what your sources actually cover.'}
             </div>
           </div>
         ) : null}
         <LearningControlSelector value={learningControl} onChange={setLearningControl} />
         <CourseDepthSelector value={courseDepth} onChange={setCourseDepth} />
+        <KnowledgeLevelSelector value={knowledgeLevel} onChange={setKnowledgeLevel} />
+        <LearningPurposeSelector value={learningPurpose} onChange={setLearningPurpose} />
+        <TeachingStyleSelector value={teachingStyle} onChange={setTeachingStyle} />
+        <label className="preview-toggle">
+          <input
+            type="checkbox"
+            checked={previewCurriculum}
+            onChange={(e) => setPreviewCurriculum(e.target.checked)}
+          />
+          <span>
+            <strong>Review the curriculum before building.</strong> See the full roadmap and edit it
+            (rename, reorder, add, or remove topics) before lessons are generated.
+          </span>
+        </label>
         <button className="button" type="submit" disabled={cannotGenerate}>
           {isGenerating ? 'Building course...' : 'Build my course'}
         </button>

@@ -12,6 +12,9 @@ type GeminiGenerateInput = {
   user: string
   model?: string
   purpose?: 'primary' | 'agent'
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+  signal?: AbortSignal
+  forceGemini?: boolean
   responseMimeType?: 'application/json' | 'text/plain'
   responseSchema?: {
     name: string
@@ -37,11 +40,23 @@ export async function generateWithGemini({
   user,
   model,
   purpose,
+  forceGemini = false,
   responseMimeType = 'application/json',
   responseSchema,
+  reasoningEffort,
+  signal,
 }: GeminiGenerateInput): Promise<string> {
-  if (shouldUseOpenAI()) {
-    return generateWithOpenAI({ system, user, model, purpose, responseMimeType, responseSchema })
+  if (!forceGemini && shouldUseOpenAI()) {
+    return generateWithOpenAI({
+      system,
+      user,
+      model,
+      purpose,
+      reasoningEffort,
+      signal,
+      responseMimeType,
+      responseSchema,
+    })
   }
 
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
@@ -51,10 +66,14 @@ export async function generateWithGemini({
     throw new Error('Missing GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY in .env.local')
   }
 
+  // Send the (static) system prompt as a dedicated systemInstruction rather than
+  // merging it into the user turn. This is the correct Gemini pattern AND it makes
+  // the large, unchanging instruction block a stable cacheable prefix — Gemini 2.5
+  // implicit caching then discounts it on every repeat call for the same config.
   const contents: GeminiContent[] = [
     {
       role: 'user',
-      parts: [{ text: `${system}\n\n${user}` }],
+      parts: [{ text: user }],
     },
   ]
 
@@ -66,12 +85,14 @@ export async function generateWithGemini({
     },
     body: JSON.stringify({
       contents,
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
       generationConfig: {
         temperature: 0.25,
         topP: 0.9,
         responseMimeType,
       },
     }),
+    signal,
   })
 
   const data = (await response.json()) as GeminiResponse

@@ -4,10 +4,11 @@ import type { GraphData } from '@/lib/graph/types'
 
 interface Filters {
   showLocked: boolean
-  showWeak: boolean
   showCritical: boolean
   showRegions: boolean
   showRecommended: boolean
+  showSemantic: boolean
+  showAllConnections: boolean
   focusMode: boolean
 }
 
@@ -90,9 +91,11 @@ export function GraphSidebar({ data, activeBranch, setActiveBranch, filters, onT
           <div className="kg-sb-label">Filters</div>
           <div className="kg-filters">
             <FilterToggle label="Show locked topics" on={filters.showLocked} onToggle={() => onToggle('showLocked')} />
-            <FilterToggle label="Show light connections" on={filters.showWeak} onToggle={() => onToggle('showWeak')} />
+            <FilterToggle label="Show branch boxes" on={filters.showRegions} onToggle={() => onToggle('showRegions')} />
             <FilterToggle label="Highlight priority path" on={filters.showCritical} onToggle={() => onToggle('showCritical')} />
-            <FilterToggle label="Suggested next" on={filters.showRecommended} onToggle={() => onToggle('showRecommended')} />
+            <FilterToggle label="Recommended links" on={filters.showRecommended} onToggle={() => onToggle('showRecommended')} />
+            <FilterToggle label="Semantic relationships" on={filters.showSemantic} onToggle={() => onToggle('showSemantic')} />
+            <FilterToggle label="All connections" on={filters.showAllConnections} onToggle={() => onToggle('showAllConnections')} />
             <FilterToggle label="Focus mode" on={filters.focusMode} onToggle={() => onToggle('focusMode')} />
           </div>
         </div>

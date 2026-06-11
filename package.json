@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:graph-sandbox": "node scripts/dev-graph-sandbox.mjs",
     "dev:clean": "node scripts/dev-clean.js",
     "dev:markitdown": "cd services/markitdown && .venv\\Scripts\\python.exe -m uvicorn main:app --host 127.0.0.1 --port 3002 --reload",
     "build": "node scripts/next-build.js",
+    "build:graph-sandbox": "node scripts/build-graph-sandbox.mjs",
+    "verify:graph-layout": "node scripts/verify-graph-layout.mjs",
     "start": "next start",
     "lint": "next lint"
   },

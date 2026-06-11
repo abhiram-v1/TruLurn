@@ -1,4 +1,5 @@
-import type { CourseDepth, CurriculumMode, LearningControlMode } from '@/lib/ai/skills/types'
+import type { CourseDepth, CurriculumMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/lib/ai/skills/types'
+import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
 import { extractSourceTextFromFormData, normalizeCurriculumMode } from '@/lib/ai/sources'
 
 export type CourseGenerationInput = {
@@ -7,7 +8,16 @@ export type CourseGenerationInput = {
   mode: CurriculumMode
   learningControl: LearningControlMode
   courseDepth: CourseDepth
+  knowledgeLevel: KnowledgeLevel
+  learningPurpose: LearningPurpose
+  // User-chosen teaching style; 'auto' lets the pedagogy classifier decide.
+  teachingStyle: string
+  previewCurriculum: boolean
   sourceText?: string
+  sourceOrderAnalysis?: string
+  // Teaching-style + curriculum-reconstruction analysis of the uploaded sources.
+  // Sources act as behavioral training data, not as content boundaries.
+  sourceProfile?: SourceTeachingProfile | null
   sourceLimitations: string[]
 }
 
@@ -16,7 +26,28 @@ type RawCourseGenerationInput = {
   mode?: CurriculumMode
   learningControl?: LearningControlMode
   courseDepth?: CourseDepth
+  knowledgeLevel?: KnowledgeLevel
+  learningPurpose?: LearningPurpose
+  teachingStyle?: string
+  previewCurriculum?: boolean
   sourceText?: string
+  sourceOrderAnalysis?: string
+}
+
+const TEACHING_STYLE_CHOICES = [
+  'auto',
+  'first_principles',
+  'visual_analogy',
+  'socratic',
+  'project_based',
+  'exam_oriented',
+  'concise_speed',
+  'deep_conceptual',
+]
+
+function normalizeTeachingStyle(value: unknown): string {
+  const style = String(value ?? 'auto')
+  return TEACHING_STYLE_CHOICES.includes(style) ? style : 'auto'
 }
 
 function normalizeLearningControlMode(value: unknown): LearningControlMode {
@@ -27,6 +58,16 @@ function normalizeLearningControlMode(value: unknown): LearningControlMode {
 function normalizeCourseDepth(value: unknown): CourseDepth {
   if (value === 'low' || value === 'standard' || value === 'high') return value
   return 'standard'
+}
+
+function normalizeKnowledgeLevel(value: unknown): KnowledgeLevel {
+  if (value === 'beginner' || value === 'intermediate' || value === 'expert') return value
+  return 'intermediate'
+}
+
+function normalizeLearningPurpose(value: unknown): LearningPurpose {
+  if (value === 'explorer' || value === 'practitioner' || value === 'researcher') return value
+  return 'practitioner'
 }
 
 export async function readCourseGenerationInput(request: Request): Promise<CourseGenerationInput> {
@@ -42,6 +83,10 @@ export async function readCourseGenerationInput(request: Request): Promise<Cours
       mode: normalizeCurriculumMode(formData.get('mode')),
       learningControl: normalizeLearningControlMode(formData.get('learningControl')),
       courseDepth: normalizeCourseDepth(formData.get('courseDepth')),
+      knowledgeLevel: normalizeKnowledgeLevel(formData.get('knowledgeLevel')),
+      learningPurpose: normalizeLearningPurpose(formData.get('learningPurpose')),
+      teachingStyle: normalizeTeachingStyle(formData.get('teachingStyle')),
+      previewCurriculum: formData.get('previewCurriculum') !== 'false',
       sourceText: extracted.sourceText,
       sourceLimitations: extracted.limitations,
     })
@@ -54,6 +99,10 @@ export async function readCourseGenerationInput(request: Request): Promise<Cours
     mode: normalizeCurriculumMode(body.mode),
     learningControl: normalizeLearningControlMode(body.learningControl),
     courseDepth: normalizeCourseDepth(body.courseDepth),
+    knowledgeLevel: normalizeKnowledgeLevel(body.knowledgeLevel),
+    learningPurpose: normalizeLearningPurpose(body.learningPurpose),
+    teachingStyle: normalizeTeachingStyle(body.teachingStyle),
+    previewCurriculum: body.previewCurriculum !== false,
     sourceLimitations: [],
   })
 }
@@ -63,7 +112,12 @@ function normalizeCourseGenerationInput(input: {
   mode?: CurriculumMode
   learningControl?: LearningControlMode
   courseDepth?: CourseDepth
+  knowledgeLevel?: KnowledgeLevel
+  learningPurpose?: LearningPurpose
+  teachingStyle?: string
+  previewCurriculum?: boolean
   sourceText?: string
+  sourceOrderAnalysis?: string
   sourceLimitations: string[]
 }): CourseGenerationInput {
   const goals = input.goals?.trim() ?? ''
@@ -73,7 +127,12 @@ function normalizeCourseGenerationInput(input: {
     mode: input.mode ?? 'ai_teacher',
     learningControl: input.learningControl ?? 'balanced',
     courseDepth: input.courseDepth ?? 'standard',
+    knowledgeLevel: input.knowledgeLevel ?? 'intermediate',
+    learningPurpose: input.learningPurpose ?? 'practitioner',
+    teachingStyle: normalizeTeachingStyle(input.teachingStyle),
+    previewCurriculum: input.previewCurriculum ?? true,
     sourceText: input.sourceText?.trim() || undefined,
+    sourceOrderAnalysis: input.sourceOrderAnalysis?.trim() || undefined,
     sourceLimitations: input.sourceLimitations,
   }
 }

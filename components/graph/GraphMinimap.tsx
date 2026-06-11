@@ -1,7 +1,7 @@
 'use client'
 
 import type { GraphData } from '@/lib/graph/types'
-import { stateColorVar } from './graphUtils'
+import { rampColor, stateColorVar } from './graphUtils'
 
 interface Props {
   data: GraphData
@@ -10,8 +10,8 @@ interface Props {
   setView: React.Dispatch<React.SetStateAction<{ x: number; y: number; k: number }>>
 }
 
-const MM_W = 200
-const MM_H = 110
+const MM_W = 168
+const MM_H = 86
 
 export function GraphMinimap({ data, selectedId, view, setView }: Props) {
   const CW = data.canvasW
@@ -37,10 +37,28 @@ export function GraphMinimap({ data, selectedId, view, setView }: Props) {
     <div className="kg-canvas-overlay kg-minimap">
       <div className="kg-minimap-head">
         <span>Overview</span>
-        <span>Map</span>
+        <span>{data.nodes.length} concepts</span>
       </div>
       <div className="kg-minimap-body" onClick={onClick}>
+        {data.boxes.map((box) => {
+          const ramp = rampColor(box.colourRamp)
+          return (
+            <div
+              key={box.id}
+              className="kg-mini-group"
+              style={{
+                left: box.x * sx,
+                top: box.y * sy,
+                width: Math.max(4, box.w * sx),
+                height: Math.max(3, box.h * sy),
+                background: ramp.tint,
+                borderColor: ramp.border,
+              }}
+            />
+          )
+        })}
         {data.nodes.map((n) => (
+          // n.x / n.y are TOP-LEFT; render a small block matching the card
           <div
             key={n.id}
             className="kg-mini-node"
@@ -48,9 +66,10 @@ export function GraphMinimap({ data, selectedId, view, setView }: Props) {
               left: n.x * sx,
               top: n.y * sy,
               width: Math.max(3, n.w * sx),
-              height: Math.max(2, 70 * sy),
+              height: Math.max(2, n.h * sy),
+              borderRadius: 1.5,
               background: stateColorVar(n.state),
-              opacity: selectedId === n.id ? 1 : 0.8,
+              opacity: selectedId === n.id ? 1 : 0.75,
               outline: selectedId === n.id ? '1px solid var(--kg-accent)' : 'none',
             }}
           />

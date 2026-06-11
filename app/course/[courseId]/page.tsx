@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { BigRoadmap } from '@/components/navigation/BigRoadmap'
 import { AppFrame } from '@/components/navigation/AppFrame'
 import { CourseCodeToggle } from '@/components/course/CourseCodeToggle'
+import { SourceScopePanel } from '@/components/course/SourceScopePanel'
+import { ReviewsDuePanel } from '@/components/review/ReviewsDuePanel'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 
@@ -28,13 +30,22 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
 
   const branches = await db.collection('branches').find({ course_id: params.courseId }).toArray()
 
+  // Canonical branch order = the curriculum's branch array (what the learner saw
+  // and approved in the preview). DB insertion order is not guaranteed, and topic
+  // sequence_index values are AI output that may not be globally consistent
+  // across branches — neither is a safe sort key on its own.
+  const curriculumDoc = await db.collection('curricula').findOne(
+    { course_id: params.courseId },
+    { projection: { 'curriculum.branches.id': 1 } },
+  )
+
   // Fetch ALL topics (including locked) so we can resolve active_topic_id for each branch.
   // On a freshly created course every non-first-branch topic starts locked, so filtering
   // by state would find nothing. We want the first topic in each branch regardless of state.
   const teachableTopics = await db.collection('topics')
     .find({ course_id: params.courseId })
     .sort({ sequence_index: 1, position: 1 })
-    .project({ _id: 1, branch_id: 1, node_type: 1, children_count: 1 })
+    .project({ _id: 1, branch_id: 1, node_type: 1, children_count: 1, title: 1, sequence_index: 1 })
     .toArray()
 
   function isContainer(t: any) {
@@ -63,6 +74,31 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
     return null
   }
 
+  // All leaf topics of a branch, in study order — drives the milestone pills.
+  function branchLeaves(branchKey: string) {
+    const normKey = normaliseSlug(branchKey)
+    return teachableTopics.filter((t) => {
+      if (isContainer(t)) return false
+      const normBid = normaliseSlug(String(t.branch_id ?? ''))
+      return normBid === normKey || normBid.endsWith(`-${normKey}`) || normKey.endsWith(`-${normBid}`)
+    })
+  }
+
+  const curriculumBranchIds: string[] = (curriculumDoc?.curriculum?.branches ?? [])
+    .map((b: any) => normaliseSlug(String(b?.id ?? '')))
+    .filter(Boolean)
+
+  function curriculumOrderOf(branchKey: string): number | null {
+    const normKey = normaliseSlug(branchKey)
+    const exact = curriculumBranchIds.indexOf(normKey)
+    if (exact >= 0) return exact
+    // Tolerate courseId-prefixed or otherwise decorated slugs.
+    const fuzzy = curriculumBranchIds.findIndex(
+      (id) => normKey.endsWith(`-${id}`) || id.endsWith(`-${normKey}`),
+    )
+    return fuzzy >= 0 ? fuzzy : null
+  }
+
   const serializedBranches = branches.map((b) => {
     const branchKey = String(b.branch_key ?? b._id)
     const storedTopicId = b.active_topic_id ? String(b.active_topic_id) : null
@@ -74,6 +110,8 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
     const resolvedTopicId = (!storedIsContainer && storedTopicId)
       ? storedTopicId
       : firstTeachableInBranch(branchKey) ?? storedTopicId
+    const leaves = branchLeaves(branchKey)
+    const curriculumIdx = curriculumOrderOf(branchKey)
     return {
       id: branchKey,
       course_id: String(b.course_id),
@@ -83,8 +121,18 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
       active_topic_id: resolvedTopicId,
       topic_count: b.topic_count,
       mastered_count: b.mastered_count,
+      // First sub-topics of the branch, shown as milestone pills on the Atlas card.
+      milestones: leaves.slice(0, 3).map((t) => String(t.title ?? '')).filter(Boolean),
+      // Sort key: curriculum array position; branches the curriculum doesn't know
+      // (legacy courses without a curricula doc) keep relative study order via
+      // their first leaf's sequence_index, placed after all known branches.
+      _order: curriculumIdx !== null
+        ? curriculumIdx
+        : 100000 + (leaves.length ? Number(leaves[0].sequence_index ?? 0) : Number.MAX_SAFE_INTEGER / 2),
     }
   })
+    .sort((a, b) => a._order - b._order)
+    .map(({ _order, ...b }) => b)
 
   return (
     <AppFrame
@@ -110,6 +158,10 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
             Follow the course structure through each milestone. Master one branch to unlock deeper connections.
           </p>
         </div>
+        <ReviewsDuePanel courseId={params.courseId} />
+        {String(course.mode ?? '') === 'source_grounded' ? (
+          <SourceScopePanel outOfScope={(course.out_of_scope as any) ?? null} />
+        ) : null}
         <BigRoadmap branches={serializedBranches} courseId={params.courseId} />
       </main>
     </AppFrame>

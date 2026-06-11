@@ -6,6 +6,8 @@ import { parseGeminiJson } from '@/lib/ai/gemini/json'
 import { isContainerTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 import { unlockNextTopics } from '@/lib/db-helpers'
 import { evaluateQuizForGraph } from '@/lib/ai/graphEvaluator'
+import { detectPrerequisiteGap } from '@/lib/quiz/prerequisiteGaps'
+import { scheduleTopicReview, cancelTopicReview, recordReviewResult } from '@/lib/review/schedule'
 
 const FULL_TOPIC_MAX_FOLLOWUPS = 2
 const SPOT_CHECK_MAX = 3
@@ -779,12 +781,14 @@ export async function startOrResumeExam({
   topicId,
   userId,
   mode = 'full_topic',
+  isReview = false,
 }: {
   db: Db
   courseId: string
   topicId: string
   userId: string
   mode?: ExamMode
+  isReview?: boolean
 }) {
   const [course, topic] = await Promise.all([
     db.collection('courses').findOne({ _id: courseId as any, user_id: userId }),
@@ -799,6 +803,7 @@ export async function startOrResumeExam({
     user_id: userId,
     mode,
     status: 'active',
+    is_review: isReview,
   })
 
   if (!session) {
@@ -822,6 +827,7 @@ export async function startOrResumeExam({
       topic_id: topicId,
       user_id: userId,
       mode,
+      is_review: isReview,
       status: 'active',
       phase: 'mvp_linear',
       question_index: 0,
@@ -1052,6 +1058,7 @@ function deriveReviewApproach(
 }
 
 async function finalizeExam(db: Db, session: any) {
+  let detectedPrerequisiteGap: Awaited<ReturnType<typeof detectPrerequisiteGap>> = null
   const turns = await getSessionTurns(db, String(session._id))
   const unevaluated = turns.filter((turn) => turn.answer != null && !turn.evaluation)
   if (unevaluated.length) {
@@ -1108,6 +1115,75 @@ async function finalizeExam(db: Db, session: any) {
 
     if (passed) {
       await unlockNextTopics(String(session.course_id), String(session.topic_id))
+
+      // Spaced repetition: a passed topic becomes a future review. Schedule the
+      // first retrieval and clear any stale prerequisite-gap flag from prior fails.
+      try {
+        await scheduleTopicReview({
+          db,
+          courseId: String(session.course_id),
+          topicId: String(session.topic_id),
+          userId: String(session.user_id),
+          passed: true,
+          overallLevel,
+        })
+      } catch (err) {
+        console.warn('[examEngine] scheduleTopicReview failed:', err)
+      }
+      await db.collection('topics').updateOne(
+        { _id: session.topic_id as any, course_id: session.course_id },
+        { $set: { prerequisite_gap: null, updated_at: new Date() } },
+      )
+    } else {
+      // Failed: this isn't a review candidate yet — drop any pending review so we
+      // don't quiz them on something they haven't mastered.
+      try {
+        await cancelTopicReview({
+          db,
+          courseId: String(session.course_id),
+          topicId: String(session.topic_id),
+          userId: String(session.user_id),
+        })
+      } catch (err) {
+        console.warn('[examEngine] cancelTopicReview failed:', err)
+      }
+
+      // Prerequisite gap detection: after a second failed attempt, check whether the
+      // mistakes actually trace back to an earlier topic, and flag it if so.
+      try {
+        const failedAttempts = await db.collection('quizAttempts').countDocuments({
+          course_id: String(session.course_id),
+          topic_id: String(session.topic_id),
+          user_id: String(session.user_id),
+          passed: false,
+        })
+        if (failedAttempts >= 2) {
+          const topicDoc = await db.collection('topics').findOne(
+            { _id: session.topic_id as any, course_id: session.course_id },
+            { projection: { title: 1, prerequisites: 1 } },
+          )
+          if (topicDoc) {
+            const failedItems = evaluations
+              .filter((item) => !item.evaluation.passed)
+              .map((item) => ({ concept: String(item.turn.concept ?? ''), gap: item.evaluation.gap }))
+            const gap = await detectPrerequisiteGap({
+              db,
+              courseId: String(session.course_id),
+              topic: topicDoc as any,
+              failedItems,
+            })
+            if (gap) {
+              detectedPrerequisiteGap = gap
+              await db.collection('topics').updateOne(
+                { _id: session.topic_id as any, course_id: session.course_id },
+                { $set: { prerequisite_gap: gap, updated_at: new Date() } },
+              )
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[examEngine] prerequisite gap detection failed:', err)
+      }
     }
 
     try {
@@ -1161,6 +1237,21 @@ async function finalizeExam(db: Db, session: any) {
     }
   }
 
+  // Spaced repetition: a review session advances or resets the topic's cadence.
+  if (session.is_review) {
+    try {
+      await recordReviewResult({
+        db,
+        courseId: String(session.course_id),
+        topicId: String(session.topic_id),
+        userId: String(session.user_id),
+        passed,
+      })
+    } catch (err) {
+      console.warn('[examEngine] recordReviewResult failed:', err)
+    }
+  }
+
   const summary = {
     passed,
     overall_level: overallLevel,
@@ -1173,6 +1264,9 @@ async function finalizeExam(db: Db, session: any) {
       : 'This quiz found a few concepts worth revisiting before treating the topic as settled.',
     graph_update: graphUpdate
       ? { summary: graphUpdate.summary, nextSuggestedTopicId: graphUpdate.nextSuggestedTopicId }
+      : null,
+    prerequisite_gap: detectedPrerequisiteGap
+      ? { topic_id: detectedPrerequisiteGap.topic_id, title: detectedPrerequisiteGap.title, reason: detectedPrerequisiteGap.reason }
       : null,
   }
 

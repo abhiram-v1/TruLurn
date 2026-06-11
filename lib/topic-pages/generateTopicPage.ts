@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { generateWithGemini } from '@/lib/ai/gemini/client'
 import { parseGeminiJson } from '@/lib/ai/gemini/json'
 import { buildStyleDirective } from '@/lib/ai/skills/lessonStyle'
+import { formatSourceProfileForLessons } from '@/lib/course-generation/sourceProfile'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
 import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
@@ -18,6 +19,8 @@ type GenerateTopicPageInput = {
   approach?: 'explain_again' | 'go_deeper' | 'simplify' | 'show_example'
   customInstruction?: string
   lessonResearch?: string
+  /** Learner-profile prompt block from lib/personalization/engine.ts. */
+  personalizationDirective?: string
 }
 
 export type GeneratedTopicPage = {
@@ -181,6 +184,7 @@ function normalizeLessonMarkdown(markdown: string) {
       const trimmed = block.trim()
       if (!trimmed) return ''
       if (/^(```|#{1,6}\s|[-*+]\s|\d+\.\s|>\s|\|)/m.test(trimmed)) return trimmed
+      if (/\n\s*\|?[\s:-]{3,}\s*\|/.test(trimmed)) return trimmed
       return splitLongParagraph(trimmed)
     })
     .filter(Boolean)
@@ -630,6 +634,20 @@ BULLET LISTS — use for:
 NUMBERED LISTS — use for:
 • Strictly ordered steps, algorithms, procedures.
 
+TABLES - use sparingly for compact comparisons or small datasets:
+- Use GitHub-Flavored Markdown table syntax only.
+- Every table row must start and end with |.
+- Include one header row and one separator row.
+- Keep cells short. If a cell needs multiple sentences, use bullets or prose instead.
+- Never put a table inside a blockquote callout.
+- Leave one blank line before and after every table.
+- Do not put display math ($$...$$), multi-line equations, or code fences inside table cells.
+- Inline math inside cells is allowed with $...$ only.
+Good:
+| Input | Output |
+| --- | --- |
+| $x = 0.9$ | $f(x) = 1.9$ |
+
 INLINE CALLOUTS — embed in <core> at the point where they add the most value:
 
   > **Definition:** [one or two sentence formal definition]
@@ -880,6 +898,245 @@ const COURSE_DEPTH_INSTRUCTIONS: Record<string, string> = {
 - Only add depth where it genuinely aids understanding; do not pad.`,
 }
 
+// ── Knowledge level directive ─────────────────────────────────────────────────
+// Defines a menu of available sections per knowledge level — not a checklist.
+// The AI reads page number, focus, prior pages, and topic type, then selects
+// the sections that genuinely serve THIS specific page. Not every section
+// belongs on every page. The order below is the preferred order when sections
+// are included, but selection is always contextual.
+function buildKnowledgeLevelDirective(level: string): string {
+  if (level === 'beginner') {
+    return `STUDENT KNOWLEDGE LEVEL: Beginner
+
+This student is completely new to the subject. Never start with a definition.
+The sections below are a menu — read the topic, focus, page number, and prior pages,
+then select only the sections that genuinely serve this specific page.
+Not every section belongs on every page. A focused 4-section page beats a padded 9-section one.
+
+AVAILABLE SECTIONS (use in this order when included):
+
+HOOK
+What it does: Opens with a real-world question the student already relates to.
+  BAD: "A neural network is a computational model..."
+  GOOD: "How does your phone recognize faces?"
+Use when: First page of a new concept, or when the topic might feel abstract or pointless without context.
+Skip when: Page 2+ within the same multi-page topic (the prior page already opened the door), or
+           when the page is a continuation, practice, or repair page.
+
+BIG PICTURE
+What it does: A simple map before any detail — one sentence per node:
+  Problem → Solution → This Topic → Result
+Use when: First exposure to a new concept cluster; the student needs to see where this fits before how it works.
+Skip when: The topic is a direct continuation and the big picture was shown on the previous page.
+
+INTUITION
+What it does: Pure concept via everyday analogy. No formulas. No jargon.
+  Analogy must come from outside tech and math (nature, cooking, sports, navigation, etc.).
+  Example for Gradient Descent: "Imagine standing on a foggy mountain. You can't see the bottom.
+  You only know which direction slopes downward. So you take small steps downhill and repeat."
+Use when: Any page introducing a mechanism the student hasn't seen before.
+Skip when: The intuition was fully established in a prior page and this page deepens or applies it.
+
+FIRST EXAMPLE
+What it does: The simplest possible example — stripped of all complexity except the one idea being taught.
+  If the topic is image recognition, start with predicting house prices, not CIFAR-10.
+Use when: First time a concept appears; whenever the concept would otherwise feel abstract.
+Skip when: A prior page already made the concept concrete and this page is extending or practicing it.
+
+FORMAL DEFINITION
+What it does: Introduces terminology NOW — because the intuition already exists.
+  The student anchors vocabulary to the mental model they just built. Keep it concise.
+Use when: After intuition and/or example — always after, never before.
+Skip when: This is a pure practice or application page with no new terms introduced.
+
+GUIDED WALKTHROUGH
+What it does: Step-by-step walk through a process or derivation. Zero jumps. Every line follows from the previous.
+Use when: Procedural topics (algorithms, calculations, transformations), or any time a process has multiple steps
+          that a beginner could misorder or misunderstand.
+Skip when: The concept is purely conceptual with no procedure to walk through; or when the walkthrough
+           would just repeat what the example already showed.
+
+COMMON MISTAKES
+What it does: "Many people think: [wrong belief]. Actually: [correct understanding]."
+              The single most common beginner misconception for this specific concept.
+Use when: There is a genuine, specific, well-known misconception for this concept.
+Skip when: The mistakes are generic, manufactured, or already addressed naturally in the explanation.
+           Do not add this section just to have it.
+
+ACTIVE RECALL
+What it does: Ends the page with "Can you explain [concept] in your own words without looking?"
+              Does not provide the answer.
+Use when: The page has introduced and explained a complete concept. Good for concept-closing pages.
+Skip when: The page is mid-sequence (a quiz or next page will handle recall), or when the page is
+           a practice/application page where the activity IS the recall.
+
+PRACTICE
+What it does: One simple exercise. Tests this single concept only. No compound problems.
+Use when: Concept-closing pages; pages where the student needs to try, not just read.
+Skip when: A dedicated quiz or task follows shortly; or when the page is already heavily example-driven.
+
+HARD RULES (non-negotiable regardless of section selection):
+- Definitions come AFTER intuition, never before — even if you skip the intuition section.
+- No formula until the student has a mental image of what it means.
+- If you must use a term before defining it, flag it inline: "(we'll define this in a moment)".
+- Analogies must come from outside tech and math.
+- A short, well-chosen page is better than a long one covering everything mechanically.`
+  }
+
+  if (level === 'expert') {
+    return `STUDENT KNOWLEDGE LEVEL: Expert
+
+This student has solid command of fundamentals. They do not need teaching. They need insight.
+The sections below are a menu — read the topic, focus, page number, and prior pages,
+then select only the sections that add information or insight this student doesn't already have.
+Skipping a section because it adds nothing is correct. Including it anyway is a failure.
+
+AVAILABLE SECTIONS (use in this order when included):
+
+PROBLEM FRAMING
+What it does: One sharp paragraph — what gap exists, why naive approaches fail, what this addresses.
+Use when: Introducing a method or technique that competes with alternatives; first page of a new approach.
+Skip when: The page extends a method just introduced; the problem framing was covered in a prior page.
+
+FORMAL MODEL
+What it does: Math and notation immediately — model, objective function, key variables.
+Use when: Almost always when a concrete method or result is being covered.
+Skip when: Prior page already established the notation and this page continues from that foundation.
+
+ASSUMPTIONS
+What it does: Explicit list of what this method requires to be true in order to work.
+  Be precise: convexity, stationarity, i.i.d., separability, Lipschitz continuity — not vague qualifiers.
+Use when: Covering any method or technique.
+Skip when: Assumptions were fully covered on the prior page and this page is a direct continuation.
+
+DERIVATION
+What it does: Full derivation or proof. Shows WHY the result takes the form it does.
+Use when: The derivation reveals non-obvious structure or the "why" behind the form.
+Skip when: The derivation is mechanical and uninstructive (trivial algebra, well-known standard result).
+           A derivation that teaches nothing about the concept should not be included just for completeness.
+
+FAILURE MODES
+What it does: Concrete conditions under which this breaks. Specific violations of assumptions. Not vague warnings.
+  "It may not converge" is not a failure mode. "Adam fails on sparse gradients when β2 is too high" is.
+Use when: Almost always — this is the most valuable section for an expert page.
+Skip when: The concept genuinely has no meaningful failure modes (this is rare).
+
+TRADEOFFS
+What it does: Explicit comparison across relevant axes. Include only the axes that matter for this concept.
+  Accuracy / Memory / Compute / Interpretability / Latency / Sample complexity / Numerical stability
+Use when: Design-choice topics; methods with real competing considerations.
+Skip when: The concept is a fundamental theoretical result with no design choice involved.
+
+RESEARCH CONTEXT
+What it does: How the field arrived here. What was insufficient before. Current limitations. Open problems.
+Use when: Concepts at the frontier, or concepts whose history reveals why they're designed as they are.
+Skip when: Classical results where the history is well-known and adds no insight; or late pages in a
+           sequence where context was already given.
+
+TRANSFER QUESTION
+What it does: A generalization challenge — "Could this method work in a structurally different domain?
+              What would change? What would break?" The student must think, not recall.
+Use when: End of an important concept page; when the method has structural properties that generalize.
+Skip when: The concept is highly domain-specific with no meaningful transfer.
+
+HARD RULES (non-negotiable):
+- Skip any section that adds nothing beyond what this student already has.
+- Formal notation is preferred over verbose prose when both convey the same idea.
+- No introductory analogy unless it reveals a non-obvious structural parallel pure notation misses.
+- A page with four deep sections is better than eight shallow ones.`
+  }
+
+  // intermediate
+  return `STUDENT KNOWLEDGE LEVEL: Intermediate
+
+This student knows the basics. Do not re-teach definitions or foundational motivation.
+The sections below are a menu — read the topic, focus, page number, and prior pages,
+then select only the sections that serve this specific page.
+A page that does three things well is better than one that attempts all eight superficially.
+
+AVAILABLE SECTIONS (use in this order when included):
+
+QUICK REFRESH
+What it does: 2–3 sentences only — activates prior knowledge, does not re-explain it.
+Use when: This page builds directly on a specific prior concept the student may not have fresh.
+Skip when: The page opens a new concept cluster with no immediate prerequisite; or when the prior
+           page was just read and refresh would be redundant.
+
+CONNECTION MAP
+What it does: Makes the dependency structure explicit before going deep:
+  [Prior concept] → [Prior concept] → [This Topic] → [Future concept]
+Use when: Introducing a concept that connects to multiple prior ideas, or one that bridges to future topics.
+Skip when: The connection is self-evident from context, or this is a practice/application page.
+
+DEEPER MECHANICS
+What it does: Explains WHY it works, not just WHAT it does. Shows internals. Mechanism over description.
+Use when: Core mechanism pages — this is the primary content type for intermediate learners.
+Skip when: The page is a comparison, application, or practice page (those have their own structure).
+
+COMPARE ALTERNATIVES
+What it does: Shows this concept alongside its main alternatives with guidance on when to choose each.
+  Example: "Linear Regression vs Decision Trees vs Neural Networks — when does each win?"
+Use when: The concept has clear competing alternatives and the choice between them matters.
+Skip when: The concept is unique or foundational with no real alternatives; or when alternatives were
+           already compared in a prior page.
+
+REAL EXAMPLE
+What it does: Realistic scenario with actual messiness — outliers, ambiguity, imperfect data.
+  Not a toy example. Toy examples teach the algorithm; realistic ones teach the judgment.
+Use when: Most concept pages — intermediate learners need to see ideas in real context.
+Skip when: The page is purely theoretical or the example would distract from a derivation or comparison.
+
+EDGE CASES
+What it does: When the assumptions behind this concept break. Specific conditions, not vague warnings.
+Use when: Any concept with known failure conditions or non-obvious behavioral boundaries.
+Skip when: The concept is introductory or purely definitional; or when edge cases were covered in prior page.
+
+CHALLENGE QUESTIONS
+What it does: Questions that require reasoning, not recall.
+  "Why does X happen when Y?" not "What is X?" At least one should have no single correct answer.
+Use when: After the main content is established; concept pages and deeper mechanics pages.
+Skip when: The page is a practice or project page where the activity is already the challenge.
+
+MINI PROJECT
+What it does: A small applied task connecting this concept to practice.
+Use when: At the end of a concept or section — the student has the understanding, now they apply it.
+Skip when: Introductory pages, bridge pages, or when the concept needs more foundation before application.
+
+HARD RULES (non-negotiable):
+- Do not re-explain anything the student already knows — respect their time.
+- Examples must be realistic; simplified-to-misleading is worse than no example.
+- Challenge questions must require thought, not lookup.
+- A page that does three things well beats one that covers eight superficially.`
+}
+
+// ── Learning purpose directive ────────────────────────────────────────────────
+// Orthogonal to knowledge level: WHY the student is learning, not how much they
+// already know. Shapes what each page emphasizes. Practitioner is the default and
+// injects nothing (keeps prompts lean) — explorer and researcher pull the page in
+// clearly different directions.
+function buildLearningPurposeDirective(purpose: string): string {
+  if (purpose === 'explorer') {
+    return `LEARNER PURPOSE: Explorer
+This student is here for understanding and intuition, not to build or to prove.
+- Lead with the "why" and the mental model. Make the idea click before anything else.
+- Use vivid analogies and the story of how/why the concept exists.
+- Keep implementation detail, setup, and tooling minimal — include only what serves intuition.
+- It's fine to gloss over rigorous edge cases if they don't deepen the core understanding.
+- Success looks like: the student can explain the idea to a friend, not necessarily use it.`
+  }
+  if (purpose === 'researcher') {
+    return `LEARNER PURPOSE: Researcher
+This student wants theoretical command — depth, rigor, and the open questions.
+- Favor formal definitions, derivations, assumptions, and precise statements.
+- Surface limitations, edge cases, and where current understanding breaks down.
+- Connect the concept to the broader theory and to unresolved problems where relevant.
+- Practical "how to use it" detail is secondary — include only to ground theory.
+- Formal notation is welcome. Success looks like: the student can reason about it rigorously.`
+  }
+  // practitioner — default, no block injected (keep the prompt lean)
+  return ''
+}
+
 // ── Code augmentation directive ───────────────────────────────────────────────
 // Fired when course.code_language is set. This is NOT code_first style —
 // the concept still leads; code appears only when it genuinely helps.
@@ -919,6 +1176,7 @@ export async function generateTopicPage({
   approach,
   customInstruction,
   lessonResearch,
+  personalizationDirective,
 }: GenerateTopicPageInput): Promise<GeneratedTopicPage> {
   const plannedPages = topic.estimated_pages ?? topic.total_pages_planned ?? 3
   const focus = customInstruction
@@ -929,16 +1187,64 @@ export async function generateTopicPage({
   const depthBlock = COURSE_DEPTH_INSTRUCTIONS[depthKey]
     ? `\n${COURSE_DEPTH_INSTRUCTIONS[depthKey]}\n`
     : ''
-  const styleDirective = buildStyleDirective(course.lesson_style ?? null)
+  // Style precedence: explicit lesson_style override (PATCH route) → learning_style
+  // (set at course creation or changed via the agent). Persistence writes
+  // learning_style, so reading only lesson_style would silently drop the style.
+  const styleDirective = buildStyleDirective(course.lesson_style ?? course.learning_style ?? null)
   const styleBlock = styleDirective ? `\n${styleDirective}\n` : ''
   const codeLang = String(course.code_language ?? '').trim().toLowerCase()
   const codeBlock = codeLang ? `\n${buildCodeAugmentationDirective(codeLang)}\n` : ''
+  // Effective knowledge level = the course-level setting shifted by the student's
+  // recent micro-feedback on this topic ("Lost me" → -1 toward beginner,
+  // "Too basic" → +1 toward expert). Feedback steers future pages of this topic.
+  const LEVELS = ['beginner', 'intermediate', 'expert'] as const
+  const baseLevel = String(course.knowledge_level ?? 'intermediate')
+  const baseIndex = Math.max(0, LEVELS.indexOf(baseLevel as typeof LEVELS[number]))
+  const feedbackShift = Number(topic.feedback_level_shift ?? 0)
+  const effectiveLevel = LEVELS[Math.min(LEVELS.length - 1, Math.max(0, baseIndex + feedbackShift))]
+  const knowledgeDirective = buildKnowledgeLevelDirective(effectiveLevel)
+  const knowledgeBlock = knowledgeDirective ? `\n${knowledgeDirective}\n` : ''
+  const purposeDirective = buildLearningPurposeDirective(String(course.learning_purpose ?? 'practitioner'))
+  const purposeBlock = purposeDirective ? `\n${purposeDirective}\n` : ''
+  // Persistent style adjustments the student requested via the in-app agent
+  // ("treat me as a beginner", "define every term", ...). Highest-priority
+  // styling input: this is the student telling us directly how to teach them.
+  const styleDirectives: string[] = Array.isArray(course.style_directives)
+    ? course.style_directives.map((d: unknown) => String(d)).filter(Boolean)
+    : []
+  const studentStyleBlock = styleDirectives.length
+    ? `\nSTUDENT-REQUESTED STYLE ADJUSTMENTS (persistent — the student explicitly asked for these; they OVERRIDE conflicting defaults):\n${styleDirectives.map((d) => `- ${d}`).join('\n')}\n`
+    : ''
+  // Source-based courses: lessons are constrained to the uploaded material.
+  // Write in the instructor's voice AND treat the sources as a hard content
+  // boundary. Legacy courses may still carry 'inferred' topics (built before
+  // source-based mode constrained generation) — those keep the old behavior.
+  const isSourceCourse = String(course.mode ?? '') === 'source_grounded'
+  const instructorProfile = formatSourceProfileForLessons(course.source_profile ?? null)
+  const sourceAnchor = topic.source_anchor ? `\nThis topic's anchor in the uploaded material: ${topic.source_anchor}.` : ''
+  const groundingNote = !isSourceCourse
+    ? ''
+    : topic.source_coverage === 'inferred'
+      ? `\nThis topic is NOT covered by the uploaded material — it was added to complete the subject. Teach it from general knowledge, but keep the instructor's voice, terminology, and example style so it feels like the same course. Do not force-fit retrieved source excerpts that are about other topics.`
+      : `\nSOURCE-BASED LESSON — HARD CONTENT BOUNDARY:
+This course teaches ONLY the student's uploaded material.${sourceAnchor}
+- Every fact, definition, formula, procedure, and claim on this page must come from the course source text and the retrieved source excerpts. Teach the source's content in the source's terminology and notation.
+- Rephrasing, restructuring, and explaining the source's ideas more clearly is your job. Introducing concepts, methods, facts, or subject examples that are not in the sources is forbidden.
+- Prefer the source's own examples. An invented illustration is allowed only as a plain-language analogy that explains source content — never as new subject matter.
+- If the source covers this focus thinly, write a SHORTER page covering exactly what the source teaches, then close with one line noting the boundary (e.g. "Your material stops here — it doesn't go deeper into X."). Never pad with outside knowledge.
+- If retrieved excerpts are about other topics, ignore them rather than force-fitting.`
+  const instructorBlock = (isSourceCourse && (instructorProfile || groundingNote))
+    ? `\n${[instructorProfile, groundingNote].filter(Boolean).join('\n')}\n`
+    : instructorProfile
+      ? `\n${instructorProfile}\n`
+      : ''
   const approachBlock = approach ? `\n${APPROACH_INSTRUCTIONS[approach] ?? ''}\n` : ''
   const customBlock = customInstruction
     ? `\nCUSTOM PAGE REQUEST: "${customInstruction}"\nGenerate this page in response to the student's specific request. The focus above reflects their intent.\n`
     : ''
+  const personalizationBlock = personalizationDirective ? `\n${personalizationDirective}\n` : ''
 
-  const user = [depthBlock, styleBlock, codeBlock, approachBlock, customBlock, USER_TEMPLATE({
+  const user = [depthBlock, styleBlock, codeBlock, knowledgeBlock, purposeBlock, instructorBlock, studentStyleBlock, personalizationBlock, approachBlock, customBlock, USER_TEMPLATE({
     courseTitle: course.title ?? course.topic,
     courseGoal: course.goals ?? 'Master the subject clearly enough to explain and apply it.',
     topicTitle: topic.title,

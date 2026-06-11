@@ -10,6 +10,7 @@ export async function POST(request: Request) {
     const courseId = String(body.courseId ?? '')
     const topicId = decodeURIComponent(String(body.topicId ?? ''))
     const mode = String(body.mode ?? 'full_topic') as ExamMode
+    const isReview = Boolean(body.isReview)
 
     if (!courseId || !topicId) {
       return NextResponse.json({ error: 'Missing courseId or topicId.' }, { status: 400 })
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
 
     const db = await getDb()
     const userId = await getRequiredUserId()
-    const state = await startOrResumeExam({ db, courseId, topicId, userId, mode })
+    const state = await startOrResumeExam({ db, courseId, topicId, userId, mode, isReview })
     return NextResponse.json(state)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not start exam.'

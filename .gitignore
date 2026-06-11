@@ -7,6 +7,8 @@ services/markitdown/.venv/
 # Next.js
 .next/
 .next-build/
+.next-sandbox/
+.next-sandbox-build/
 out/
 build/
 

@@ -15,40 +15,25 @@ import {
 } from '@tabler/icons-react'
 import type { Icon } from '@tabler/icons-react'
 
-/* ── icon per branch ── */
-const branchIcons: Record<string, Icon> = {
-  supervised: IconTargetArrow,
-  unsupervised: IconEye,
-  'self-supervised': IconBrain,
-  reinforcement: IconRobot,
-}
+/* Generic icon pool — assigned deterministically by branch position so every
+   course (any subject) gets stable, varied branch icons. */
+const ICON_POOL: Icon[] = [
+  IconTargetArrow,
+  IconNetwork,
+  IconBrain,
+  IconChartDots3,
+  IconBinaryTree,
+  IconTopologyStar3,
+  IconEye,
+  IconRobot,
+]
 
-/* ── sub-topic labels per branch (the milestones the user asked for) ── */
-const branchMilestones: Record<string, { label: string; icon: Icon }[]> = {
-  supervised: [
-    { label: 'Regression', icon: IconChartDots3 },
-    { label: 'Classification', icon: IconBinaryTree },
-  ],
-  unsupervised: [
-    { label: 'Clustering', icon: IconTopologyStar3 },
-    { label: 'Dim. Reduction', icon: IconNetwork },
-  ],
-  'self-supervised': [
-    { label: 'Pretext Tasks', icon: IconBrain },
-    { label: 'Contrastive', icon: IconEye },
-  ],
-  reinforcement: [
-    { label: 'Policy Methods', icon: IconRobot },
-    { label: 'Value Methods', icon: IconTargetArrow },
-  ],
-}
-
-/* ── state → color mapping ── */
+/* ── state → color mapping (design-system palette) ── */
 function stateColor(state: string) {
   switch (state) {
-    case 'in_progress': return { bg: '#FFF3E0', border: '#d36d4a', text: '#d36d4a', glow: 'rgba(211,109,74,0.25)' }
-    case 'mastered':    return { bg: '#EAF3DE', border: '#3B6D11', text: '#3B6D11', glow: 'rgba(59,109,17,0.2)' }
-    default:            return { bg: '#f4f4f5', border: '#d3d5d7', text: '#7a7a7a', glow: 'rgba(0,0,0,0.04)' }
+    case 'in_progress': return { bg: 'var(--roadmap-active-bg)', border: 'var(--color-accent)', text: 'var(--color-accent)', glow: 'var(--roadmap-active-glow)' }
+    case 'mastered':    return { bg: 'var(--state-mastered-bg)', border: 'var(--state-mastered-text)', text: 'var(--state-mastered-text)', glow: 'var(--roadmap-mastered-glow)' }
+    default:            return { bg: 'var(--roadmap-idle-bg)', border: 'var(--roadmap-idle-border)', text: 'var(--roadmap-idle-text)', glow: 'var(--roadmap-idle-glow)' }
   }
 }
 
@@ -60,8 +45,18 @@ function stateLabel(state: string) {
   }
 }
 
+function stateCta(state: string, mastered: number) {
+  switch (state) {
+    case 'in_progress': return mastered > 0 ? 'Continue learning' : 'Start here'
+    case 'mastered':    return 'Review branch'
+    default:            return 'Preview branch'
+  }
+}
+
+type AtlasBranch = Branch & { milestones?: string[] }
+
 /* ── The roadmap component ── */
-export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseId: string }) {
+export function BigRoadmap({ branches, courseId }: { branches: AtlasBranch[]; courseId: string }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState<Set<number>>(new Set())
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
@@ -110,8 +105,8 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
         <defs>
           {/* Gradient for the trail */}
           <linearGradient id="roadmap-trail-grad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#d36d4a" stopOpacity="0.5" />
-            <stop offset="100%" stopColor="#d36d4a" stopOpacity="0.08" />
+            <stop offset="0%" stopColor="var(--color-accent)" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="var(--color-accent)" stopOpacity="0.08" />
           </linearGradient>
           {/* Glow filter */}
           <filter id="roadmap-glow">
@@ -123,9 +118,9 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
           </filter>
           {/* Animated dash */}
           <linearGradient id="dot-gradient" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#d36d4a" stopOpacity="0" />
-            <stop offset="50%" stopColor="#d36d4a" stopOpacity="0.9" />
-            <stop offset="100%" stopColor="#d36d4a" stopOpacity="0" />
+            <stop offset="0%" stopColor="var(--color-accent)" stopOpacity="0" />
+            <stop offset="50%" stopColor="var(--color-accent)" stopOpacity="0.9" />
+            <stop offset="100%" stopColor="var(--color-accent)" stopOpacity="0" />
           </linearGradient>
         </defs>
 
@@ -133,7 +128,7 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
         <path
           d={buildPath()}
           fill="none"
-          stroke="#d3d5d7"
+          stroke="var(--color-border)"
           strokeWidth="3"
           strokeLinecap="round"
           opacity="0.5"
@@ -162,7 +157,7 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
               y1={pos.y}
               x2={cardEdgeX}
               y2={pos.y}
-              stroke="#d3d5d7"
+              stroke="var(--color-border)"
               strokeWidth="1"
               strokeDasharray="3 3"
               opacity="0.8"
@@ -216,8 +211,8 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
           const pos = nodePositions[i]
           const isLeft = i % 2 === 0
           const colors = stateColor(branch.state)
-          const Icon = branchIcons[branch.id] ?? IconBrain
-          const milestones = branchMilestones[branch.id] ?? []
+          const Icon = ICON_POOL[i % ICON_POOL.length]
+          const milestones = branch.milestones ?? []
           const isVisible = visible.has(i)
           const isHovered = hoveredIndex === i
           const progressPct = branch.topic_count > 0 ? (branch.mastered_count / branch.topic_count) * 100 : 0
@@ -258,18 +253,21 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
               {/* Description */}
               <p className="roadmap-card-desc">{branch.description}</p>
 
-              {/* Milestone pills */}
-              <div className="roadmap-milestones">
-                {milestones.map((ms) => {
-                  const MsIcon = ms.icon
-                  return (
-                    <span key={ms.label} className="roadmap-milestone-pill">
-                      <MsIcon size={12} stroke={1.6} />
-                      {ms.label}
+              {/* Milestone pills — first sub-topics of the branch */}
+              {milestones.length > 0 && (
+                <div className="roadmap-milestones">
+                  {milestones.map((label) => (
+                    <span key={label} className="roadmap-milestone-pill" title={label}>
+                      {label}
                     </span>
-                  )
-                })}
-              </div>
+                  ))}
+                  {branch.topic_count > milestones.length && (
+                    <span className="roadmap-milestone-pill more">
+                      +{branch.topic_count - milestones.length} more
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Progress bar */}
               <div className="roadmap-card-progress-row">
@@ -286,6 +284,11 @@ export function BigRoadmap({ branches, courseId }: { branches: Branch[]; courseI
                   {branch.mastered_count}/{branch.topic_count} topics
                 </span>
               </div>
+
+              {/* Hover CTA */}
+              <span className="roadmap-card-cta" style={{ color: colors.text }}>
+                {stateCta(branch.state, branch.mastered_count)} <span className="cta-arrow">→</span>
+              </span>
             </Link>
           )
         })}

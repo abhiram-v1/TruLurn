@@ -120,6 +120,10 @@ export type TopicStateSnapshot = {
   needs_review?: boolean | null
   review_gaps?: string[] | null
   misconception?: boolean | null
+  prerequisite_gap?: {
+    title: string
+    reason?: string | null
+  } | null
   lastExam?: {
     passed: boolean
     overall_level?: number
@@ -127,6 +131,15 @@ export type TopicStateSnapshot = {
     review_concepts?: string[]
     student_summary?: string
   } | null
+  // Specific questions the student got wrong on their most recent quiz —
+  // the actual question text, what they answered, and the diagnosed gap.
+  // Lets the tutor address the precise point of confusion, not a generic concept.
+  wrongAnswers?: Array<{
+    concept: string
+    question: string
+    studentAnswer: string
+    gap?: string | null
+  }> | null
 }
 
 export function formatTopicState(snapshot: TopicStateSnapshot): string {
@@ -155,6 +168,21 @@ export function formatTopicState(snapshot: TopicStateSnapshot): string {
 
   if (snapshot.needs_review && snapshot.review_gaps?.length) {
     lines.push(`Concepts flagged for review from last quiz: ${snapshot.review_gaps.join(', ')}`)
+  }
+
+  if (snapshot.prerequisite_gap?.title) {
+    const reason = snapshot.prerequisite_gap.reason ? ` — ${snapshot.prerequisite_gap.reason}` : ''
+    lines.push(`⚠ Likely root-cause gap in an earlier topic: "${snapshot.prerequisite_gap.title}"${reason}. If the student's confusion traces back to this, address that foundation first.`)
+  }
+
+  if (snapshot.wrongAnswers?.length) {
+    lines.push('Specific questions the student missed on their last quiz (use these to pinpoint the exact confusion, do not re-explain everything):')
+    for (const item of snapshot.wrongAnswers.slice(0, 4)) {
+      const parts = [`  • Concept: ${item.concept}`, `    Question: ${item.question}`]
+      if (item.studentAnswer?.trim()) parts.push(`    They answered: ${item.studentAnswer}`)
+      if (item.gap) parts.push(`    Diagnosed gap: ${item.gap}`)
+      lines.push(parts.join('\n'))
+    }
   }
 
   if (snapshot.lastExam) {
