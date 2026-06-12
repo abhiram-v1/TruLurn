@@ -1,8 +1,8 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { determineLessonStyle } from '@/lib/ai/skills/lessonStyle'
+import { deriveLearnerPersona } from '@/lib/personalization/learnerPersona'
 import { formatResearchBrief, researchCurriculum, type CourseResearchReport } from '@/lib/course-generation/research'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
 import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
@@ -107,8 +107,8 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     ...input,
     curriculumResearchBrief: formatResearchBrief(researchReport),
   })
-  const curriculumText = await generateWithGemini({ ...curriculumPrompt, purpose: 'primary' })
-  const curriculum = parseGeminiJson<any>(curriculumText)
+  const curriculumText = await generateAI({ feature: 'curriculum_generation', ...curriculumPrompt })
+  const curriculum = parseAIJson<any>(curriculumText)
 
   // Run map build and style determination in parallel — both only need the curriculum.
   // A user-chosen teaching style skips the pedagogy classifier entirely.
@@ -117,14 +117,22 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     : []
 
   const userPickedStyle = input.teachingStyle && input.teachingStyle !== 'auto'
-  const [mapText, styleResult] = await Promise.all([
-    generateWithGemini({ ...mapBuilderSkill(curriculum), purpose: 'primary' }),
+  const [mapText, styleResult, learnerPersona] = await Promise.all([
+    generateAI({ feature: 'map_generation', ...mapBuilderSkill(curriculum) }),
     userPickedStyle
       ? Promise.resolve({ style: input.teachingStyle as any, reason: 'Chosen by the student at course setup.' })
       : determineLessonStyle(input.goals, curriculum?.title ?? input.topic, branchTitles),
+    // Who is this learner? Derived from the goals + setup signals so lessons,
+    // quizzes, and the agent never default to school-student framing.
+    deriveLearnerPersona({
+      goals: input.goals,
+      knowledgeLevel: input.knowledgeLevel,
+      learningPurpose: input.learningPurpose,
+      sourceProfile: input.sourceProfile,
+    }),
   ])
 
-  const map = parseGeminiJson<any>(mapText)
+  const map = parseAIJson<any>(mapText)
 
   // Validate + repair the AI-generated graph topology before anything consumes it.
   sanitizeGeneratedMap(map, curriculum)
@@ -135,6 +143,7 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     map,
     learningStyle: styleResult.style,
     learningStyleReason: styleResult.reason,
+    learnerPersona,
     researchReport,
   })
 

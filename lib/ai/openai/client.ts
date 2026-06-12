@@ -98,13 +98,6 @@ function extractOutputText(data: OpenAIResponse) {
   return text ?? ''
 }
 
-export function shouldUseOpenAI() {
-  const provider = process.env.AI_PROVIDER?.toLowerCase()
-  if (provider === 'gemini') return false
-  if (provider === 'openai') return true
-  return Boolean(process.env.OPENAI_API_KEY)
-}
-
 function sourceFromValue(value: Record<string, unknown>): OpenAIWebSource | null {
   const url = typeof value.url === 'string' ? value.url : null
   if (!url) return null
@@ -242,7 +235,7 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
 
     // JSON mode (response_format: json_object) is incompatible with web search tools —
     // OpenAI rejects requests that combine both. The prompt already instructs the model
-    // to return JSON, so parseGeminiJson handles the output without format enforcement.
+    // to return JSON, so the shared JSON parser handles the output without format enforcement.
 
     const response = await fetch(OPENAI_ENDPOINT, {
       method: 'POST',

@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
-import { shouldUseOpenAI } from '@/lib/ai/openai/client'
+import { generateAIResult, parseAIJson } from '@/lib/ai'
 import { curriculumBuilderSkill } from '@/lib/ai/skills'
 import type {
   CourseDepth,
@@ -112,8 +110,9 @@ export async function POST(request: Request) {
       curriculumResearchBrief: formatResearchBrief(researchReport),
     })
     const stageTimeout = generationProfile === 'fast' ? 75_000 : 180_000
-    const curriculumText = await withTimeout(
-      (signal) => generateWithGemini({
+    const generation = await withTimeout(
+      (signal) => generateAIResult({
+        feature: 'curriculum_generation',
         ...curriculumPrompt,
         purpose: generationProfile === 'production' ? 'primary' : 'agent',
         reasoningEffort: generationProfile === 'fast' ? 'low' : undefined,
@@ -122,13 +121,13 @@ export async function POST(request: Request) {
       stageTimeout,
       'Curriculum generation',
     )
-    const curriculum = parseGeminiJson<Record<string, unknown>>(curriculumText)
+    const curriculum = parseAIJson<Record<string, unknown>>(generation.text)
     stageTimes.curriculum = Date.now() - curriculumStartedAt
 
     return NextResponse.json({
       curriculum,
       researchReport,
-      provider: shouldUseOpenAI() ? 'OpenAI' : 'Gemini',
+      provider: generation.provider,
       generationProfile,
       stageTimes,
       totalMs: Date.now() - startedAt,

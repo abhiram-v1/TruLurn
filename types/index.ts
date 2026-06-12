@@ -68,6 +68,8 @@ export interface Topic {
   is_leaf?: boolean
   children_count?: number
   sequence_index?: number
+  /** Authoritative page count once the topic lesson plan exists (≤ estimated_pages). */
+  planned_pages?: number
   recommended_next_ids?: string[]
   is_optional?: boolean
   covered_by_node_id?: string | null
@@ -114,6 +116,20 @@ export interface LessonSection {
   content: string  // raw markdown with LaTeX
 }
 
+export interface SourceCitation {
+  citation_id: string
+  evidence_id: string
+  source_document_id: string | null
+  source_version_id: string | null
+  source_title: string
+  source_index: number | null
+  passage_ordinal: number | null
+  heading_path: string[]
+  block_ordinals: number[]
+  char_start: number | null
+  char_end: number | null
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export interface Page {
@@ -142,6 +158,8 @@ export interface Page {
   retention_hooks?: unknown | null
   page_sequence_role?: PageSequenceRole | null
   sections?: LessonSection[]
+  source_citations?: SourceCitation[]
+  grounding?: unknown | null
 }
 
 export interface DoubtMessage {
@@ -151,6 +169,8 @@ export interface DoubtMessage {
   page_number: number | null
   role: 'user' | 'assistant'
   content: string
+  source_citations?: SourceCitation[]
+  grounding?: unknown | null
   created_at: string
 }
 

@@ -1,5 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { ContentKind } from '@/types'
 import type { GeneratedTopicPage } from '@/lib/topic-pages/generateTopicPage'
@@ -270,12 +269,13 @@ Rules:
 export async function analyzeLearningArchitecture(input: Omit<AnalyzeInput, 'repairFrom'>): Promise<LearningArchitectureBrief> {
   async function run(repairFrom?: AnalyzeInput['repairFrom']) {
     const prompt = buildPrompt({ ...input, repairFrom })
-    const text = await generateWithGemini({
+    const text = await generateAI({
+      feature: 'page_analysis',
       ...prompt,
       purpose: 'primary',
       responseMimeType: 'application/json',
     })
-    return normalizeBrief(parseGeminiJson<any>(text))
+    return normalizeBrief(parseAIJson<any>(text))
   }
 
   const first = await run()

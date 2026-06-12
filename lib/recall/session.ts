@@ -9,6 +9,14 @@ import type { Db } from 'mongodb'
 // retrieval DURING a session, while the material is still in working memory.
 
 export type RecallBreakMode = 'auto' | '30m' | '60m' | 'off'
+export type RecallBreakSettings = {
+  mode: RecallBreakMode
+  durationMinutes: number
+}
+
+export const DEFAULT_BREAK_DURATION_MINUTES = 10
+export const MIN_BREAK_DURATION_MINUTES = 5
+export const MAX_BREAK_DURATION_MINUTES = 45
 
 export const RECALL_BREAK_MODES: Array<{ id: RecallBreakMode; name: string; description: string }> = [
   { id: 'auto', name: 'Auto', description: 'TruLurn watches your pace and concept load, and calls a break when retrieval will help most.' },
@@ -309,22 +317,49 @@ export function pagesSinceLastBreak(session: StudySessionDoc): SessionPageEntry[
 // ── User setting ──────────────────────────────────────────────────────────────
 
 export async function getRecallBreakMode(db: Db, userId: string): Promise<RecallBreakMode> {
+  return (await getRecallBreakSettings(db, userId)).mode
+}
+
+export async function getRecallBreakSettings(db: Db, userId: string): Promise<RecallBreakSettings> {
   const settings = await db.collection('userSettings').findOne(
     { _id: userId as any },
-    { projection: { recall_break_mode: 1 } },
+    { projection: { recall_break_mode: 1, recall_break_duration_minutes: 1 } },
   )
   const mode = String(settings?.recall_break_mode ?? 'auto')
-  return (['auto', '30m', '60m', 'off'] as const).includes(mode as RecallBreakMode)
+  const normalizedMode = (['auto', '30m', '60m', 'off'] as const).includes(mode as RecallBreakMode)
     ? (mode as RecallBreakMode)
     : 'auto'
+  const rawDuration = Number(settings?.recall_break_duration_minutes ?? DEFAULT_BREAK_DURATION_MINUTES)
+  const durationMinutes = Number.isFinite(rawDuration)
+    ? Math.min(MAX_BREAK_DURATION_MINUTES, Math.max(MIN_BREAK_DURATION_MINUTES, Math.round(rawDuration)))
+    : DEFAULT_BREAK_DURATION_MINUTES
+
+  return { mode: normalizedMode, durationMinutes }
 }
 
 export async function setRecallBreakMode(db: Db, userId: string, mode: RecallBreakMode): Promise<void> {
+  await setRecallBreakSettings(db, userId, { mode })
+}
+
+export async function setRecallBreakSettings(
+  db: Db,
+  userId: string,
+  settings: Partial<RecallBreakSettings>,
+): Promise<void> {
   const now = new Date()
+  const update: Record<string, unknown> = { updated_at: now }
+  if (settings.mode) update.recall_break_mode = settings.mode
+  if (Number.isFinite(settings.durationMinutes)) {
+    update.recall_break_duration_minutes = Math.min(
+      MAX_BREAK_DURATION_MINUTES,
+      Math.max(MIN_BREAK_DURATION_MINUTES, Math.round(Number(settings.durationMinutes))),
+    )
+  }
+
   await db.collection('userSettings').updateOne(
     { _id: userId as any },
     {
-      $set: { recall_break_mode: mode, updated_at: now },
+      $set: update,
       $setOnInsert: { created_at: now },
     },
     { upsert: true },

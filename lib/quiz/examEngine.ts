@@ -1,13 +1,14 @@
 import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import type { EvaluationResult, ExamMode, ExamTurnSource, QuestionType } from '@/types'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
+import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
 import { isContainerTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 import { unlockNextTopics } from '@/lib/db-helpers'
 import { evaluateQuizForGraph } from '@/lib/ai/graphEvaluator'
 import { detectPrerequisiteGap } from '@/lib/quiz/prerequisiteGaps'
 import { scheduleTopicReview, cancelTopicReview, recordReviewResult } from '@/lib/review/schedule'
+import { syncLearnerMemoryV2 } from '@/lib/memory/service'
 
 const FULL_TOPIC_MAX_FOLLOWUPS = 2
 const SPOT_CHECK_MAX = 3
@@ -143,10 +144,10 @@ ${lessonSummary || 'No lesson summaries available.'}
 ${priorEvidence ? `\nPrior quiz evidence:\n${priorEvidence}` : ''}`
 
   try {
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'exam_strategy',
       system,
       user,
-      purpose: 'agent',
       responseMimeType: 'text/plain',
       responseSchema: {
         name: 'quiz_plan',
@@ -161,7 +162,7 @@ ${priorEvidence ? `\nPrior quiz evidence:\n${priorEvidence}` : ''}`
         },
       },
     })
-    const parsed = parseGeminiJson<any>(raw)
+    const parsed = parseAIJson<any>(raw)
     const count = clamp(Math.round(Number(parsed.question_count ?? 4)), 2, 8)
     const validTypes = new Set(['mcq', 'true_false', 'apply', 'spot_error', 'explain', 'code'])
     const rawPlan: QuestionType[] = Array.isArray(parsed.type_plan)
@@ -608,7 +609,10 @@ async function generateTurnQuestion({
   const system = `You are TruLurn's learning checkpoint writer.
 The engine has already chosen the concept, difficulty, and question type. Your only job is to write the question and describe what a genuinely clear answer looks like.
 
-Write questions that show the student where their understanding actually is — not to catch them out, but to give them an honest picture. The question should feel like a natural extension of the lesson, not an interrogation.
+Write questions that show the learner where their understanding actually is — not to catch them out, but to give them an honest picture. The question should feel like a natural extension of the lesson, not an interrogation.
+
+${buildAudienceDirective(blueprint.course.learner_persona, blueprint.course.goals)}
+Question scenarios must come from THIS learner's world — a professional gets workplace scenarios, a hobbyist gets everyday ones, a school/university student may get classroom or exam-style ones. Never write "a student does X" framing by default.
 
 General rules:
 - Stay within the concepts in the pointer. Do not introduce ideas the lesson has not covered.
@@ -622,7 +626,7 @@ FORMATTING CODE IN QUESTIONS — follow these exactly:
 - Whenever the question shows a code snippet, ALWAYS wrap it in a fenced code block with the language tag.
 - Use \\n to represent newlines inside the JSON string value. Each line of code must be on its own line.
 - Correct format inside the JSON "question" field:
-  "question": "A student writes this program:\\n\\n\`\`\`python\\nprice = 8\\ntax = 2\\ntotal = price + tax\\n\`\`\`\\n\\nWhat happens when they run it?"
+  "question": "You write this program:\\n\\n\`\`\`python\\nprice = 8\\ntax = 2\\ntotal = price + tax\\n\`\`\`\\n\\nWhat happens when you run it?"
 - NEVER write code as plain inline text like: "price = 8 tax = 2 total = price + tax"
 - NEVER omit the language tag. For Python use \`\`\`python, for JavaScript use \`\`\`javascript, etc.
 - Short inline references to variable names or function names use backtick inline code: \`price\`, \`print()\`.
@@ -630,8 +634,8 @@ FORMATTING CODE IN QUESTIONS — follow these exactly:
 MCQ-specific rules (apply these whenever type is "mcq"):
 - Build a scenario, problem, or application question — never a definition lookup or "which term means X".
 - For quantitative or mathematical concepts: give a concrete problem with four numerical or algebraic answer options.
-- For conceptual topics: present a scenario or prediction, then give four interpretations — three that represent specific, plausible misconceptions a student at this level would actually hold.
-- Each wrong option must require genuine understanding to eliminate. A student who only half-understands the concept should find at least two options plausible.
+- For conceptual topics: present a scenario or prediction, then give four interpretations — three that represent specific, plausible misconceptions a learner at this level would actually hold.
+- Each wrong option must require genuine understanding to eliminate. A learner who only half-understands the concept should find at least two options plausible.
 - Do not use "all of the above", "none of the above", or obviously wrong answers.
 - The correct option should not stand out by length or style — all four options should look equally credible at a glance.
 - The rubric should state the reasoning that leads to the correct answer, not just name it.
@@ -650,10 +654,10 @@ Return ONLY valid JSON:
 Write exactly one ${questionType} question now.`
 
   const raw = await withRetry(() =>
-    generateWithGemini({
+    generateAI({
+      feature: 'exam_question_generation',
       system,
       user,
-      purpose: 'primary',
       responseMimeType: 'text/plain',
       responseSchema: {
         name: 'quiz_question',
@@ -671,7 +675,7 @@ Write exactly one ${questionType} question now.`
       },
     }),
   )
-  const parsed = parseGeminiJson<any>(raw)
+  const parsed = parseAIJson<any>(raw)
 
   const type = questionType
   const options = type === 'mcq' && Array.isArray(parsed.options)
@@ -920,10 +924,10 @@ Student answer:
 ${turn.type === 'code' ? `\`\`\`\n${studentAnswer || '(no answer)'}\n\`\`\`` : studentAnswer || '(no answer)'}`
 
   const raw = await withRetry(() =>
-    generateWithGemini({
+    generateAI({
+      feature: 'exam_evaluation',
       system,
       user,
-      purpose: 'agent',
       responseMimeType: 'text/plain',
       responseSchema: {
         name: 'quiz_evaluation',
@@ -941,7 +945,7 @@ ${turn.type === 'code' ? `\`\`\`\n${studentAnswer || '(no answer)'}\n\`\`\`` : s
       },
     }),
   )
-  const parsed = parseGeminiJson<any>(raw)
+  const parsed = parseAIJson<any>(raw)
   const level = clamp(Number(parsed.level ?? 2), 1, 5) as EvaluationResult['level']
   const evaluation: EvaluationResult = {
     level,
@@ -1274,6 +1278,18 @@ async function finalizeExam(db: Db, session: any) {
     { _id: session._id },
     { $set: { status: 'completed', summary, completed_at: new Date(), updated_at: new Date() } },
   )
+  await syncLearnerMemoryV2({
+    db,
+    userId: String(session.user_id),
+    courseId: String(session.course_id),
+    force: true,
+  }).catch((error) => {
+    console.warn('[examEngine] Memory V2 sync failed:', error)
+  })
+  await db.collection('learnerProfiles').deleteOne({
+    user_id: String(session.user_id),
+    course_id: String(session.course_id),
+  })
   return {
     ...serializeExamSession({ ...session, status: 'completed', summary }, null),
     turns: evaluatedTurns.map((turn) => ({

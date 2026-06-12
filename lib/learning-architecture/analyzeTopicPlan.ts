@@ -1,5 +1,5 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
+import { buildPlanFidelityDirective, policyFromCourse, type SourceFidelityPolicy } from '@/lib/course-generation/sourceFidelity'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { ContentKind } from '@/types'
 import {
@@ -12,24 +12,59 @@ import {
 // One topic-level lesson plan, generated in a SINGLE call on first touch of a
 // topic and cached on the topic document. This replaces the per-page architecture
 // brief call (N calls → 1 per topic) and improves coherence because the planner
-// sees the whole arc at once and can sequence + dedup globally. Simple pages
-// (bridge/section/example) carry no full brief — only full_page pages do.
+// sees the whole arc at once and can sequence + dedup globally.
+//
+// The plan is the AUTHORITY on how many pages this topic deserves. The
+// curriculum's estimated_pages is only a ceiling — the planner sees the actual
+// conceptual load and consolidates freely: a thin topic becomes ONE substantive
+// page, never three padded ones. Pages the topic doesn't need are simply not
+// planned (no "skip" placeholders), so they are never generated and never
+// cost a model call.
+
+export type PageTargetLength = 'short' | 'medium' | 'long'
 
 export type TopicPagePlan = {
   page_number: number
   focus: string
   content_kind: ContentKind
   page_sequence_role: PageSequenceRole
+  target_length: PageTargetLength
   brief: LearningArchitectureBrief | null
 }
 
 export type TopicLessonPlan = {
   generated_at: string
   version: number
+  /** Source fidelity policy key the plan was built under (null for ai_teacher). */
+  fidelity_key?: string | null
+  /** Planner's one-line justification for the page count. */
+  page_count_reason: string
   pages: TopicPagePlan[]
 }
 
-const PLAN_VERSION = 1
+// v2: consolidation — the planner chooses the page count (≤ ceiling) and plans
+// no skip entries. v1 plans were padded to estimated_pages; treat them as stale.
+export const PLAN_VERSION = 2
+
+/**
+ * A plan is usable when it matches the current planner contract — and, when an
+ * expected fidelity key is supplied, when it was built under the SAME source
+ * fidelity policy. This is what makes the system adaptive: a mid-course style
+ * or coverage change produces a new key, so topics re-plan on next touch.
+ */
+export function isPlanCurrent(
+  plan: TopicLessonPlan | undefined | null,
+  expectedFidelityKey?: string | null,
+): plan is TopicLessonPlan {
+  if (
+    !plan
+    || Number(plan.version) < PLAN_VERSION
+    || !Array.isArray(plan.pages)
+    || plan.pages.length < 1
+  ) return false
+  if (expectedFidelityKey !== undefined && (plan.fidelity_key ?? null) !== expectedFidelityKey) return false
+  return true
+}
 
 function compact(value: unknown, max = 600) {
   const clean = String(value ?? '').replace(/\s+/g, ' ').trim()
@@ -51,10 +86,19 @@ function normalizeRole(value: unknown): PageSequenceRole {
   return 'introduce'
 }
 
-function formatMemory(memory?: CourseMemoryContext) {
+function normalizeTargetLength(value: unknown, contentKind: ContentKind): PageTargetLength {
+  if (value === 'short' || value === 'medium' || value === 'long') return value
+  return contentKind === 'full_page' ? 'medium' : 'short'
+}
+
+function formatMemory(memory?: CourseMemoryContext, sourceMode = false) {
   if (!memory) return 'No retrieved course memory.'
   const pages = memory.pages.slice(0, 3).map((p) => `[${p.topic_title}, p${p.page_number}] ${compact(p.summary || p.content, 240)}`)
-  const sources = memory.sourceChunks.slice(0, 2).map((c) => `[${c.source_title ?? 'Source'}] ${compact(c.content, 240)}`)
+  // Source-based courses: the plan distributes the source material across pages,
+  // so the planner needs to actually see it — more chunks, bigger excerpts.
+  const sources = sourceMode
+    ? memory.sourceChunks.slice(0, 6).map((c) => `[${c.source_title ?? 'Source'}] ${compact(c.content, 700)}`)
+    : memory.sourceChunks.slice(0, 2).map((c) => `[${c.source_title ?? 'Source'}] ${compact(c.content, 240)}`)
   return [...pages, ...sources].join('\n') || 'No retrieved course memory.'
 }
 
@@ -67,10 +111,14 @@ type AnalyzeTopicPlanInput = {
   memory?: CourseMemoryContext
 }
 
-function buildPrompt(input: AnalyzeTopicPlanInput) {
+function buildPrompt(input: AnalyzeTopicPlanInput, fidelityPolicy: SourceFidelityPolicy | null) {
   const focusList = input.pageFocuses
-    .map((focus, i) => `Page ${i + 1}: ${compact(focus, 240)}`)
+    .map((focus, i) => `Draft focus ${i + 1}: ${compact(focus, 240)}`)
     .join('\n')
+  const isSourceCourse = Boolean(fidelityPolicy)
+  const sourceCoverageRule = fidelityPolicy
+    ? `\n\n${buildPlanFidelityDirective(fidelityPolicy)}`
+    : ''
 
   return {
     system: `You are TruLurn's Topic Lesson Planner.
@@ -78,7 +126,12 @@ Plan the teaching design for an ENTIRE topic in one pass, using backward design,
 cognitive-load control, intuition-before-formalism, early examples, active retrieval,
 misconception prevention, and page-to-page continuity ACROSS the whole topic.
 You see every page at once — use that to sequence roles and prevent any concept
-from being taught twice. Return only valid JSON. Do not write lesson prose.`,
+from being taught twice.
+
+You also decide HOW MANY pages this topic genuinely deserves. Every page costs the
+student attention and the system a generation — a page must earn its existence with
+distinct, substantive teaching value. One dense, well-built page beats three thin ones.
+Return only valid JSON. Do not write lesson prose.`,
     user: `Course: ${input.course.title ?? input.course.topic}
 Course goal: ${input.course.goals ?? 'Master the subject clearly enough to explain and apply it.'}
 Course depth: ${input.course.course_depth ?? 'standard'}
@@ -86,30 +139,43 @@ Course depth: ${input.course.course_depth ?? 'standard'}
 Topic: ${input.topic.title}
 Topic description: ${input.topic.description ?? input.topic.summary ?? 'No stored description.'}
 Topic depth label: ${input.topic.depth ?? 'medium'}
-Total pages in this topic: ${input.plannedPages}
+Page budget (CEILING, not a target): ${input.plannedPages}
 
-Planned page focuses:
+Draft page focuses from the curriculum (a rough guess made before any content existed — merge, drop, or rewrite them freely):
 ${focusList || 'No page focuses supplied — infer a sensible page breakdown.'}
 
 Course map pointer:
 ${input.mapPointer || 'No map pointer supplied.'}
 
 Retrieved course memory:
-${formatMemory(input.memory)}
+${formatMemory(input.memory, isSourceCourse)}${sourceCoverageRule}
+
+PAGE COUNT — decide it from conceptual load, not from the budget:
+- Count the genuinely distinct concepts, mechanisms, or skills this topic must teach.
+- A topic with one core idea gets ONE page, even if the budget allows more. Definitional,
+  orientation, or recap topics are almost always one page.
+- Plan a second page only when the first page genuinely cannot hold the next concept
+  without overloading the learner — not to "spread material out".
+- Merge draft focuses that overlap or are too thin to stand alone.
+- Never exceed the page budget. Never plan a page whose only job is recap, motivation,
+  or "what's next" — fold those lines into a real page.
+- Do NOT plan placeholder or skip pages. Every planned page WILL be generated and read.
 
 Plan each page. Decide the SMALLEST content kind that teaches its focus, and assign a
 sequence role so the topic reads as one coherent arc (e.g. introduce → deepen →
 connect → practice → review). Only pages whose content_kind is "full_page" get a full
-architecture brief; bridge/section/example/skip pages set "brief" to null.
+architecture brief; bridge/section/example pages set "brief" to null.
 
 Return this exact JSON shape:
 {
+  "page_count_reason": "one line: why this topic needs exactly N pages",
   "pages": [
     {
       "page_number": 1,
       "focus": "the focus for this page",
-      "content_kind": "full_page|section|bridge|example|skip",
+      "content_kind": "full_page|section|bridge|example",
       "page_sequence_role": "introduce|deepen|connect|repair|practice|review",
+      "target_length": "short|medium|long",
       "brief": null
     },
     {
@@ -117,6 +183,7 @@ Return this exact JSON shape:
       "focus": "...",
       "content_kind": "full_page",
       "page_sequence_role": "deepen",
+      "target_length": "medium",
       "brief": {
         "target_understanding": "what mental change this page should create",
         "success_criteria": ["what the learner should be able to explain or do"],
@@ -155,8 +222,9 @@ Return this exact JSON shape:
 }
 
 Rules:
-- Produce exactly one entry per page (page_number 1..${input.plannedPages}).
-- Choose the smallest content kind that teaches the focus. Most topics have a mix.
+- "pages" must contain between 1 and ${input.plannedPages} entries, numbered contiguously from 1.
+- target_length is a CEILING for the writer: short ≈ 250-450 words, medium ≈ 550-850, long ≈ 900-1200.
+  Choose the smallest length that genuinely teaches the focus.
 - A full_page brief MUST include at least one active_processing prompt when it covers a
   dense mechanism, math, procedure, or high-risk misconception.
 - Do not re-teach the same concept on two pages — assign distinct concepts per page and
@@ -167,24 +235,33 @@ Rules:
 }
 
 export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<TopicLessonPlan> {
-  const prompt = buildPrompt(input)
-  const text = await generateWithGemini({
+  const fidelityPolicy = policyFromCourse(input.course)
+  const prompt = buildPrompt(input, fidelityPolicy)
+  const text = await generateAI({
+    feature: 'topic_plan_analysis',
     ...prompt,
     purpose: 'primary',
     responseMimeType: 'application/json',
   })
-  const raw = parseGeminiJson<any>(text)
+  const raw = parseAIJson<any>(text)
   const rawPages: any[] = Array.isArray(raw?.pages) ? raw.pages : []
 
+  // Honor the planner's consolidation: keep only real, generatable pages
+  // (no skip placeholders), capped at the curriculum's ceiling, and renumber
+  // contiguously so navigation never has gaps.
+  const ceiling = Math.max(1, Number(input.plannedPages) || 1)
   const pages: TopicPagePlan[] = []
-  for (let i = 0; i < input.plannedPages; i++) {
-    const pageNumber = i + 1
-    const match = rawPages.find((p) => Number(p?.page_number) === pageNumber) ?? rawPages[i]
+  for (const match of rawPages) {
+    if (pages.length >= ceiling) break
     const contentKind = normalizeContentKind(match?.content_kind)
+    if (contentKind === 'skip') continue
+    const pageNumber = pages.length + 1
     const role = normalizeRole(match?.page_sequence_role)
-    const focus = compact(match?.focus, 240) || input.pageFocuses[i] || `Page ${pageNumber} of ${input.topic.title}`
+    const focus = compact(match?.focus, 240)
+      || input.pageFocuses[pageNumber - 1]
+      || `Page ${pageNumber} of ${input.topic.title}`
 
-    // Only full_page pages carry a full architecture brief (#3 — skip brief on simple).
+    // Only full_page pages carry a full architecture brief.
     let brief: LearningArchitectureBrief | null = null
     if (contentKind === 'full_page' && match?.brief) {
       const normalized = normalizeBrief(match.brief)
@@ -195,8 +272,33 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
       }
     }
 
-    pages.push({ page_number: pageNumber, focus, content_kind: contentKind, page_sequence_role: role, brief })
+    pages.push({
+      page_number: pageNumber,
+      focus,
+      content_kind: contentKind,
+      page_sequence_role: role,
+      target_length: normalizeTargetLength(match?.target_length, contentKind),
+      brief,
+    })
   }
 
-  return { generated_at: new Date().toISOString(), version: PLAN_VERSION, pages }
+  // Defensive floor: a topic always has at least one page.
+  if (!pages.length) {
+    pages.push({
+      page_number: 1,
+      focus: input.pageFocuses[0] || `Introduce ${input.topic.title}, its role in the course, and the core intuition.`,
+      content_kind: 'full_page',
+      page_sequence_role: 'introduce',
+      target_length: 'medium',
+      brief: null,
+    })
+  }
+
+  return {
+    generated_at: new Date().toISOString(),
+    version: PLAN_VERSION,
+    fidelity_key: fidelityPolicy?.key ?? null,
+    page_count_reason: compact(raw?.page_count_reason, 240) || `Planned ${pages.length} page(s) from conceptual load.`,
+    pages,
+  }
 }

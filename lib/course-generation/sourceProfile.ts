@@ -1,5 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 
 // ── Source teaching profile ───────────────────────────────────────────────────
 //
@@ -113,9 +112,10 @@ export async function analyzeSourceProfile({
   if (!sourceText.trim()) return null
 
   try {
-    const text = await generateWithGemini({
+    const text = await generateAI({
+      feature: 'source_profile',
       system: `You are TruLurn's source material analyst.
-A student uploaded study material so an AI tutor can teach them THE WHOLE SUBJECT the way their school/instructor teaches it. You do not summarize the content. You profile how it teaches and reconstruct the curriculum it belongs to.
+A learner uploaded study material so an AI tutor can teach them THE WHOLE SUBJECT the way the material's original instructor or author teaches it. The learner may be a school or university student, a working professional, a hobbyist, an educator, or a researcher — do not assume which. You do not summarize the content. You profile how it teaches and reconstruct the curriculum it belongs to.
 Return only valid JSON. No markdown. No prose outside JSON.`,
       user: `The learner's goal:
 ${goals}
@@ -170,11 +170,10 @@ Return exactly:
   "addressed_misconceptions": ["..."],
   "reconstruction": { "prerequisite_topics": ["..."], "dependent_topics": ["..."], "recommended_course_scope": "..." }
 }`,
-      purpose: 'primary',
       responseMimeType: 'application/json',
     })
 
-    return normalizeProfile(parseGeminiJson<any>(text))
+    return normalizeProfile(parseAIJson<any>(text))
   } catch (error) {
     console.warn('[sourceProfile] Analysis failed — continuing without a teaching profile.', error)
     return null

@@ -3,19 +3,32 @@ import { getDb } from '@/lib/db'
 import { readCourseGenerationInput, validateCourseGenerationInput } from '@/lib/course-generation/input'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import crypto from 'crypto'
+import { ensureLexicalSearchIndexes, ensureVectorSearchIndexes } from '@/lib/vector/indexes'
 
 export async function POST(request: Request) {
   try {
     const userId = await getRequiredUserId()
-    const input = await readCourseGenerationInput(request)
+    const db = await getDb()
+    const jobId = crypto.randomUUID()
+    const [vectorIndexes, lexicalIndexes] = await Promise.all([
+      ensureVectorSearchIndexes(db),
+      ensureLexicalSearchIndexes(db),
+    ])
+    const indexErrors = [...vectorIndexes, ...lexicalIndexes]
+      .filter((index) => index.status === 'error')
+    if (indexErrors.length) {
+      console.warn('[course-generation] Vector index setup reported errors.', indexErrors)
+    }
+    const input = await readCourseGenerationInput(request, {
+      db,
+      userId,
+      generationJobId: jobId,
+    })
     const validationError = validateCourseGenerationInput(input)
 
     if (validationError) {
       return NextResponse.json({ error: validationError }, { status: 400 })
     }
-
-    const db = await getDb()
-    const jobId = crypto.randomUUID()
 
     const jobDoc = {
       _id: jobId,
@@ -38,6 +51,9 @@ export async function POST(request: Request) {
         previewCurriculum: input.previewCurriculum,
         sourceText: input.sourceText || null,
         sourceLimitations: input.sourceLimitations || [],
+        sourceDocumentIds: input.sourceDocumentIds || [],
+        sourceVersionIds: input.sourceVersionIds || [],
+        sourceIngestionJobIds: input.sourceIngestionJobIds || [],
       },
       created_at: new Date(),
       updated_at: new Date(),

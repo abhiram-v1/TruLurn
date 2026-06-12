@@ -8,11 +8,28 @@ import {
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
   IconLock,
+  IconMap2,
+  IconTags,
   IconTopologyStar3,
+  IconTrash,
 } from '@tabler/icons-react'
 import Link from 'next/link'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Topic } from '@/types'
+
+type TaggedReminder = {
+  id: string
+  courseId: string
+  recallSessionId: string
+  recallItemId: string
+  prompt: string
+  concept: string
+  type: 'recall' | 'connection' | 'application'
+  topicId: string
+  topicTitle: string
+  pageNumber: number | null
+  taggedAt: string
+}
 
 function isContainer(topic: Topic) {
   return topic.node_type === 'container' || Number(topic.children_count ?? 0) > 0
@@ -73,6 +90,10 @@ export function MiniRoadmap({
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(
     () => initialExpandedTopics(topics, currentTopicId),
   )
+  const [panelView, setPanelView] = useState<'map' | 'tagged'>('map')
+  const [taggedReminders, setTaggedReminders] = useState<TaggedReminder[]>([])
+  const [tagsLoading, setTagsLoading] = useState(true)
+  const [tagsError, setTagsError] = useState<string | null>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
   const sections = Array.from(new Set(topics.map((topic) => topic.section)))
   const visibleRailTopics = topics.slice(0, 12)
@@ -99,6 +120,44 @@ export function MiniRoadmap({
   const currentIndex = teachable.findIndex((topic) => topic.id === currentTopicId)
   const nextTopic = currentIndex >= 0 ? teachable[currentIndex + 1] ?? null : null
   const nextIsLocked = nextTopic?.state === 'locked'
+
+  const loadTaggedReminders = useCallback(async () => {
+    setTagsLoading(true)
+    setTagsError(null)
+    try {
+      const res = await fetch(`/api/recall/tags?courseId=${encodeURIComponent(courseId)}`)
+      const data = await res.json()
+      if (!res.ok) {
+        setTagsError(typeof data.error === 'string' ? data.error : 'Could not load tagged reminders.')
+        return
+      }
+      setTaggedReminders(Array.isArray(data.reminders) ? data.reminders : [])
+    } catch {
+      setTagsError('Could not load tagged reminders.')
+    } finally {
+      setTagsLoading(false)
+    }
+  }, [courseId])
+
+  // Prefetch the reminder list so switching views feels immediate.
+  useEffect(() => {
+    void loadTaggedReminders()
+  }, [loadTaggedReminders])
+
+  // Tagging happens inside the recall overlay; update Traccia without waiting
+  // for another network read.
+  useEffect(() => {
+    function handleTagged(event: Event) {
+      const reminder = (event as CustomEvent<TaggedReminder>).detail
+      if (!reminder || reminder.courseId !== courseId) return
+      setTaggedReminders((current) => [
+        reminder,
+        ...current.filter((item) => item.id !== reminder.id),
+      ])
+    }
+    window.addEventListener('trulurn:tagged-reminder', handleTagged)
+    return () => window.removeEventListener('trulurn:tagged-reminder', handleTagged)
+  }, [courseId])
 
   // Keep the current topic visible — the list can hold dozens of topics.
   useEffect(() => {
@@ -220,23 +279,112 @@ export function MiniRoadmap({
     )
   }
 
+  async function removeTaggedReminder(reminderId: string) {
+    const previous = taggedReminders
+    setTaggedReminders((current) => current.filter((reminder) => reminder.id !== reminderId))
+    try {
+      const res = await fetch(
+        `/api/recall/tags?courseId=${encodeURIComponent(courseId)}&reminderId=${encodeURIComponent(reminderId)}`,
+        { method: 'DELETE' },
+      )
+      if (!res.ok) setTaggedReminders(previous)
+    } catch {
+      setTaggedReminders(previous)
+    }
+  }
+
+  function renderTaggedReminders() {
+    return (
+      <div className="tagged-reminders-view">
+        <div className="tagged-reminders-intro">
+          <strong>Return to what felt uncertain</strong>
+          <span>Each reminder opens the exact lesson that prompted it.</span>
+        </div>
+
+        {tagsLoading ? (
+          <div className="tagged-reminders-state" role="status">Loading reminders...</div>
+        ) : tagsError ? (
+          <div className="tagged-reminders-state is-error" role="alert">
+            <span>{tagsError}</span>
+            <button type="button" onClick={() => void loadTaggedReminders()}>Retry</button>
+          </div>
+        ) : taggedReminders.length ? (
+          <div className="tagged-reminders-list">
+            {taggedReminders.map((reminder) => {
+              const href = `/learn/${courseId}/${reminder.topicId}${reminder.pageNumber ? `?page=${reminder.pageNumber}` : ''}`
+              return (
+                <div className="tagged-reminder-row" key={reminder.id}>
+                  <Link className="tagged-reminder-link" href={href} prefetch>
+                    <span className="tagged-reminder-concept">
+                      <IconTags aria-hidden="true" size={13} stroke={1.8} />
+                      {reminder.concept || reminder.topicTitle}
+                    </span>
+                    <span className="tagged-reminder-prompt">{reminder.prompt}</span>
+                    <span className="tagged-reminder-source">
+                      {reminder.topicTitle}
+                      {reminder.pageNumber ? ` · Page ${reminder.pageNumber}` : ''}
+                      <IconArrowRight aria-hidden="true" size={13} stroke={2} />
+                    </span>
+                  </Link>
+                  <button
+                    className="tagged-reminder-remove"
+                    type="button"
+                    aria-label={`Remove reminder for ${reminder.concept || reminder.topicTitle}`}
+                    title="Remove tagged reminder"
+                    onClick={() => void removeTaggedReminder(reminder.id)}
+                  >
+                    <IconTrash aria-hidden="true" size={14} stroke={1.7} />
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="tagged-reminders-state">
+            <IconTags aria-hidden="true" size={22} stroke={1.5} />
+            <strong>No tagged reminders yet</strong>
+            <span>Tag a recall prompt when you want to revisit its source later.</span>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="roadmap-header">
-        {!collapsed ? <p className="panel-label">Traccia</p> : null}
-        <button
-          className="panel-toggle roadmap-toggle"
-          type="button"
-          onClick={onToggle}
-          aria-label={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
-          title={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
-        >
-          {collapsed ? (
-            <IconLayoutSidebarLeftExpand aria-hidden="true" size={18} stroke={1.8} />
-          ) : (
-            <IconLayoutSidebarLeftCollapse aria-hidden="true" size={18} stroke={1.8} />
-          )}
-        </button>
+        {!collapsed ? <p className="panel-label">{panelView === 'map' ? 'Traccia' : 'Tagged reminders'}</p> : null}
+        <div className="roadmap-header-actions">
+          {!collapsed ? (
+            <button
+              className="panel-toggle roadmap-view-toggle"
+              type="button"
+              onClick={() => setPanelView((view) => view === 'map' ? 'tagged' : 'map')}
+              aria-label={panelView === 'map' ? 'Show tagged reminders' : 'Show Traccia map'}
+              title={panelView === 'map' ? 'Show tagged reminders' : 'Show Traccia map'}
+              aria-pressed={panelView === 'tagged'}
+            >
+              {panelView === 'map' ? (
+                <IconTags aria-hidden="true" size={17} stroke={1.8} />
+              ) : (
+                <IconMap2 aria-hidden="true" size={17} stroke={1.8} />
+              )}
+            </button>
+          ) : null}
+          <button
+            className="panel-toggle roadmap-toggle"
+            type="button"
+            onClick={onToggle}
+            aria-label={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
+            title={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
+          >
+            {collapsed ? (
+              <IconLayoutSidebarLeftExpand aria-hidden="true" size={18} stroke={1.8} />
+            ) : (
+              <IconLayoutSidebarLeftCollapse aria-hidden="true" size={18} stroke={1.8} />
+            )}
+          </button>
+        </div>
       </div>
 
       {collapsed ? (
@@ -279,6 +427,8 @@ export function MiniRoadmap({
             </div>
           ) : null}
         </>
+      ) : panelView === 'tagged' ? (
+        renderTaggedReminders()
       ) : (
         <>
           {/* Course progress — always visible above the list */}

@@ -4,6 +4,7 @@ type OrderedTopicLike = {
   branch_id?: unknown
   branch_position?: unknown
   position?: unknown
+  planned_pages?: unknown
   estimated_pages?: unknown
   total_pages_planned?: unknown
   node_type?: unknown
@@ -38,7 +39,10 @@ export function plannedPageCount(topic: OrderedTopicLike, minimum = 1) {
   const isContainer = String(topic.node_type ?? '') === 'container' || asNumber(topic.children_count, 0) > 0
   if (isContainer) return 0
 
-  const planned = asNumber(topic.estimated_pages ?? topic.total_pages_planned, minimum)
+  // The lesson plan's page count (planned_pages) is authoritative once it
+  // exists; the curriculum's estimate is only the pre-plan guess.
+  const fromPlan = asNumber(topic.planned_pages, 0)
+  const planned = fromPlan > 0 ? fromPlan : asNumber(topic.estimated_pages ?? topic.total_pages_planned, minimum)
   return Math.min(15, Math.max(minimum, planned))
 }
 

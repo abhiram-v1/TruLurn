@@ -16,9 +16,14 @@ export const OPENAI_EMBEDDING_DIMENSIONS = Number(
   process.env.OPENAI_EMBEDDING_DIMENSIONS ?? 768,
 )
 
-export async function embedTextWithOpenAI(text: string): Promise<number[]> {
+export async function embedTextWithOpenAI(
+  text: string,
+  options: { model?: string; dimensions?: number } = {},
+): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY
   const cleanText = text.replace(/\s+/g, ' ').trim()
+  const model = options.model ?? OPENAI_EMBEDDING_MODEL
+  const dimensions = options.dimensions ?? OPENAI_EMBEDDING_DIMENSIONS
 
   if (!apiKey) {
     throw new Error('Missing OPENAI_API_KEY in .env.local')
@@ -35,9 +40,9 @@ export async function embedTextWithOpenAI(text: string): Promise<number[]> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: OPENAI_EMBEDDING_MODEL,
+      model,
       input: cleanText.slice(0, 16000),
-      dimensions: OPENAI_EMBEDDING_DIMENSIONS,
+      dimensions,
     }),
   })
 

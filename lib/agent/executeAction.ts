@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import type { Db } from 'mongodb'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
+import { generateAI } from '@/lib/ai'
 import { firstTeachableDescendant, isTeachableTopic, nextRecommendedTeachableTopic, previousTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 import { resolveStyleFromMessage, STYLE_CATALOG } from '@/lib/ai/skills/lessonStyle'
 import type { ActionIntent, UIAction } from '@/types/agent'
@@ -37,7 +37,7 @@ async function resolveTopicFromMessage(
   const teachableTopics = topics.filter((topic) => isTeachableTopic(topic as any))
   if (!teachableTopics.length) return null
 
-  // Fast path: exact case-insensitive substring match — avoids the Gemini call
+  // Fast path: exact case-insensitive substring match avoids an AI call.
   // for the common case where the student uses the exact topic title.
   const lower = message.toLowerCase()
   const exact = teachableTopics.find((t) => lower.includes(String(t.title).toLowerCase()))
@@ -46,7 +46,8 @@ async function resolveTopicFromMessage(
   const numbered = teachableTopics.map((t, i) => `${i + 1}. ${t.title}`).join('\n')
 
   try {
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'agent_action',
       system: `You match a student's message to the most relevant topic from a numbered list.
 Return ONLY the topic number (e.g. "3"). Return "0" if no topic is a reasonable match.
 No explanation. No punctuation.`,

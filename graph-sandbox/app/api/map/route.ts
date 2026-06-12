@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAIResult, parseAIJson } from '@/lib/ai'
 import { mapBuilderSkill } from '@/lib/ai/skills'
 import { buildSandboxGraphData, type SandboxMap } from '@/lib/graph/sandbox'
 import { ensureSandboxEnvironment } from '@/lib/graph/sandboxEnvironment'
@@ -41,8 +40,9 @@ export async function POST(request: Request) {
     const startedAt = Date.now()
     const generationProfile = body.generationProfile === 'production' ? 'production' : 'fast'
     const stageTimeout = generationProfile === 'fast' ? 75_000 : 180_000
-    const mapText = await withTimeout(
-      (signal) => generateWithGemini({
+    const generation = await withTimeout(
+      (signal) => generateAIResult({
+        feature: 'map_generation',
         ...mapBuilderSkill(body.curriculum),
         purpose: generationProfile === 'production' ? 'primary' : 'agent',
         reasoningEffort: generationProfile === 'fast' ? 'low' : undefined,
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
       stageTimeout,
       'Graph topology generation',
     )
-    const map = parseGeminiJson<SandboxMap>(mapText)
+    const map = parseAIJson<SandboxMap>(generation.text)
     const graph = buildSandboxGraphData(body.curriculum, map)
     const generatedTopics = Array.isArray(map.topics) ? map.topics : []
 
@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       graph,
       mapMs: Date.now() - startedAt,
       diagnostics: {
+        provider: generation.provider,
         topicCount: graph.course.topicCount,
         structuralNodeCount: generatedTopics.filter((topic) => topic.node_type === 'container').length,
         edgeCount: graph.edges.length,

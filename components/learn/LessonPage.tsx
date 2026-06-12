@@ -86,6 +86,23 @@ export function LessonPage({
           </>
         )}
 
+        {page.source_citations?.length ? (
+          <details className="lesson-source-citations">
+            <summary>Sources used on this page</summary>
+            <ol>
+              {page.source_citations.map((citation) => (
+                <li key={citation.citation_id}>
+                  <strong>[{citation.citation_id}]</strong>{' '}
+                  <span>{citation.source_title}</span>
+                  {citation.heading_path.length ? (
+                    <small>{citation.heading_path.join(' > ')}</small>
+                  ) : null}
+                </li>
+              ))}
+            </ol>
+          </details>
+        ) : null}
+
         {children && (
           <div
             style={{

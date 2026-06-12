@@ -1,11 +1,12 @@
 import crypto from 'crypto'
 import type { Db } from 'mongodb'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
+import { generateAI } from '@/lib/ai'
 import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
 import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
 import { buildDoubtPrompt, type TopicStateSnapshot } from '@/lib/doubts/context'
 import { extractForwardRef, storeForwardRef } from '@/lib/agent/forwardRefs'
 import { applyStyleAdjustment, detectStyleAdjustment } from '@/lib/agent/styleControl'
+import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
 import {
   computeGlobalPagePosition,
   findTopicPageByGlobalNumber,
@@ -24,6 +25,16 @@ import {
   type CourseMemoryContext,
   type RelevantPage,
 } from '@/lib/vector/retrieval'
+import {
+  buildSourceEvidencePackets,
+  verifyGroundedAnswer,
+  type GroundingReport,
+  type SourceCitation,
+} from '@/lib/grounding/sourceGrounding'
+import {
+  formatLearnerMemoryContext,
+  getLearnerMemorySnapshot,
+} from '@/lib/memory/service'
 
 type HandleDoubtInput = {
   db: Db
@@ -315,12 +326,13 @@ async function generateAnswer({
     relevantSources: memory.sourceChunks,
   })
 
-  const geminiText = await generateWithGemini({
+  const generatedText = await generateAI({
+    feature: 'doubt_answer',
     ...prompt,
     purpose: 'agent',
     responseMimeType: 'text/plain',
   })
-  const answer = geminiText.trim() || 'I am sorry, I could not formulate a scoped response.'
+  const answer = generatedText.trim() || 'I am sorry, I could not formulate a scoped response.'
 
   // If the model signals it needs retrieval, retry with course-specific context
   if (answer.startsWith('NEEDS_RETRIEVAL:') && type !== 'course_specific') {
@@ -364,6 +376,8 @@ async function storeMessage({
   globalPageNumber,
   role,
   content,
+  sourceCitations = [],
+  grounding = null,
 }: {
   db: Db
   courseId: string
@@ -373,6 +387,8 @@ async function storeMessage({
   globalPageNumber?: number
   role: 'user' | 'assistant'
   content: string
+  sourceCitations?: SourceCitation[]
+  grounding?: GroundingReport | null
 }) {
   const id = crypto.randomUUID()
 
@@ -385,12 +401,18 @@ async function storeMessage({
     global_page_number: globalPageNumber ?? null,
     role,
     content,
+    source_citations: sourceCitations,
+    grounding,
+    retrieval_eligible: role === 'user',
+    embedding_status: role === 'user' ? 'pending' : 'excluded',
     created_at: new Date(),
   })
 
-  embedDoubtMessageById(db, id).catch((error) => {
-    console.warn('Failed to embed doubt message.', error)
-  })
+  if (role === 'user') {
+    await embedDoubtMessageById(db, id).catch((error) => {
+      console.warn('Failed to embed learner question.', error)
+    })
+  }
 
   return id
 }
@@ -407,13 +429,17 @@ export async function handleDoubt(input: HandleDoubtInput) {
   // Saves 3 DB reads (topics + topicSummaries + pageSummaries) per GK question.
   const needsConceptMap = input.preClassifiedType !== 'general_knowledge'
 
-  const [position, recentHistory, conceptMap, topicState] = await Promise.all([
+  const [position, recentHistory, conceptMap, topicState, learnerMemory] = await Promise.all([
     fetchCurrentPosition(input.db, input.courseId, input.topicId, input.pageNumber, input.userId),
     fetchRecentHistory(input.db, input.courseId, input.userId),
     needsConceptMap
       ? getConceptMap(input.db, input.courseId)
       : Promise.resolve([] as string[]),
     fetchTopicState(input.db, input.courseId, input.topicId, input.userId),
+    getLearnerMemorySnapshot(input.db, input.userId, input.courseId).catch((error) => {
+      console.warn('[doubts] Learner Memory V2 unavailable.', error)
+      return { memories: [], skills: [], misconceptions: [] }
+    }),
   ])
 
   // Use pre-classified type from the combined intent classifier if available —
@@ -458,14 +484,35 @@ export async function handleDoubt(input: HandleDoubtInput) {
     }).catch((err) => console.warn('Failed to apply style adjustment.', err))
     styleContext = [
       'STYLE ADJUSTMENT JUST APPLIED (you did this — own it):',
-      `- New persistent lesson directive: "${styleAdjustment.directive}"`,
+      styleAdjustment.directive ? `- New persistent lesson directive: "${styleAdjustment.directive}"` : null,
       styleAdjustment.knowledgeLevel ? `- Course knowledge level set to: ${styleAdjustment.knowledgeLevel}` : null,
+      styleAdjustment.sourceCoverage
+        ? `- Source coverage set to "${styleAdjustment.sourceCoverage}" (${{
+            complete: 'lessons will cover every point in the uploaded material, compactly',
+            smart: 'lessons cover all substantive points; trivial asides get compressed',
+            core: 'lessons focus deeply on the key concepts; peripheral detail is skipped',
+          }[styleAdjustment.sourceCoverage]})`
+        : null,
+      styleAdjustment.personaLabel
+        ? `- Learner profile updated: lessons, quizzes, and examples will now be framed for "${styleAdjustment.personaLabel}".`
+        : null,
       'Briefly confirm to the student that all lesson pages generated from now on will follow this.',
       'Mention that already-generated pages stay as they are unless regenerated (the regenerate options on each page apply the new style).',
     ].filter(Boolean).join('\n')
   }
 
-  const combinedWorkspaceContext = [workspaceContext, explicitPageContext, styleContext]
+  // Who the learner is — keeps answers framed for THIS person (professional,
+  // hobbyist, school student, educator...), never a default school student.
+  const audienceContext = buildAudienceDirective(position.course.learner_persona, position.course.goals)
+  const learnerMemoryContext = formatLearnerMemoryContext(learnerMemory)
+
+  const combinedWorkspaceContext = [
+    audienceContext,
+    learnerMemoryContext,
+    workspaceContext,
+    explicitPageContext,
+    styleContext,
+  ]
     .filter((block) => block && block.trim())
     .join('\n\n')
 
@@ -473,6 +520,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
   // current_page: page content is already in the prompt — no cross-topic retrieval.
   // course_specific: full vector retrieval for cross-topic context.
   const shouldRetrieveMemory = type === 'course_specific' || contextPlan.needsSemanticMemory
+    || (String(position.course.mode ?? '') === 'source_grounded' && type !== 'general_knowledge')
   const memory = shouldRetrieveMemory
     ? await retrieveCourseMemory({
         db: input.db,
@@ -482,14 +530,18 @@ export async function handleDoubt(input: HandleDoubtInput) {
         currentTopicId: input.topicId,
         pageLimit: 3,
         doubtLimit: 4,
-        sourceLimit: 3,
+        sourceLimit: String(position.course.mode ?? '') === 'source_grounded' ? 5 : 3,
+        workflow: 'doubt_answer',
       })
-    : { pages: [], doubtMessages: [], sourceChunks: [] }
+    : { pages: [], doubtMessages: [], sourceChunks: [], traceId: null }
 
   const relevantPages = shouldRetrieveMemory ? memory.pages : []
+  const sourceEvidence = buildSourceEvidencePackets(memory.sourceChunks)
+  const requiresSourceGrounding = String(position.course.mode ?? '') === 'source_grounded'
+    && type !== 'general_knowledge'
 
   // Fire-and-forget — don't block answer generation on the DB write.
-  storeMessage({
+  await storeMessage({
     db: input.db,
     courseId: input.courseId,
     userId: input.userId,
@@ -500,22 +552,49 @@ export async function handleDoubt(input: HandleDoubtInput) {
     content: question,
   }).catch((err) => console.warn('Failed to store user message.', err))
 
-  const rawAnswer = await generateAnswer({
-    db: input.db,
-    type,
-    question,
-    selectedContext,
-    workspaceContext: combinedWorkspaceContext,
-    courseId: input.courseId,
-    userId: input.userId,
-    topicId: input.topicId,
-    currentPage: position.promptPage,
-    recentHistory,
-    conceptMap,
-    topicState,
-    relevantPages,
-    memory,
-  })
+  let rawAnswer: string
+  let grounding: GroundingReport | null = null
+  let sourceCitations: SourceCitation[] = []
+  if (requiresSourceGrounding && !sourceEvidence.length) {
+    rawAnswer = 'The uploaded sources do not provide enough relevant evidence to answer that reliably.'
+    grounding = {
+      version: 'claim-evidence-v1',
+      status: 'abstained',
+      citation_ids: [],
+      evidence_ids: [],
+      claims: [],
+      conflicts: [],
+      summary: 'No relevant source evidence was retrieved safely.',
+      verified_at: new Date(),
+    }
+  } else {
+    rawAnswer = await generateAnswer({
+      db: input.db,
+      type,
+      question,
+      selectedContext,
+      workspaceContext: combinedWorkspaceContext,
+      courseId: input.courseId,
+      userId: input.userId,
+      topicId: input.topicId,
+      currentPage: position.promptPage,
+      recentHistory,
+      conceptMap,
+      topicState,
+      relevantPages,
+      memory,
+    })
+    if (requiresSourceGrounding) {
+      const verified = await verifyGroundedAnswer({
+        answer: rawAnswer,
+        question,
+        packets: sourceEvidence,
+      })
+      rawAnswer = verified.content
+      grounding = verified.report
+      sourceCitations = verified.citations
+    }
+  }
 
   const { cleanResponse, ref } = extractForwardRef(rawAnswer)
 
@@ -540,11 +619,15 @@ export async function handleDoubt(input: HandleDoubtInput) {
     globalPageNumber: position.promptPage.globalPageNumber,
     role: 'assistant',
     content: cleanResponse,
+    sourceCitations,
+    grounding,
   })
 
   return {
     id: assistantId,
     content: cleanResponse,
+    sourceCitations,
+    grounding,
     questionType: type,
     retrievedPages: relevantPages.map((page) => ({
       topicTitle: page.topic_title,
@@ -555,6 +638,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
       pages: memory.pages.length,
       doubts: memory.doubtMessages.length,
       sources: memory.sourceChunks.length,
+      traceId: memory.traceId,
     },
     contextPlan,
   }

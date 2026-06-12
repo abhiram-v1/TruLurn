@@ -2,26 +2,31 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { createRecallSession, type RecallSessionDoc } from '@/lib/recall/generateRecallPage'
+import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
 import { getRecallBreakMode, snoozeBreak, type StudySessionDoc } from '@/lib/recall/session'
 
-function serializeRecallSession(doc: RecallSessionDoc) {
+function serializeRecallSession(doc: RecallSessionDoc, taggedItemIds: Set<string>) {
   return {
     id: doc._id,
     headline: doc.headline,
-    summaries: doc.summaries,
+    summaries: [],
     items: doc.items.map((item) => ({
       id: item.id,
       type: item.type,
       concept: item.concept,
       prompt: item.prompt,
-      answer: item.answer,
+      topicId: item.topic_id,
+      topicTitle: item.topic_title,
+      pageNumber: item.page_number,
+      tagged: taggedItemIds.has(item.id),
     })),
   }
 }
 
 // POST /api/recall/break
 // action: "start"  → generate (or resume) the recall page for the current stretch
-// action: "snooze" → suppress the break prompt for ~5 minutes
+// action: "snooze" → suppress the break prompt for a bounded custom delay
+// action: "skip"   → dismiss this suggestion and reconsider at a later point
 export async function POST(request: Request) {
   try {
     const userId = await getRequiredUserId()
@@ -36,7 +41,7 @@ export async function POST(request: Request) {
     const db = await getDb()
     const course = await db.collection('courses').findOne(
       { _id: courseId as any, user_id: userId },
-      { projection: { title: 1, topic: 1 } },
+      { projection: { title: 1, topic: 1, goals: 1, learner_persona: 1 } },
     )
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
@@ -51,9 +56,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No active study session for this course yet.' }, { status: 404 })
     }
 
-    if (action === 'snooze') {
-      await snoozeBreak({ db, sessionId: session._id, userId })
-      return NextResponse.json({ snoozed: true })
+    if (action === 'snooze' || action === 'skip') {
+      const requestedMinutes = action === 'skip' ? 20 : Number(body.minutes ?? 5)
+      const minutes = Number.isFinite(requestedMinutes)
+        ? Math.min(120, Math.max(1, Math.round(requestedMinutes)))
+        : 5
+      await snoozeBreak({ db, sessionId: session._id, userId, minutes })
+      return NextResponse.json({ snoozed: true, skipped: action === 'skip', minutes })
     }
 
     const mode = await getRecallBreakMode(db, userId)
@@ -64,9 +73,19 @@ export async function POST(request: Request) {
       session,
       courseTitle: String(course.title ?? course.topic ?? 'Course'),
       trigger,
+      audienceDirective: buildAudienceDirective(course.learner_persona, course.goals),
     })
+    const tagged = await db.collection('taggedReminders').find(
+      {
+        user_id: userId,
+        course_id: courseId,
+        recall_session_id: recallSession._id,
+      },
+      { projection: { recall_item_id: 1 } },
+    ).toArray()
+    const taggedItemIds = new Set(tagged.map((item) => String(item.recall_item_id)))
 
-    return NextResponse.json({ recall: serializeRecallSession(recallSession) })
+    return NextResponse.json({ recall: serializeRecallSession(recallSession, taggedItemIds) })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not start the recall break.'
     const status = message.includes('sign in') ? 401 : message.includes('Nothing new') ? 409 : 500

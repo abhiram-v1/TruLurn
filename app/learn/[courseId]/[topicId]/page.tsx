@@ -68,8 +68,11 @@ export default async function LearnTopicPage({
     }
   }
 
-  // Compute this early — needed by MissingPageGenerator for initial batch prefetch
-  const estimatedPages = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
+  // Page-count authority: once the topic's lesson plan exists, planned_pages is
+  // the real page count (the plan consolidates thin topics). The curriculum's
+  // estimated_pages is only the pre-plan guess.
+  const plannedPages = Number(topic.planned_pages) > 0 ? Number(topic.planned_pages) : null
+  const estimatedPages = Math.max(1, plannedPages ?? Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
 
   if (topic.state === 'locked') {
     // Auto-repair: if any ancestor container is active, this leaf should also be active.
@@ -189,6 +192,7 @@ export default async function LearnTopicPage({
       branch_id: 1,
       branch_position: 1,
       position: 1,
+      planned_pages: 1,
       estimated_pages: 1,
       total_pages_planned: 1,
       node_type: 1,
@@ -221,7 +225,8 @@ export default async function LearnTopicPage({
 
   const requestedPage = Math.max(1, Number(searchParams?.page ?? '1'))
 
-  // No pages at all → generate page 1, then batch-prefetch pages 2-4 in background
+  // No pages at all → generate page 1 (the topic plan is created in the same
+  // request; later pages prefetch one-ahead while the student reads).
   if (!pages.length) {
     return (
       <MissingPageGenerator
@@ -229,16 +234,19 @@ export default async function LearnTopicPage({
         topicId={topicId}
         topicTitle={topic.title}
         pageNumber={1}
-        estimatedPages={estimatedPages}
       />
     )
   }
 
   // Student navigated to a page not yet generated → generate it.
-  // Always allow the immediately-next page beyond stored count, regardless of estimatedPages
-  // (estimated_pages may be null/1 for existing topics — don't block discovery).
-  // Hard cap at 15 pages per topic to prevent runaway generation.
-  const maxAllowedPage = Math.min(Math.max(estimatedPages, pages.length + 1), 15)
+  // With a lesson plan: generation is capped at the planned page count — thin
+  // topics cannot balloon by clicking Next (custom pages via the agent are
+  // already stored, so viewing them is unaffected). Without a plan yet
+  // (first touch / legacy topics): allow the next page so the generate route
+  // can build the plan and decide. Hard cap at 15 pages either way.
+  const maxAllowedPage = plannedPages !== null
+    ? Math.min(Math.max(plannedPages, pages.length), 15)
+    : Math.min(Math.max(estimatedPages, pages.length + 1), 15)
   if (requestedPage > pages.length && requestedPage <= maxAllowedPage) {
     return (
       <MissingPageGenerator
@@ -351,6 +359,8 @@ export default async function LearnTopicPage({
     reminder_concepts: Array.isArray(activePage.reminder_concepts) ? activePage.reminder_concepts.map(String) : undefined,
     example_refs: Array.isArray(activePage.example_refs) ? activePage.example_refs : undefined,
     sections: Array.isArray(activePage.sections) ? activePage.sections : undefined,
+    source_citations: Array.isArray(activePage.source_citations) ? activePage.source_citations : undefined,
+    grounding: activePage.grounding ?? null,
   }
 
   const serializedMessages = messages.reverse().map((m) => ({
@@ -360,6 +370,8 @@ export default async function LearnTopicPage({
     topic_title: messageTopicTitleById.get(String(m.topic_id)) ?? null,
     role: m.role as any,
     content: m.content,
+    source_citations: Array.isArray(m.source_citations) ? m.source_citations : undefined,
+    grounding: m.grounding ?? null,
     created_at: m.created_at.toISOString(),
   }))
 

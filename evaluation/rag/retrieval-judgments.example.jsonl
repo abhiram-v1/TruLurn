@@ -1,0 +1,2 @@
+{"query_id":"cnn-local-patterns","relevant_ids":["source-passage-12","page-44"],"ranked_ids":["source-passage-12","page-44","page-18"],"baseline_ranked_ids":["page-18","page-44"],"latency_ms":84}
+{"query_id":"gradient-descent-step-size","relevance":{"page-73":2,"source-passage-21":1},"ranked_ids":["page-73","source-passage-21"],"baseline_ranked_ids":["source-passage-21","page-19"],"latency_ms":91}

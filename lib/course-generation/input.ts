@@ -1,6 +1,8 @@
 import type { CourseDepth, CurriculumMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/lib/ai/skills/types'
 import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
 import { extractSourceTextFromFormData, normalizeCurriculumMode } from '@/lib/ai/sources'
+import type { Db } from 'mongodb'
+import { ingestSourceFilesFromFormData } from '@/lib/sources/ingestion'
 
 export type CourseGenerationInput = {
   topic: string          // derived from goals — kept for backward compat with persistence
@@ -19,6 +21,9 @@ export type CourseGenerationInput = {
   // Sources act as behavioral training data, not as content boundaries.
   sourceProfile?: SourceTeachingProfile | null
   sourceLimitations: string[]
+  sourceDocumentIds?: string[]
+  sourceVersionIds?: string[]
+  sourceIngestionJobIds?: string[]
 }
 
 type RawCourseGenerationInput = {
@@ -32,6 +37,9 @@ type RawCourseGenerationInput = {
   previewCurriculum?: boolean
   sourceText?: string
   sourceOrderAnalysis?: string
+  sourceDocumentIds?: string[]
+  sourceVersionIds?: string[]
+  sourceIngestionJobIds?: string[]
 }
 
 const TEACHING_STYLE_CHOICES = [
@@ -70,13 +78,25 @@ function normalizeLearningPurpose(value: unknown): LearningPurpose {
   return 'practitioner'
 }
 
-export async function readCourseGenerationInput(request: Request): Promise<CourseGenerationInput> {
+export async function readCourseGenerationInput(
+  request: Request,
+  ingestion?: { db: Db; userId: string; generationJobId: string },
+): Promise<CourseGenerationInput> {
   const contentType = request.headers.get('content-type') ?? ''
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await request.formData()
-    const extracted = await extractSourceTextFromFormData(formData)
     const goals = String(formData.get('goals') ?? '').trim()
+    const durableExtraction = ingestion && goals.length >= 10
+      ? await ingestSourceFilesFromFormData({
+          ...ingestion,
+          formData,
+        })
+      : null
+    const extracted = durableExtraction
+      ?? (goals.length >= 10
+        ? await extractSourceTextFromFormData(formData)
+        : { sourceText: '', limitations: [] })
 
     return normalizeCourseGenerationInput({
       goals,
@@ -89,6 +109,9 @@ export async function readCourseGenerationInput(request: Request): Promise<Cours
       previewCurriculum: formData.get('previewCurriculum') !== 'false',
       sourceText: extracted.sourceText,
       sourceLimitations: extracted.limitations,
+      sourceDocumentIds: durableExtraction?.sourceDocumentIds ?? [],
+      sourceVersionIds: durableExtraction?.sourceVersionIds ?? [],
+      sourceIngestionJobIds: durableExtraction?.sourceIngestionJobIds ?? [],
     })
   }
 
@@ -119,6 +142,9 @@ function normalizeCourseGenerationInput(input: {
   sourceText?: string
   sourceOrderAnalysis?: string
   sourceLimitations: string[]
+  sourceDocumentIds?: string[]
+  sourceVersionIds?: string[]
+  sourceIngestionJobIds?: string[]
 }): CourseGenerationInput {
   const goals = input.goals?.trim() ?? ''
   return {
@@ -134,13 +160,19 @@ function normalizeCourseGenerationInput(input: {
     sourceText: input.sourceText?.trim() || undefined,
     sourceOrderAnalysis: input.sourceOrderAnalysis?.trim() || undefined,
     sourceLimitations: input.sourceLimitations,
+    sourceDocumentIds: input.sourceDocumentIds ?? [],
+    sourceVersionIds: input.sourceVersionIds ?? [],
+    sourceIngestionJobIds: input.sourceIngestionJobIds ?? [],
   }
 }
 
 export function validateCourseGenerationInput(input: CourseGenerationInput): string | null {
   if (!input.goals || input.goals.length < 10) return 'Please describe what you want to learn (at least a sentence).'
-  if (input.mode === 'source_grounded' && !input.sourceText) {
-    return 'Source-grounded mode needs at least one readable source file.'
+  if (input.mode === 'source_grounded' && !input.sourceText && !input.sourceVersionIds?.length) {
+    const extractionDetails = input.sourceLimitations.filter(Boolean).join(' ')
+    return extractionDetails
+      ? `No readable text could be extracted from the uploaded source. ${extractionDetails}`
+      : 'Source-grounded mode needs at least one non-empty, supported source file.'
   }
   return null
 }

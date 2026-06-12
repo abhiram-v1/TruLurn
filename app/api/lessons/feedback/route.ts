@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { syncLearnerMemoryV2 } from '@/lib/memory/service'
 
 // Micro-feedback signals from the bottom of each lesson page.
 // got_it      → current level is right (neutral)
@@ -66,6 +67,10 @@ export async function POST(request: Request) {
         },
       },
     )
+    await syncLearnerMemoryV2({ db, userId, courseId, force: true }).catch((error) => {
+      console.warn('[lessonFeedback] Memory V2 sync failed.', error)
+    })
+    await db.collection('learnerProfiles').deleteOne({ user_id: userId, course_id: courseId })
 
     return NextResponse.json({ ok: true, signal })
   } catch (error) {

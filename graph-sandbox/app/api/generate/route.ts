@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
-import { shouldUseOpenAI } from '@/lib/ai/openai/client'
+import { generateAIResult, parseAIJson, resolveAIFeatureRoute } from '@/lib/ai'
 import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
 import type {
   CourseDepth,
@@ -42,7 +40,7 @@ export async function GET() {
         || process.env.GOOGLE_GENERATIVE_AI_API_KEY
         || process.env.GEMINI_API_KEY,
       ),
-      provider: shouldUseOpenAI() ? 'OpenAI' : 'Gemini',
+      provider: resolveAIFeatureRoute('curriculum_generation').provider,
       openaiConfigured: Boolean(process.env.OPENAI_API_KEY),
       geminiConfigured: Boolean(
         process.env.GOOGLE_GENERATIVE_AI_API_KEY
@@ -107,16 +105,19 @@ export async function POST(request: Request) {
       learningPurpose,
       curriculumResearchBrief: formatResearchBrief(researchReport),
     })
-    const curriculumText = await generateWithGemini({ ...curriculumPrompt, purpose: 'primary' })
-    const curriculum = parseGeminiJson<Record<string, unknown>>(curriculumText)
+    const curriculumGeneration = await generateAIResult({
+      feature: 'curriculum_generation',
+      ...curriculumPrompt,
+    })
+    const curriculum = parseAIJson<Record<string, unknown>>(curriculumGeneration.text)
     stageTimes.curriculum = Date.now() - curriculumStartedAt
 
     const mapStartedAt = Date.now()
-    const mapText = await generateWithGemini({
+    const mapGeneration = await generateAIResult({
+      feature: 'map_generation',
       ...mapBuilderSkill(curriculum),
-      purpose: 'primary',
     })
-    const map = parseGeminiJson<SandboxMap>(mapText)
+    const map = parseAIJson<SandboxMap>(mapGeneration.text)
     stageTimes.map = Date.now() - mapStartedAt
 
     const graph = buildSandboxGraphData(curriculum, map)
@@ -128,7 +129,10 @@ export async function POST(request: Request) {
       graph,
       researchReport,
       diagnostics: {
-        provider: shouldUseOpenAI() ? 'OpenAI' : 'Gemini',
+        provider: {
+          curriculum: curriculumGeneration.provider,
+          map: mapGeneration.provider,
+        },
         totalMs: Date.now() - startedAt,
         stageTimes,
         topicCount: graph.course.topicCount,

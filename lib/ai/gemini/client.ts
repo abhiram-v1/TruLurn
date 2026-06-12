@@ -1,25 +1,10 @@
-import { generateWithOpenAI, shouldUseOpenAI } from '@/lib/ai/openai/client'
+import type { AIProviderGenerateInput } from '@/lib/ai/types'
 
 type GeminiPart = { text: string }
 
 type GeminiContent = {
   role: 'user' | 'model'
   parts: GeminiPart[]
-}
-
-type GeminiGenerateInput = {
-  system: string
-  user: string
-  model?: string
-  purpose?: 'primary' | 'agent'
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
-  signal?: AbortSignal
-  forceGemini?: boolean
-  responseMimeType?: 'application/json' | 'text/plain'
-  responseSchema?: {
-    name: string
-    schema: Record<string, unknown>
-  }
 }
 
 type GeminiResponse = {
@@ -39,26 +24,9 @@ export async function generateWithGemini({
   system,
   user,
   model,
-  purpose,
-  forceGemini = false,
   responseMimeType = 'application/json',
-  responseSchema,
-  reasoningEffort,
   signal,
-}: GeminiGenerateInput): Promise<string> {
-  if (!forceGemini && shouldUseOpenAI()) {
-    return generateWithOpenAI({
-      system,
-      user,
-      model,
-      purpose,
-      reasoningEffort,
-      signal,
-      responseMimeType,
-      responseSchema,
-    })
-  }
-
+}: AIProviderGenerateInput): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
   const selectedModel = model ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
 

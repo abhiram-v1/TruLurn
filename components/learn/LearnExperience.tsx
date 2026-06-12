@@ -12,7 +12,11 @@ import { MiniRoadmap } from '@/components/learn/MiniRoadmap'
 import { ThreePanelLayout } from '@/components/learn/ThreePanelLayout'
 import { BackButton } from '@/components/navigation/BackButton'
 import { BottomNav } from '@/components/navigation/BottomNav'
-import { RecallBreakBanner, RecallBreakOverlay } from '@/components/recall/RecallBreakOverlay'
+import {
+  RecallBreakBanner,
+  RecallBreakCountdown,
+  RecallBreakOverlay,
+} from '@/components/recall/RecallBreakOverlay'
 import { useRecallBreak } from '@/components/recall/useRecallBreak'
 import { paginateLessonMarkdown } from '@/lib/lesson-pagination'
 import type { DoubtMessage, Page, Topic } from '@/types'
@@ -168,14 +172,15 @@ export function LearnExperience({
   )
   const currentLessonContent = lessonPages[lessonPageIndex] ?? lessonPages[0] ?? page.content
 
-  // Use estimatedPages (AI plan) when it's trustworthy (> 1).
-  // When estimatedPages is 1 or unknown, always allow navigating to the next page
-  // so the student can discover on-demand generated content.
-  const totalPlanned  = estimatedPages > 1 ? Math.max(totalPages, estimatedPages) : totalPages + 1
+  // estimatedPages is plan-aware (topic.planned_pages once the lesson plan
+  // exists) — trust it. No phantom "+1" page: a finished topic ends at its
+  // last planned page and offers the quiz, instead of inviting the student
+  // to mint extra pages for thin topics.
+  const totalPlanned  = Math.max(totalPages, estimatedPages)
   const prev          = Math.max(1, page.page_number - 1)
   const next          = Math.min(totalPlanned, page.page_number + 1)
   const isFirst       = page.page_number === 1
-  const isLast        = estimatedPages > 1 && totalPages >= estimatedPages && page.page_number >= estimatedPages
+  const isLast        = totalPages >= totalPlanned && page.page_number >= totalPlanned
   const isFirstScreen = lessonPageIndex === 0
   const isLastScreen  = lessonPageIndex === lessonPages.length - 1
   const pageMarkers = Array.from({ length: Math.min(totalPlanned, 15) }, (_, index) => index + 1)
@@ -185,48 +190,28 @@ export function LearnExperience({
     setLessonPageIndex(0)
   }, [page.id])
 
-  // Rolling batch prefetch: when the student reaches page 2 or 3 within the current
-  // batch, silently prefetch the next batch in the background. This ensures pages 5-8
-  // are ready before the student finishes pages 1-4, and so on for larger topics.
-  // Uses a ref to avoid double-firing the same batch on page-2 AND page-3 triggers.
-  const prefetchedBatchStartRef = useRef<Set<number>>(new Set())
+  // One-ahead prefetch: while the student reads page N, silently generate page
+  // N+1 so "Next" never waits — and never more than one unread page exists.
+  // Reading a page takes far longer than generating one, so this stays seamless
+  // while capping wasted generations (student leaves mid-topic) at a single page.
+  // The server additionally hard-caps generation at the topic plan's page count.
+  const prefetchedPagesRef = useRef<Set<number>>(new Set())
   useEffect(() => {
-    const BATCH_SIZE = 4
-    const currentPage = page.page_number
-    // Position within the current batch (1=first, 2=second, 3=third, 4=last)
-    const batchPosition = ((currentPage - 1) % BATCH_SIZE) + 1
-    if (batchPosition !== 2 && batchPosition !== 3) return
+    const nextPage = page.page_number + 1
+    if (nextPage > Math.min(estimatedPages, 15)) return
+    if (nextPage <= totalPages) return // already stored
+    if (prefetchedPagesRef.current.has(nextPage)) return
+    prefetchedPagesRef.current.add(nextPage)
 
-    const currentBatch = Math.ceil(currentPage / BATCH_SIZE)
-    const nextBatchStart = currentBatch * BATCH_SIZE + 1
-    if (nextBatchStart > estimatedPages) return
-    if (prefetchedBatchStartRef.current.has(nextBatchStart)) return
-    prefetchedBatchStartRef.current.add(nextBatchStart)
-
-    const nextBatchEnd = Math.min(nextBatchStart + BATCH_SIZE - 1, estimatedPages, 15)
-    ;(async () => {
-      for (let p = nextBatchStart; p <= nextBatchEnd; p++) {
-        try {
-          const res = await fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ courseId, pageNumber: p }),
-          })
-          if (res.ok) {
-            const data = await res.json()
-            if (data.skipped) break
-          }
-        } catch {
-          break
-        }
-      }
-    })()
-  }, [page.page_number, topic.id, courseId, estimatedPages])
-
-  // Note: mount-time pre-generation is intentionally avoided here to prevent races
-  // with MissingPageGenerator (structured pages have isLastScreen=true immediately,
-  // which would trigger duplicate documents). The initial batch is handled by
-  // MissingPageGenerator after page 1 generates. Rolling prefetch above handles the rest.
+    fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ courseId, pageNumber: nextPage }),
+    }).catch(() => {
+      // Allow a retry on the next page change if the prefetch failed.
+      prefetchedPagesRef.current.delete(nextPage)
+    })
+  }, [page.page_number, topic.id, courseId, estimatedPages, totalPages])
 
   return (
     <div className="study-shell">
@@ -254,7 +239,7 @@ export function LearnExperience({
                 className="lesson-regen-btn"
                 type="button"
                 onClick={() => recall.startBreak(true)}
-                disabled={recall.loading || Boolean(recall.overlay)}
+                disabled={recall.loading || Boolean(recall.overlay) || Boolean(recall.rest)}
                 title="Pause and actively recall what you covered in this session"
               >
                 {recall.loading ? 'Preparing…' : '◉ Recall'}
@@ -270,12 +255,14 @@ export function LearnExperience({
               </button>
             </div>
 
-            {recall.breakDue && !recall.overlay ? (
+            {recall.breakDue && !recall.overlay && !recall.rest ? (
               <RecallBreakBanner
                 reason={recall.breakReason}
+                durationMinutes={recall.breakDurationMinutes}
                 loading={recall.loading}
                 onStart={() => recall.startBreak(false)}
                 onSnooze={recall.snoozeBreak}
+                onSkip={recall.skipBreak}
               />
             ) : null}
             {recall.error && !recall.overlay ? (
@@ -413,10 +400,12 @@ export function LearnExperience({
           />
         }
       />
+      {recall.rest ? <RecallBreakCountdown rest={recall.rest} /> : null}
       {recall.overlay ? (
         <RecallBreakOverlay
           content={recall.overlay}
           onComplete={recall.completeBreak}
+          onTag={recall.tagReminder}
           onDismiss={recall.dismissOverlay}
         />
       ) : null}

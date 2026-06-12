@@ -1,7 +1,18 @@
 import type { CurriculumSkillInput, SkillPrompt } from '@/lib/ai/skills/types'
+import { buildCurriculumFidelityNote, resolveSourceFidelityPolicy } from '@/lib/course-generation/sourceFidelity'
 import { formatSourceProfileForCurriculum } from '@/lib/course-generation/sourceProfile'
 
 export function curriculumBuilderSkill(input: CurriculumSkillInput): SkillPrompt {
+  // Pre-generation fidelity stance. With teachingStyle 'auto' the style is
+  // classified after the curriculum, so this resolves from depth/purpose and
+  // the source profile's own signals — the page-level policy sharpens later.
+  const fidelityNote = buildCurriculumFidelityNote(resolveSourceFidelityPolicy({
+    mode: input.mode,
+    teachingStyle: input.teachingStyle,
+    courseDepth: input.courseDepth,
+    learningPurpose: input.learningPurpose,
+    sourceProfile: input.sourceProfile,
+  }))
   const researchRule = input.curriculumResearchBrief?.trim()
     ? `Research-backed curriculum evidence:
 ---
@@ -31,7 +42,13 @@ The student chose to learn exactly what their materials cover. Every topic in th
 - Set source_coverage: "covered" on every topic (a topic that is not covered must not exist in this mode).
 - Concepts the sources ASSUME but never teach are NOT topics. List them in out_of_scope.assumed_prerequisites (short names) so the student knows what background the material expects.
 - Concepts the sources only MENTION as further/future material are NOT topics. List them in out_of_scope.mentioned_followups.
-- Page counts must reflect how much source material exists for the topic — a topic with one source paragraph is "light" with 1 page, never inflated.`
+- Page counts must reflect how much source material exists for the topic — a topic with one source paragraph is "light" with 1 page, never inflated.
+${fidelityNote}
+- TOPIC GRANULARITY — topic count comes from the conceptual structure of the material, never from a per-document splitting habit:
+    • A single cohesive document that teaches one subject arc becomes ONE topic. Its internal sections become that topic's pages (scale estimated_pages to the source volume) or Traccia children when a sub-area is independently learnable — never sibling Atlas-level topics.
+    • Split a document into multiple topics ONLY when it contains genuinely distinct subject areas that a student would study and be assessed on separately. Section headings alone are NOT a reason to split — sections of one continuous teaching arc are pages, not topics.
+    • Prefer fewer, richer topics over many shallow ones. One document must not mechanically become 3 topics, and 3 documents must never become 9+ — fragmentation destroys navigation and concept continuity.
+    • Optimize for cohesion, learnability, navigation simplicity, and concept continuity. In structure_reasoning, justify the topic count: name the genuinely distinct subject areas that forced any split.`
       : 'Use the research-backed curriculum evidence plus general model knowledge. Be accurate and do not over-promise.'
 
   const sourceProfileBlock =
@@ -254,7 +271,7 @@ Rules:
 - The title must be a concise course name, not the user's full request.
 - Good titles: "Deep Learning from First Principles", "Machine Learning Foundations", "Practical Database Systems".
 - Bad titles: long sentences, learning goals, instructions, or anything longer than 60 characters unless absolutely necessary.
-- In ai_teacher mode, determine the number of branches, sections, and topics from the subject difficulty, target depth, and the full subject scope. In source_grounded mode, the size of the course is determined by what the sources cover — nothing more.
+- In ai_teacher mode, determine the number of branches, sections, and topics from the subject difficulty, target depth, and the full subject scope. In source_grounded mode, the size of the course is determined by what the sources cover — nothing more — and the topic count by the material's conceptual structure: a single cohesive document is ONE topic unless it teaches genuinely distinct subject areas.
 - For source_grounded mode, every topic must be traceable to the uploaded material (set source_anchor). Within the source-covered span, preserve the visible order of Source 1, Source 2, Source 3 as the default study sequence; reorder only when an explicit prerequisite in the source demands it, and explain that in structure_reasoning.
 - For source_grounded mode, set source_sequence_policy to "preserve_uploaded_source_order" unless the source itself clearly demands conceptual reordering.
 - For source_grounded mode, set source_coverage: "covered" and concept_group ("prequel" | "current" | "sequel") on every topic, and fill out_of_scope with assumed prerequisites and mentioned follow-ups the sources do NOT teach. Omit source_coverage, concept_group, source_anchor, and out_of_scope entirely in ai_teacher mode.

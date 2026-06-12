@@ -1,5 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 
 export type DoubtQuestionType =
   | 'general_knowledge'
@@ -25,7 +24,8 @@ export async function classifyQuestion(
   conceptMap: string[],
 ): Promise<DoubtQuestionType> {
   try {
-    const response = await generateWithGemini({
+    const response = await generateAI({
+      feature: 'doubt_classification',
       system: CLASSIFY_SYSTEM,
       user: `Current page content (excerpt):
 ${currentPageContent.slice(0, 1000)}
@@ -45,7 +45,7 @@ Return JSON:
       responseMimeType: 'application/json',
     })
 
-    const parsed = parseGeminiJson<{ type?: DoubtQuestionType }>(response)
+    const parsed = parseAIJson<{ type?: DoubtQuestionType }>(response)
 
     if (
       parsed.type === 'general_knowledge' ||

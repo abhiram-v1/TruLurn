@@ -4,45 +4,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { BottomNav } from '@/components/navigation/BottomNav'
 
-const INITIAL_BATCH_SIZE = 4
-
-async function prefetchBatch(
-  topicId: string,
-  courseId: string,
-  fromPage: number,
-  toPage: number,
-) {
-  for (let p = fromPage; p <= toPage; p++) {
-    try {
-      const res = await fetch(`/api/topics/${encodeURIComponent(topicId)}/pages/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ courseId, pageNumber: p }),
-      })
-      // If this page was skipped by the AI (content_kind=skip), stop generating further
-      if (res.ok) {
-        const data = await res.json()
-        if (data.skipped) break
-      }
-    } catch {
-      break
-    }
-  }
-}
+// Generates a single missing page, then hands control back to the learn route.
+// No batch prefetching here: LearnExperience prefetches exactly one page ahead
+// while the student reads, which keeps unread (wasted) generations to at most one.
 
 export function MissingPageGenerator({
   courseId,
   topicId,
   topicTitle,
   pageNumber = 1,
-  estimatedPages,
   force = false,
 }: {
   courseId: string
   topicId: string
   topicTitle: string
   pageNumber?: number
-  estimatedPages?: number
   force?: boolean
 }) {
   const router = useRouter()
@@ -62,17 +38,24 @@ export function MissingPageGenerator({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ courseId, pageNumber, force }),
       })
-      const data = (await response.json()) as { error?: string; redirectTo?: string; skipped?: boolean }
+      const data = (await response.json()) as {
+        error?: string
+        redirectTo?: string
+        skipped?: boolean
+        topicComplete?: boolean
+        plannedPages?: number
+      }
 
       if (!response.ok) {
         throw new Error(data.error ?? 'Lesson generation failed.')
       }
 
-      // After page 1 generates, silently prefetch the initial batch (pages 2-4)
-      // so the user never waits on subsequent pages within the first batch.
-      if (pageNumber === 1 && !force && estimatedPages && estimatedPages > 1) {
-        const batchEnd = Math.min(estimatedPages, INITIAL_BATCH_SIZE, 15)
-        prefetchBatch(topicId, courseId, 2, batchEnd)
+      // The lesson plan says this topic is already fully covered — the requested
+      // page doesn't exist by design. Land on the last real page instead.
+      if (data.topicComplete) {
+        const lastPage = Math.max(1, Number(data.plannedPages ?? 1))
+        router.replace(`/learn/${courseId}/${encodeURIComponent(topicId)}?page=${lastPage}`)
+        return
       }
 
       if (data.redirectTo) {
@@ -85,7 +68,7 @@ export function MissingPageGenerator({
       setStatus('failed')
       setError(caught instanceof Error ? caught.message : 'Lesson generation failed.')
     }
-  }, [courseId, router, topicId, pageNumber, force, estimatedPages])
+  }, [courseId, router, topicId, pageNumber, force])
 
   useEffect(() => {
     if (status === 'idle' && !generationStartedRef.current) {
@@ -106,7 +89,7 @@ export function MissingPageGenerator({
             : force
             ? 'This stored page was empty or malformed. TruLurn is regenerating it now.'
             : isFirstPage
-            ? 'Creating the first stored page for this topic. The learning interface will open when it is ready.'
+            ? 'Planning this topic and writing its first page. The learning interface will open when it is ready.'
             : `Generating page ${pageNumber}. This takes a few seconds.`}
         </p>
         {error ? <div className="result-banner error-banner">{error}</div> : null}

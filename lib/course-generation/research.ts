@@ -1,5 +1,4 @@
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
-import { generateWithOpenAIWebSearch, type OpenAIWebSource } from '@/lib/ai/openai/client'
+import { parseAIJson, searchAI, type AIWebSource } from '@/lib/ai'
 import type { CourseDepth, LearningControlMode } from '@/lib/ai/skills/types'
 
 export type CurriculumResearchConfidence = 'low' | 'medium' | 'high'
@@ -12,7 +11,7 @@ export type CourseResearchReport = {
     target_max: number
     search_context_size: 'low' | 'medium' | 'high'
   }
-  sources: OpenAIWebSource[]
+  sources: AIWebSource[]
   source_mix: {
     university_or_syllabus: string[]
     textbook_or_toc: string[]
@@ -31,7 +30,7 @@ export type CourseResearchReport = {
 }
 
 type RawResearchReport = Omit<CourseResearchReport, 'sources' | 'source_budget'> & {
-  sources?: OpenAIWebSource[]
+  sources?: AIWebSource[]
 }
 
 type ResearchInput = {
@@ -58,8 +57,8 @@ function normalizeStringArray(value: unknown): string[] {
     .slice(0, 24)
 }
 
-function normalizeSources(modelSources: unknown, apiSources: OpenAIWebSource[]) {
-  const byUrl = new Map<string, OpenAIWebSource>()
+function normalizeSources(modelSources: unknown, apiSources: AIWebSource[]) {
+  const byUrl = new Map<string, AIWebSource>()
   const add = (source: unknown) => {
     if (!source || typeof source !== 'object') return
     const record = source as Record<string, unknown>
@@ -85,7 +84,7 @@ function normalizeSources(modelSources: unknown, apiSources: OpenAIWebSource[]) 
   return Array.from(byUrl.values()).slice(0, 16)
 }
 
-function normalizeReport(raw: RawResearchReport, input: ResearchInput, apiSources: OpenAIWebSource[]): CourseResearchReport {
+function normalizeReport(raw: RawResearchReport, input: ResearchInput, apiSources: AIWebSource[]): CourseResearchReport {
   const budget = budgetForDepth(input.courseDepth)
   const sources = normalizeSources(raw.sources, apiSources)
   const confidence: CurriculumResearchConfidence =
@@ -138,13 +137,13 @@ export function formatResearchBrief(report?: CourseResearchReport | null) {
 
 // ── Lesson-level concept research ─────────────────────────────────────────────
 // A narrow, cheap search run per lesson page — not broad curriculum research.
-// Anchors the lesson prose to real explanations and terminology so Gemini
+// Anchors the lesson prose to real explanations and terminology so the model
 // doesn't hallucinate definitions, edge cases, or example values.
 
 export type LessonResearchResult = {
   found: boolean
   context: string
-  sources: OpenAIWebSource[]
+  sources: AIWebSource[]
 }
 
 export async function researchLessonConcept({
@@ -156,12 +155,9 @@ export async function researchLessonConcept({
   topicTitle: string
   focus: string
 }): Promise<LessonResearchResult> {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return { found: false, context: '', sources: [] }
-
   try {
-    const { text, sources } = await generateWithOpenAIWebSearch({
-      purpose: 'agent',
+    const { text, sources } = await searchAI({
+      feature: 'lesson_research',
       searchContextSize: 'low',
       system: `You are TruLurn's lesson fact-checker.
 Find concise, accurate information about the specific concept being taught.
@@ -198,8 +194,8 @@ Keep total length under 400 words.`,
 
 export async function researchCurriculum(input: ResearchInput): Promise<CourseResearchReport> {
   const budget = budgetForDepth(input.courseDepth)
-  const { text, sources } = await generateWithOpenAIWebSearch({
-    purpose: 'primary',
+  const { text, sources } = await searchAI({
+    feature: 'curriculum_research',
     responseMimeType: 'application/json',
     searchContextSize: budget.search_context_size,
     system: `You are TruLurn's bounded curriculum research analyst.
@@ -262,6 +258,6 @@ Rules:
 - Do not include prose outside JSON.`,
   })
 
-  const raw = parseGeminiJson<RawResearchReport>(text)
+  const raw = parseAIJson<RawResearchReport>(text)
   return normalizeReport(raw, input, sources)
 }

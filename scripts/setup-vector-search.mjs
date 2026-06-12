@@ -19,16 +19,21 @@ if (fs.existsSync(envPath)) {
 }
 
 const uri = process.env.MONGODB_URI
-const provider = (process.env.AI_PROVIDER ?? (process.env.OPENAI_API_KEY ? 'openai' : 'gemini')).toLowerCase()
+const provider = (
+  process.env.AI_FEATURE_EMBEDDINGS_PROVIDER
+  ?? process.env.AI_PROVIDER
+  ?? (process.env.OPENAI_API_KEY ? 'openai' : 'gemini')
+).toLowerCase()
 const apiKey = provider === 'openai'
   ? process.env.OPENAI_API_KEY
   : process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
 const embeddingModel = provider === 'openai'
-  ? process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small'
-  : process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001'
+  ? process.env.AI_FEATURE_EMBEDDINGS_MODEL ?? process.env.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small'
+  : process.env.AI_FEATURE_EMBEDDINGS_MODEL ?? process.env.GEMINI_EMBEDDING_MODEL ?? 'gemini-embedding-001'
 const dimensions = provider === 'openai'
-  ? Number(process.env.OPENAI_EMBEDDING_DIMENSIONS ?? 768)
-  : Number(process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 768)
+  ? Number(process.env.AI_FEATURE_EMBEDDINGS_DIMENSIONS ?? process.env.OPENAI_EMBEDDING_DIMENSIONS ?? 768)
+  : Number(process.env.AI_FEATURE_EMBEDDINGS_DIMENSIONS ?? process.env.GEMINI_EMBEDDING_DIMENSIONS ?? 768)
+const embeddingVersion = `rag-v2:${provider}:${embeddingModel}:${dimensions}:content-v1`
 
 if (!uri) throw new Error('Missing MONGODB_URI in .env.local')
 if (!apiKey) throw new Error(`Missing ${provider === 'openai' ? 'OPENAI_API_KEY' : 'GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY'} in .env.local`)
@@ -112,19 +117,61 @@ async function embedText(text, taskType = 'SEMANTIC_SIMILARITY') {
 const vectorIndexes = [
   {
     collection: 'pages',
-    name: 'pages_vector_index',
-    filters: ['course_id', 'topic_id', 'user_id'],
+    name: `pages_vector_index_v2_${dimensions}`,
+    filters: ['course_id', 'topic_id', 'user_id', 'embedding_version'],
   },
   {
     collection: 'doubtMessages',
-    name: 'doubt_messages_vector_index',
-    filters: ['course_id', 'user_id', 'topic_id'],
+    name: `doubt_messages_vector_index_v2_${dimensions}`,
+    filters: ['course_id', 'user_id', 'topic_id', 'role', 'embedding_version'],
   },
   {
     collection: 'sourceChunks',
-    name: 'source_chunks_vector_index',
-    filters: ['course_id', 'topic_id', 'user_id'],
+    name: `source_chunks_vector_index_v2_${dimensions}`,
+    filters: ['course_id', 'topic_id', 'user_id', 'embedding_version'],
   },
+  {
+    collection: 'sourcePassages',
+    name: `source_passages_vector_index_v2_${dimensions}`,
+    filters: [
+      'course_id',
+      'topic_id',
+      'user_id',
+      'source_document_id',
+      'source_version_id',
+      'embedding_version',
+    ],
+  },
+]
+
+const lexicalIndexes = [
+  {
+    collection: 'pages',
+    name: 'pages_lexical_index_v1',
+    stringFields: ['content', 'focus', 'summary'],
+    tokenFields: ['course_id', 'user_id', 'topic_id', 'embedding_version'],
+  },
+  {
+    collection: 'doubtMessages',
+    name: 'doubt_messages_lexical_index_v1',
+    stringFields: ['content'],
+    tokenFields: ['course_id', 'user_id', 'topic_id', 'role', 'embedding_version'],
+  },
+  ...['sourceChunks', 'sourcePassages'].map((collection) => ({
+    collection,
+    name: collection === 'sourceChunks'
+      ? 'source_chunks_lexical_index_v1'
+      : 'source_passages_lexical_index_v1',
+    stringFields: ['content', 'source_title', 'heading_path'],
+    tokenFields: [
+      'course_id',
+      'user_id',
+      'topic_id',
+      'source_document_id',
+      'source_version_id',
+      'embedding_version',
+    ],
+  })),
 ]
 
 async function ensureIndexes(db) {
@@ -164,11 +211,51 @@ async function ensureIndexes(db) {
     })
     console.log(`created ${item.collection}.${item.name}`)
   }
+
+  for (const item of lexicalIndexes) {
+    const collections = await db.listCollections({ name: item.collection }).toArray()
+    if (!collections.length) {
+      await db.createCollection(item.collection)
+      console.log(`created collection ${item.collection}`)
+    }
+
+    const collection = db.collection(item.collection)
+    const existing = await collection.listSearchIndexes(item.name).toArray().catch(() => [])
+    if (existing.length) {
+      console.log(`exists  ${item.collection}.${item.name}`)
+      continue
+    }
+
+    const fields = {}
+    for (const field of item.stringFields) {
+      fields[field] = { type: 'string', analyzer: 'lucene.standard' }
+    }
+    for (const field of item.tokenFields) {
+      fields[field] = { type: 'token' }
+    }
+
+    await db.command({
+      createSearchIndexes: item.collection,
+      indexes: [
+        {
+          name: item.name,
+          type: 'search',
+          definition: {
+            mappings: {
+              dynamic: false,
+              fields,
+            },
+          },
+        },
+      ],
+    })
+    console.log(`created ${item.collection}.${item.name}`)
+  }
 }
 
 async function embedPages(db) {
   const pages = await db.collection('pages')
-    .find({ embedding: { $exists: false } })
+    .find({ embedding_version: { $ne: embeddingVersion } })
     .limit(500)
     .toArray()
 
@@ -193,7 +280,12 @@ async function embedPages(db) {
       {
         $set: {
           embedding,
+          embedding_provider: provider,
           embedding_model: embeddingModel,
+          embedding_dimensions: dimensions,
+          embedding_version: embeddingVersion,
+          embedding_status: 'ready',
+          embedding_error: null,
           embedding_updated_at: new Date(),
         },
       },
@@ -206,7 +298,7 @@ async function embedPages(db) {
 
 async function embedDoubtMessages(db) {
   const messages = await db.collection('doubtMessages')
-    .find({ embedding: { $exists: false } })
+    .find({ role: 'user', embedding_version: { $ne: embeddingVersion } })
     .limit(500)
     .toArray()
 
@@ -223,16 +315,19 @@ async function embedDoubtMessages(db) {
       message.content,
     ].filter(Boolean).join('\n')
 
-    const embedding = await embedText(
-      text,
-      message.role === 'user' ? 'QUESTION_ANSWERING' : 'RETRIEVAL_DOCUMENT',
-    )
+    const embedding = await embedText(text, 'RETRIEVAL_DOCUMENT')
     await db.collection('doubtMessages').updateOne(
       { _id: message._id },
       {
         $set: {
           embedding,
+          retrieval_eligible: true,
+          embedding_provider: provider,
           embedding_model: embeddingModel,
+          embedding_dimensions: dimensions,
+          embedding_version: embeddingVersion,
+          embedding_status: 'ready',
+          embedding_error: null,
           embedding_updated_at: new Date(),
         },
       },
@@ -245,7 +340,7 @@ async function embedDoubtMessages(db) {
 
 async function embedSourceChunks(db) {
   const chunks = await db.collection('sourceChunks')
-    .find({ embedding: { $exists: false } })
+    .find({ embedding_version: { $ne: embeddingVersion } })
     .limit(500)
     .toArray()
 
@@ -266,7 +361,12 @@ async function embedSourceChunks(db) {
       {
         $set: {
           embedding,
+          embedding_provider: provider,
           embedding_model: embeddingModel,
+          embedding_dimensions: dimensions,
+          embedding_version: embeddingVersion,
+          embedding_status: 'ready',
+          embedding_error: null,
           embedding_updated_at: new Date(),
         },
       },
@@ -277,17 +377,58 @@ async function embedSourceChunks(db) {
   return count
 }
 
+async function embedSourcePassages(db) {
+  const passages = await db.collection('sourcePassages')
+    .find({ embedding_version: { $ne: embeddingVersion } })
+    .limit(500)
+    .toArray()
+
+  let count = 0
+  for (const passage of passages) {
+    const text = [
+      passage.source_title ? `Source: ${passage.source_title}` : null,
+      Array.isArray(passage.heading_path) && passage.heading_path.length
+        ? `Section: ${passage.heading_path.join(' > ')}`
+        : null,
+      passage.content,
+    ].filter(Boolean).join('\n')
+
+    if (!text.trim()) continue
+
+    const embedding = await embedText(text, 'RETRIEVAL_DOCUMENT')
+    await db.collection('sourcePassages').updateOne(
+      { _id: passage._id },
+      {
+        $set: {
+          embedding,
+          embedding_provider: provider,
+          embedding_model: embeddingModel,
+          embedding_dimensions: dimensions,
+          embedding_version: embeddingVersion,
+          embedding_status: 'ready',
+          embedding_error: null,
+          embedding_updated_at: new Date(),
+        },
+      },
+    )
+    count += 1
+    console.log(`embedded source passage ${count}/${passages.length}`)
+  }
+  return count
+}
+
 const client = new MongoClient(uri)
 await client.connect()
 
 try {
   const db = client.db('trulurn')
-  console.log(`Using ${provider}:${embeddingModel} at ${dimensions} dimensions`)
+  console.log(`Using ${embeddingVersion}`)
   await ensureIndexes(db)
   const pages = await embedPages(db)
   const doubtMessages = await embedDoubtMessages(db)
   const sourceChunks = await embedSourceChunks(db)
-  console.log(`Done. Embedded ${pages} pages, ${doubtMessages} doubt messages, and ${sourceChunks} source chunks.`)
+  const sourcePassages = await embedSourcePassages(db)
+  console.log(`Done. Embedded ${pages} pages, ${doubtMessages} doubt messages, ${sourceChunks} source chunks, and ${sourcePassages} source passages.`)
 } finally {
   await client.close()
 }

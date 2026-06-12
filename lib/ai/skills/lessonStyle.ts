@@ -1,5 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 
 // ── Type ──────────────────────────────────────────────────────────────────────
 
@@ -245,13 +244,13 @@ Course title: ${courseTitle}
 Branches: ${branchTitles.slice(0, 6).join(', ') || 'Not available'}`
 
   try {
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'lesson_style_selection',
       system,
       user,
-      purpose: 'agent',
       responseMimeType: 'application/json',
     })
-    const parsed = parseGeminiJson<{ style?: string; reason?: string }>(raw)
+    const parsed = parseAIJson<{ style?: string; reason?: string }>(raw)
     const style = parsed.style as LessonStyle
     if (style && STYLE_DIRECTIVES[style]) {
       return { style, reason: parsed.reason ?? '' }
@@ -277,10 +276,10 @@ Styles:
 ${styleList}`
 
   try {
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'lesson_style_analysis',
       system,
       user: `Student request: "${message}"`,
-      purpose: 'agent',
       responseMimeType: 'text/plain',
     })
     const id = raw.trim().replace(/[^a-z_]/g, '') as LessonStyle

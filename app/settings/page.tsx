@@ -1,6 +1,7 @@
 import { AppFrame } from '@/components/navigation/AppFrame'
 import { RecallBreakSetting } from '@/components/settings/RecallBreakSetting'
 import { ThemeSetting } from '@/components/settings/ThemeSetting'
+import { LearnerMemorySetting } from '@/components/settings/LearnerMemorySetting'
 
 export default function SettingsPage() {
   return (
@@ -20,6 +21,7 @@ export default function SettingsPage() {
         <p className="section-label">Learning</p>
         <div className="settings-list">
           <RecallBreakSetting />
+          <LearnerMemorySetting />
         </div>
         <p className="section-label">Product</p>
         <div className="settings-list">

@@ -2,8 +2,7 @@
 // Called after quiz completion to update node states, detect misconceptions,
 // and recommend the next topic to study.
 
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 import type { GraphNodeState, GraphEvaluationResult, GraphNodeUpdate } from '@/lib/graph/types'
 
 // ── Topic state → graph state mapping ──────────────────────────────────────
@@ -101,8 +100,8 @@ Which topic ID should the student study next?`,
     : `You're building understanding of ${event.topicTitle}. Review the gaps and try again.`
 
   try {
-    const raw = await generateWithGemini({ ...prompt, model: 'gemini-2.0-flash-lite', purpose: 'agent', responseMimeType: 'text/plain' })
-    const parsed = parseGeminiJson<{ nextTopicId?: string | null; summary?: string }>(raw)
+    const raw = await generateAI({ feature: 'graph_recommendation', ...prompt, responseMimeType: 'text/plain' })
+    const parsed = parseAIJson<{ nextTopicId?: string | null; summary?: string }>(raw)
 
     if (parsed.nextTopicId && courseTopics.some((t) => t.id === parsed.nextTopicId)) {
       nextSuggestedTopicId = parsed.nextTopicId
@@ -112,7 +111,7 @@ Which topic ID should the student study next?`,
     }
   } catch (err) {
     // Non-fatal: fall back to the deterministic summary above
-    console.warn('[graphEvaluator] Gemini suggestion failed, using defaults:', err)
+    console.warn('[graphEvaluator] AI suggestion failed, using defaults:', err)
   }
 
   // 4. Build the final update list

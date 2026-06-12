@@ -15,6 +15,7 @@ const MODES: Array<{ id: RecallBreakMode; name: string; description: string }> =
 export function RecallBreakSetting() {
   const { status } = useSession()
   const [mode, setMode] = useState<RecallBreakMode>('auto')
+  const [durationMinutes, setDurationMinutes] = useState(10)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -25,6 +26,10 @@ export function RecallBreakSetting() {
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (alive && data?.mode) setMode(data.mode as RecallBreakMode)
+        const duration = Number(data?.durationMinutes)
+        if (alive && Number.isFinite(duration)) {
+          setDurationMinutes(Math.min(45, Math.max(5, Math.round(duration))))
+        }
       })
       .catch(() => {})
       .finally(() => {
@@ -54,6 +59,20 @@ export function RecallBreakSetting() {
     }
   }
 
+  async function saveDuration() {
+    if (saving || status !== 'authenticated') return
+    setSaving(true)
+    try {
+      await fetch('/api/settings/recall', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ durationMinutes }),
+      })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const active = MODES.find((m) => m.id === mode) ?? MODES[0]
   const disabled = status !== 'authenticated' || !loaded
 
@@ -67,21 +86,38 @@ export function RecallBreakSetting() {
             : active.description}
         </small>
       </span>
-      <div className="recall-mode-group" role="radiogroup" aria-label="Recall break timing">
-        {MODES.map((option) => (
-          <button
-            key={option.id}
-            className={`recall-mode-btn ${mode === option.id ? 'selected' : ''}`}
-            type="button"
-            role="radio"
-            aria-checked={mode === option.id}
+      <div className="settings-recall-controls">
+        <div className="recall-mode-group" role="radiogroup" aria-label="Recall break timing">
+          {MODES.map((option) => (
+            <button
+              key={option.id}
+              className={`recall-mode-btn ${mode === option.id ? 'selected' : ''}`}
+              type="button"
+              role="radio"
+              aria-checked={mode === option.id}
+              disabled={disabled || saving}
+              onClick={() => update(option.id)}
+              title={option.description}
+            >
+              {option.name}
+            </button>
+          ))}
+        </div>
+        <label className="settings-break-duration">
+          <span>{durationMinutes} minute break</span>
+          <input
+            type="range"
+            min={5}
+            max={45}
+            step={1}
+            value={durationMinutes}
             disabled={disabled || saving}
-            onClick={() => update(option.id)}
-            title={option.description}
-          >
-            {option.name}
-          </button>
-        ))}
+            onChange={(event) => setDurationMinutes(Number(event.target.value))}
+            onPointerUp={() => void saveDuration()}
+            onKeyUp={() => void saveDuration()}
+            onBlur={() => void saveDuration()}
+          />
+        </label>
       </div>
     </div>
   )

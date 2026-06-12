@@ -1,6 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
-import { generateWithOpenAI } from '@/lib/ai/openai/client'
+import { generateAIResult, parseAIJson, type AIProviderName } from '@/lib/ai'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
 
 type SourceBlock = {
@@ -10,13 +8,13 @@ type SourceBlock = {
   raw: string
 }
 
-type GeminiSourceOrder = {
+type SourceOrder = {
   ordered_source_numbers?: number[]
   confidence?: 'low' | 'medium' | 'high'
   strategy?: string
   evidence?: string[]
   warnings?: string[]
-  provider?: 'gemini' | 'openai-mini'
+  provider?: AIProviderName
 }
 
 function parseSourceBlocks(sourceText: string): SourceBlock[] {
@@ -80,14 +78,14 @@ function orderBlocks(blocks: SourceBlock[], order: number[]) {
   return order.map((index) => byIndex.get(index)).filter(Boolean) as SourceBlock[]
 }
 
-function formatAnalysis(report: GeminiSourceOrder, order: number[], blocks: SourceBlock[]) {
+function formatAnalysis(report: SourceOrder, order: number[], blocks: SourceBlock[]) {
   const titleByIndex = new Map(blocks.map((block) => [block.index, block.title]))
   const sequence = order.map((index) => `Source ${index}: ${titleByIndex.get(index) ?? 'Untitled'}`).join(' -> ')
   const evidence = Array.isArray(report.evidence) ? report.evidence.filter(Boolean).slice(0, 6) : []
   const warnings = Array.isArray(report.warnings) ? report.warnings.filter(Boolean).slice(0, 4) : []
 
   return [
-    `${report.provider === 'openai-mini' ? 'GPT mini fallback' : 'Gemini'} inferred source order: ${sequence}`,
+    `${report.provider ?? 'AI'} inferred source order: ${sequence}`,
     `Confidence: ${report.confidence ?? 'low'}`,
     report.strategy ? `Strategy: ${report.strategy}` : null,
     evidence.length ? `Evidence:\n- ${evidence.join('\n- ')}` : null,
@@ -129,48 +127,33 @@ Return only JSON:
   }
 }
 
-async function classifyOrderWithGemini(input: CourseGenerationInput, blocks: SourceBlock[]) {
+async function classifyOrder(input: CourseGenerationInput, blocks: SourceBlock[]) {
   const prompt = orderingPrompt(input, blocks)
-  const raw = await generateWithGemini({
+  const result = await generateAIResult({
+    feature: 'source_ordering',
     ...prompt,
-    forceGemini: true,
-    model: process.env.GEMINI_SOURCE_ORDER_MODEL ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
-    purpose: 'agent',
     responseMimeType: 'application/json',
+    validateResponse: (text) => {
+      try {
+        return Boolean(validOrder(parseAIJson<SourceOrder>(text).ordered_source_numbers, blocks))
+      } catch {
+        return false
+      }
+    },
   })
-  return { ...parseGeminiJson<GeminiSourceOrder>(raw), provider: 'gemini' as const }
-}
-
-async function classifyOrderWithOpenAIMini(input: CourseGenerationInput, blocks: SourceBlock[]) {
-  const prompt = orderingPrompt(input, blocks)
-  const raw = await generateWithOpenAI({
-    ...prompt,
-    model: process.env.OPENAI_SOURCE_ORDER_MODEL ?? process.env.OPENAI_AGENT_MODEL ?? process.env.OPENAI_MINI_MODEL ?? 'gpt-5.4-mini',
-    purpose: 'agent',
-    responseMimeType: 'application/json',
-  })
-  return { ...parseGeminiJson<GeminiSourceOrder>(raw), provider: 'openai-mini' as const }
+  return { ...parseAIJson<SourceOrder>(result.text), provider: result.provider }
 }
 
 async function inferOrder(input: CourseGenerationInput, blocks: SourceBlock[]) {
   const errors: string[] = []
 
   try {
-    const report = await classifyOrderWithGemini(input, blocks)
+    const report = await classifyOrder(input, blocks)
     const order = validOrder(report.ordered_source_numbers, blocks)
     if (order) return { report, order, errors }
-    errors.push('Gemini returned an invalid or incomplete source order.')
+    errors.push(`${report.provider} returned an invalid or incomplete source order.`)
   } catch (error) {
-    errors.push(`Gemini failed: ${error instanceof Error ? error.message : 'unknown error'}`)
-  }
-
-  try {
-    const report = await classifyOrderWithOpenAIMini(input, blocks)
-    const order = validOrder(report.ordered_source_numbers, blocks)
-    if (order) return { report, order, errors }
-    errors.push('GPT mini fallback returned an invalid or incomplete source order.')
-  } catch (error) {
-    errors.push(`GPT mini fallback failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+    errors.push(error instanceof Error ? error.message : 'Source ordering failed.')
   }
 
   return { report: null, order: null, errors }

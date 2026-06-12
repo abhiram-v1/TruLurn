@@ -1,4 +1,8 @@
 import type { Db } from 'mongodb'
+import {
+  getLearnerMemorySnapshot,
+  syncLearnerMemoryV2,
+} from '@/lib/memory/service'
 
 // ── Personalization engine ────────────────────────────────────────────────────
 // Builds a per-(user, course) learner profile from observed behavior — lesson
@@ -33,6 +37,10 @@ export type LearnerProfile = {
   strong_concepts: string[]
   /** Topic titles attracting disproportionate doubt-chat activity. */
   doubt_hotspots: string[]
+  /** Active, high-confidence preferences and observations from Memory V2. */
+  durable_preferences: string[]
+  /** Assessment-backed misconceptions not yet corrected by later evidence. */
+  active_misconceptions: string[]
   updated_at: Date
 }
 
@@ -40,8 +48,25 @@ function ratio(part: number, whole: number): number {
   return whole > 0 ? part / whole : 0
 }
 
+function durablePreferenceText(memory: {
+  key: string
+  value: unknown
+  authority: string
+}) {
+  const value = String(memory.value).replace(/_/g, ' ')
+  if (memory.key === 'teaching.knowledge_level') return `Teach at ${value} level`
+  if (memory.key === 'teaching.source_coverage') return `Use ${value} source coverage`
+  if (memory.key === 'learning.comprehension_support') {
+    return value === 'needs more support'
+      ? 'Repeated feedback suggests more scaffolding may help'
+      : 'Repeated feedback suggests the learner may be ready for more depth'
+  }
+  if (memory.key.startsWith('teaching.directive.')) return value
+  return `${memory.key.replace(/[._-]+/g, ' ')}: ${value}`
+}
+
 async function computeLearnerProfile(db: Db, userId: string, courseId: string): Promise<LearnerProfile> {
-  const [feedback, examSessions, recallSessions, doubtAgg, studySessions, weakTopics] = await Promise.all([
+  const [feedback, examSessions, recallSessions, doubtAgg, studySessions, weakTopics, memorySnapshot] = await Promise.all([
     db.collection('lessonFeedback')
       .find({ user_id: userId, course_id: courseId })
       .project({ signal: 1 })
@@ -77,6 +102,7 @@ async function computeLearnerProfile(db: Db, userId: string, courseId: string): 
       .project({ title: 1, key_concepts: 1 })
       .limit(10)
       .toArray(),
+    getLearnerMemorySnapshot(db, userId, courseId),
   ])
 
   // ── Comprehension: lesson feedback + exam outcomes ──
@@ -141,15 +167,34 @@ async function computeLearnerProfile(db: Db, userId: string, courseId: string): 
     if (title) struggleConceptCounts.set(title, (struggleConceptCounts.get(title) ?? 0) + 1)
   }
 
-  const struggleConcepts = [...struggleConceptCounts.entries()]
+  for (const skill of memorySnapshot.skills) {
+    if (skill.evidence_count < 2) continue
+    if (skill.effective_mastery < 0.55) {
+      struggleConceptCounts.set(skill.label, (struggleConceptCounts.get(skill.label) ?? 0) + 3)
+    } else if (skill.effective_mastery >= 0.78 && !struggleConceptCounts.has(skill.label)) {
+      strongConceptCounts.set(skill.label, (strongConceptCounts.get(skill.label) ?? 0) + 3)
+    }
+  }
+  const memoryStruggleConcepts = [...struggleConceptCounts.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 8)
     .map(([concept]) => concept)
-  const strongConcepts = [...strongConceptCounts.entries()]
+  const memoryStrongConcepts = [...strongConceptCounts.entries()]
     .filter(([concept]) => !struggleConceptCounts.has(concept))
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([concept]) => concept)
+  const durablePreferences = memorySnapshot.memories
+    .filter((memory) =>
+      memory.effective_confidence >= 0.5
+      && (memory.kind === 'preference' || memory.kind === 'observation'))
+    .map(durablePreferenceText)
+    .filter(Boolean)
+    .slice(0, 8)
+  const activeMisconceptions = memorySnapshot.misconceptions
+    .map((item) => item.description)
+    .filter(Boolean)
+    .slice(0, 6)
 
   // ── Doubt hotspots (topic titles) ──
   const hotspotTopicIds = doubtAgg.filter((d) => Number(d.count ?? 0) >= 3).map((d) => String(d._id))
@@ -184,9 +229,11 @@ async function computeLearnerProfile(db: Db, userId: string, courseId: string): 
     comprehension,
     retention,
     pace,
-    struggle_concepts: struggleConcepts,
-    strong_concepts: strongConcepts,
+    struggle_concepts: memoryStruggleConcepts,
+    strong_concepts: memoryStrongConcepts,
     doubt_hotspots: doubtHotspots,
+    durable_preferences: durablePreferences,
+    active_misconceptions: activeMisconceptions,
     updated_at: new Date(),
   }
 }
@@ -195,6 +242,9 @@ async function computeLearnerProfile(db: Db, userId: string, courseId: string): 
  * Cached learner profile — recomputed when older than PROFILE_TTL_MS.
  */
 export async function getLearnerProfile(db: Db, userId: string, courseId: string): Promise<LearnerProfile> {
+  await syncLearnerMemoryV2({ db, userId, courseId }).catch((error) => {
+    console.warn('[personalization] Memory V2 sync unavailable.', error)
+  })
   const cached = await db.collection('learnerProfiles').findOne({
     user_id: userId,
     course_id: courseId,
@@ -265,6 +315,16 @@ export function buildPersonalizationDirective(profile: LearnerProfile | null | u
 
   if (profile.doubt_hotspots.length) {
     lines.push(`- The student asked many questions about: ${profile.doubt_hotspots.join('; ')}. When relevant, address the confusion class directly instead of restating the original explanation.`)
+  }
+
+  if (profile.durable_preferences?.length) {
+    lines.push(`- Durable learner preferences: ${profile.durable_preferences.join('; ')}.`)
+    lines.push('  â†’ Follow explicit preferences first. Treat behavior-derived observations as suggestions, not facts about the learner.')
+  }
+
+  if (profile.active_misconceptions?.length) {
+    lines.push(`- Assessment-backed misconceptions still active: ${profile.active_misconceptions.join('; ')}.`)
+    lines.push('  â†’ Address these carefully when relevant. Do not claim they are corrected until later assessment evidence says so.')
   }
 
   // Nothing beyond the header → nothing worth injecting.

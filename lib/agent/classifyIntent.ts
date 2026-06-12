@@ -1,4 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
+import { generateAI } from '@/lib/ai'
 import type { ActionIntent } from '@/types/agent'
 import type { DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
 
@@ -187,7 +187,8 @@ export async function classifyIntent(
     lines.push(`Student: "${message}"`)
     lines.push('Label:')
 
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'agent_intent',
       system: REINFORCED_SYSTEM,
       user: lines.join('\n'),
       purpose: 'agent',

@@ -1,4 +1,4 @@
-export type GeminiSkillName =
+export type AISkillName =
   | 'curriculum_builder'
   | 'map_builder'
   | 'flow_tracker'
@@ -6,10 +6,13 @@ export type GeminiSkillName =
   | 'source_learning_page'
 
 export type SkillPrompt = {
-  name: GeminiSkillName
+  name: AISkillName
   system: string
   user: string
 }
+
+/** @deprecated Use AISkillName. */
+export type GeminiSkillName = AISkillName
 
 export type CurriculumMode = 'ai_teacher' | 'source_grounded'
 export type LearningControlMode = 'guided' | 'balanced' | 'open'
@@ -25,6 +28,8 @@ export type CurriculumSkillInput = {
   courseDepth: CourseDepth
   knowledgeLevel?: KnowledgeLevel
   learningPurpose?: LearningPurpose
+  /** User-chosen teaching style ('auto' = classifier decides post-curriculum). */
+  teachingStyle?: string
   sourceText?: string
   sourceOrderAnalysis?: string
   sourceProfile?: import('@/lib/course-generation/sourceProfile').SourceTeachingProfile | null

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
+import { generateAI } from '@/lib/ai'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 
 type TransformAction = 'simplify' | 'deeper' | 'example'
@@ -76,10 +76,10 @@ export async function POST(
     }
 
     const typedAction = action as TransformAction
-    const result = await generateWithGemini({
+    const result = await generateAI({
+      feature: 'topic_transform',
       system: SYSTEM[typedAction],
       user: buildUserPrompt(typedAction, selectedText.trim(), topicTitle ?? 'the current topic'),
-      purpose: 'agent',
       responseMimeType: 'text/plain',
     })
 

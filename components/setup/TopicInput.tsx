@@ -1,8 +1,7 @@
 'use client'
 
-import { ChangeEvent, FormEvent, useState } from 'react'
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { HallucinationWarning } from '@/components/setup/HallucinationWarning'
 import { ModeSelector } from '@/components/setup/ModeSelector'
@@ -11,6 +10,7 @@ import { CourseDepthSelector } from '@/components/setup/CourseDepthSelector'
 import { KnowledgeLevelSelector } from '@/components/setup/KnowledgeLevelSelector'
 import { LearningPurposeSelector } from '@/components/setup/LearningPurposeSelector'
 import { TeachingStyleSelector, type TeachingStyleChoice } from '@/components/setup/TeachingStyleSelector'
+import { RecallBreakSelector, type RecallBreakMode } from '@/components/setup/RecallBreakSelector'
 import { GeneratingOverlay } from '@/components/setup/GeneratingOverlay'
 import type { CourseDepth, CourseMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/types'
 
@@ -24,8 +24,49 @@ interface TopicInputProps {
   initialJobId?: string | null
 }
 
+const MIN_GOAL_LENGTH = 10
+
+const ACCEPTED_SOURCE_TYPES = [
+  '.txt', '.md', '.markdown', '.json', '.csv', '.pdf', '.docx', '.pptx', '.xlsx', '.html', '.epub',
+  'text/plain', 'text/markdown', 'application/json', 'text/csv', 'application/pdf',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+].join(',')
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Numbered section card — the structural unit of the setup form. */
+function SetupSection({
+  step,
+  title,
+  description,
+  children,
+}: {
+  step: string
+  title: string
+  description: string
+  children: ReactNode
+}) {
+  return (
+    <section className="setup-section" aria-label={title}>
+      <header className="setup-section-head">
+        <span className="setup-section-step" aria-hidden="true">{step}</span>
+        <div className="setup-section-heading">
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+      </header>
+      <div className="setup-section-body">{children}</div>
+    </section>
+  )
+}
+
 export function TopicInput({ initialJobId = null }: TopicInputProps) {
-  const router = useRouter()
   const { status } = useSession()
   const [mode, setMode] = useState<CourseMode>('ai_teacher')
   const [learningControl, setLearningControl] = useState<LearningControlMode>('balanced')
@@ -33,21 +74,70 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel>('intermediate')
   const [learningPurpose, setLearningPurpose] = useState<LearningPurpose>('practitioner')
   const [teachingStyle, setTeachingStyle] = useState<TeachingStyleChoice>('auto')
+  const [recallBreakMode, setRecallBreakMode] = useState<RecallBreakMode>('auto')
+  const [recallBreakDuration, setRecallBreakDuration] = useState(10)
   const [previewCurriculum, setPreviewCurriculum] = useState(true)
   const [description, setDescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(initialJobId !== null)
   const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId)
-  const [generationComplete, setGenerationComplete] = useState(false)
   const [sourceFiles, setSourceFiles] = useState<FileList | null>(null)
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [topicUnsuitable, setTopicUnsuitable] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const goalTooShort = description.trim().length < MIN_GOAL_LENGTH
   const needsSource = mode === 'source_grounded' && (!sourceFiles || sourceFiles.length === 0)
-  const cannotGenerate = isGenerating || description.trim().length < 10 || needsSource
+  const cannotGenerate = isGenerating || goalTooShort || needsSource
+
+  // What is still missing before the course can build — shown next to the submit button.
+  const readinessHint = goalTooShort
+    ? 'Describe your goal to continue.'
+    : needsSource
+      ? 'Add at least one source file to continue.'
+      : null
+
+  useEffect(() => {
+    if (status !== 'authenticated') return
+    let active = true
+    fetch('/api/settings/recall')
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (
+          active
+          && ['auto', '30m', '60m', 'off'].includes(String(data?.mode))
+        ) {
+          setRecallBreakMode(data.mode as RecallBreakMode)
+        }
+        const duration = Number(data?.durationMinutes)
+        if (active && Number.isFinite(duration)) {
+          setRecallBreakDuration(Math.min(45, Math.max(5, Math.round(duration))))
+        }
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [status])
 
   function updateSources(event: ChangeEvent<HTMLInputElement>) {
     setSourceFiles(event.target.files)
     setError(null)
+  }
+
+  function clearSources() {
+    setSourceFiles(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function handleSourceDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault()
+    setIsDraggingFiles(false)
+    if (event.dataTransfer.files?.length) {
+      setSourceFiles(event.dataTransfer.files)
+      setError(null)
+    }
   }
 
   function handleCancel() {
@@ -64,7 +154,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   }
 
   async function startGeneration() {
-    if (description.trim().length < 10) return
+    if (goalTooShort) return
 
     setError(null)
     setTopicUnsuitable(false)
@@ -75,10 +165,22 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       return
     }
 
-    setGenerationComplete(false)
     setIsGenerating(true)
 
     try {
+      const recallResponse = await fetch('/api/settings/recall', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: recallBreakMode,
+          durationMinutes: recallBreakDuration,
+        }),
+      })
+      if (!recallResponse.ok) {
+        const recallData = await recallResponse.json().catch(() => null)
+        throw new Error(recallData?.error ?? 'Could not save the recall break schedule.')
+      }
+
       const formData = new FormData()
       formData.append('goals', description)
       formData.append('mode', mode)
@@ -119,7 +221,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       setIsGenerating(true)
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Course generation failed.')
-      setGenerationComplete(false)
       setIsGenerating(false)
     }
   }
@@ -132,82 +233,142 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   return (
     <>
       <form className="setup-form" onSubmit={submit}>
-        <div className="field">
-          <label htmlFor="description">What do you want to learn?</label>
-          <textarea
-            id="description"
-            rows={4}
-            placeholder="e.g. I want to understand machine learning well enough to build and train my own models from scratch."
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-          />
-          <div className="field-note">Be specific about what you want to be able to do. The AI will name and structure your course.</div>
-        </div>
-        <ModeSelector value={mode} onChange={setMode} />
-        {mode === 'ai_teacher' ? <HallucinationWarning /> : null}
-        {mode === 'source_grounded' ? (
-          <div className="field">
-            <label>Sources</label>
-            <label htmlFor="sources" className="custom-file-upload">
-              <input
-                id="sources"
-                className="hidden-file-input"
-                multiple
-                required
-                type="file"
-                accept=".txt,.md,.markdown,.json,.csv,.pdf,.docx,.pptx,.xlsx,.html,.epub,text/plain,text/markdown,application/json,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={updateSources}
-              />
-              <div className="upload-icon-wrapper">
-                <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5h10.5a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0017.25 4.5H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25z" />
-                </svg>
-              </div>
-              <div className="upload-text">
-                {sourceFiles?.length ? (
-                  <strong>{sourceFiles.length} file{sourceFiles.length === 1 ? '' : 's'} selected</strong>
-                ) : (
-                  <strong>Choose files to upload</strong>
-                )}
-                <span>or drag & drop them here</span>
-              </div>
-            </label>
-            {sourceFiles && sourceFiles.length > 0 && (
-              <ol className="source-order-list" aria-label="Selected source order">
-                {Array.from(sourceFiles).map((file, idx) => (
-                  <li key={`${file.name}-${idx}`}>
-                    <span>{idx + 1}</span>
-                    {file.name}
-                  </li>
-                ))}
-              </ol>
-            )}
-            <div className="field-note">
-              {sourceFiles?.length
-                ? 'TruLurn treats the numbered list above as the source sequence.'
-                : 'Upload text, Markdown, PDF, Word, PowerPoint, Excel, or HTML files. Lessons are generated only from this material — foundations, core concepts, and next steps are organized from what your sources actually cover.'}
+        <SetupSection
+          step="01"
+          title="Learning goal"
+          description="What you want to be able to do when the course is done. The AI names and structures the course from this."
+        >
+          <div className="setup-field">
+            <textarea
+              id="description"
+              rows={4}
+              aria-label="What do you want to learn?"
+              placeholder="e.g. I want to understand machine learning well enough to build and train my own models from scratch."
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+            />
+            <div className="setup-field-foot">
+              <span>Be specific — outcomes beat subjects. &ldquo;Read financial statements confidently&rdquo; builds a better course than &ldquo;finance&rdquo;.</span>
+              {description.trim().length > 0 && goalTooShort ? (
+                <span className="setup-field-count">Keep going — a sentence is enough</span>
+              ) : null}
             </div>
           </div>
-        ) : null}
-        <LearningControlSelector value={learningControl} onChange={setLearningControl} />
-        <CourseDepthSelector value={courseDepth} onChange={setCourseDepth} />
-        <KnowledgeLevelSelector value={knowledgeLevel} onChange={setKnowledgeLevel} />
-        <LearningPurposeSelector value={learningPurpose} onChange={setLearningPurpose} />
-        <TeachingStyleSelector value={teachingStyle} onChange={setTeachingStyle} />
-        <label className="preview-toggle">
-          <input
-            type="checkbox"
-            checked={previewCurriculum}
-            onChange={(e) => setPreviewCurriculum(e.target.checked)}
+        </SetupSection>
+
+        <SetupSection
+          step="02"
+          title="Course source"
+          description="Where the course content comes from."
+        >
+          <ModeSelector value={mode} onChange={setMode} />
+          {mode === 'ai_teacher' ? <HallucinationWarning /> : null}
+          {mode === 'source_grounded' ? (
+            <div className="setup-field">
+              <label
+                htmlFor="sources"
+                className={`source-dropzone${isDraggingFiles ? ' dragging' : ''}${sourceFiles?.length ? ' has-files' : ''}`}
+                onDragOver={(event) => { event.preventDefault(); setIsDraggingFiles(true) }}
+                onDragLeave={() => setIsDraggingFiles(false)}
+                onDrop={handleSourceDrop}
+              >
+                <input
+                  ref={fileInputRef}
+                  id="sources"
+                  className="hidden-file-input"
+                  multiple
+                  type="file"
+                  accept={ACCEPTED_SOURCE_TYPES}
+                  onChange={updateSources}
+                />
+                <strong>
+                  {sourceFiles?.length
+                    ? `${sourceFiles.length} file${sourceFiles.length === 1 ? '' : 's'} selected`
+                    : 'Drop files here or click to browse'}
+                </strong>
+                <span>PDF, Word, PowerPoint, Excel, Markdown, HTML, or plain text</span>
+              </label>
+              {sourceFiles && sourceFiles.length > 0 ? (
+                <>
+                  <ol className="source-order-list" aria-label="Selected source order">
+                    {Array.from(sourceFiles).map((file, idx) => (
+                      <li key={`${file.name}-${idx}`}>
+                        <span className="source-order-num">{idx + 1}</span>
+                        <span className="source-order-name">{file.name}</span>
+                        <span className="source-order-size">{formatFileSize(file.size)}</span>
+                      </li>
+                    ))}
+                  </ol>
+                  <div className="setup-field-foot">
+                    <span>The numbered order above is treated as the study sequence.</span>
+                    <button className="source-clear-btn" type="button" onClick={clearSources}>
+                      Clear selection
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="setup-field-foot">
+                  <span>
+                    Lessons are generated only from this material — foundations, core concepts, and
+                    next steps are organized from what your sources actually cover.
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </SetupSection>
+
+        <SetupSection
+          step="03"
+          title="Course structure"
+          description="How the roadmap is paced and how much ground it covers."
+        >
+          <LearningControlSelector value={learningControl} onChange={setLearningControl} />
+          <CourseDepthSelector value={courseDepth} onChange={setCourseDepth} />
+        </SetupSection>
+
+        <SetupSection
+          step="04"
+          title="Personalization"
+          description="How lessons are written for you. TruLurn keeps adapting these as it learns how you study."
+        >
+          <KnowledgeLevelSelector value={knowledgeLevel} onChange={setKnowledgeLevel} />
+          <LearningPurposeSelector value={learningPurpose} onChange={setLearningPurpose} />
+          <TeachingStyleSelector value={teachingStyle} onChange={setTeachingStyle} />
+        </SetupSection>
+
+        <SetupSection
+          step="05"
+          title="Study rhythm"
+          description="Short retrieval pauses during study sessions — recalling beats re-reading."
+        >
+          <RecallBreakSelector
+            value={recallBreakMode}
+            onChange={setRecallBreakMode}
+            durationMinutes={recallBreakDuration}
+            onDurationChange={setRecallBreakDuration}
           />
-          <span>
-            <strong>Review the curriculum before building.</strong> See the full roadmap and edit it
-            (rename, reorder, add, or remove topics) before lessons are generated.
-          </span>
-        </label>
-        <button className="button" type="submit" disabled={cannotGenerate}>
-          {isGenerating ? 'Building course...' : 'Build my course'}
-        </button>
+        </SetupSection>
+
+        <footer className="setup-footer">
+          <label className="setup-review-toggle">
+            <input
+              type="checkbox"
+              checked={previewCurriculum}
+              onChange={(e) => setPreviewCurriculum(e.target.checked)}
+            />
+            <span>
+              <strong>Review the curriculum before building</strong>
+              Rename, reorder, add, or remove topics before lessons are generated.
+            </span>
+          </label>
+          <div className="setup-submit-group">
+            {readinessHint ? <span className="setup-readiness-hint">{readinessHint}</span> : null}
+            <button className="button setup-submit" type="submit" disabled={cannotGenerate}>
+              {isGenerating ? 'Building course…' : 'Build my course'}
+            </button>
+          </div>
+        </footer>
       </form>
 
       {isGenerating && activeJobId ? (

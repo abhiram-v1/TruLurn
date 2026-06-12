@@ -4,6 +4,7 @@ import type { CourseGenerationInput } from '@/lib/course-generation/input'
 import type { LessonStyle } from '@/lib/ai/skills/lessonStyle'
 import type { CourseResearchReport } from '@/lib/course-generation/research'
 import { embedSourceChunkById } from '@/lib/vector/retrieval'
+import { attachIngestedSourcesToCourse } from '@/lib/sources/ingestion'
 
 // ── Source text chunking ──────────────────────────────────────────────────────
 // Split source text into ~1500-char chunks with paragraph-boundary awareness.
@@ -56,6 +57,7 @@ async function createSourceChunks(
     user_id: string
     source_title: string | null
     content: string
+    embedding_status: 'pending'
     created_at: Date
   }> = []
 
@@ -86,6 +88,7 @@ async function createSourceChunks(
         user_id: userId,
         source_title: title,
         content: chunk,
+        embedding_status: 'pending',
         created_at: new Date(),
       })
     }
@@ -96,11 +99,18 @@ async function createSourceChunks(
   // Synchronous insert so chunks exist before the first lesson generation request.
   await db.collection('sourceChunks').insertMany(docs)
 
-  // Fire-and-forget embedding — don't block course creation on it.
-  for (const doc of docs) {
-    embedSourceChunkById(db, String(doc._id)).catch((err) =>
-      console.warn('[sourceChunks] Embedding failed for', doc._id, err),
+  // Complete the initial indexing attempt before the course is reported ready.
+  const concurrency = 4
+  for (let offset = 0; offset < docs.length; offset += concurrency) {
+    const batch = docs.slice(offset, offset + concurrency)
+    const results = await Promise.allSettled(
+      batch.map((doc) => embedSourceChunkById(db, String(doc._id))),
     )
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.warn('[sourceChunks] Embedding failed for', batch[index]._id, result.reason)
+      }
+    })
   }
 }
 
@@ -112,7 +122,9 @@ type PersistGeneratedCourseInput = CourseGenerationInput & {
   userId: string
   learningStyle?: LessonStyle
   learningStyleReason?: string
+  learnerPersona?: import('@/lib/personalization/learnerPersona').LearnerPersona | null
   researchReport?: CourseResearchReport | null
+  generationJobId?: string
 }
 
 export type PersistedGeneratedCourse = {
@@ -339,8 +351,13 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     },
     learning_style: input.learningStyle ?? 'conceptual_technical',
     learning_style_reason: input.learningStyleReason ?? null,
+    // Who this learner is (derived from goals/setup, correctable via the agent).
+    // Every user-facing generator reads it so nothing assumes a school student.
+    learner_persona: input.learnerPersona ?? null,
     research_confidence: input.researchReport?.research_confidence ?? null,
     source_text: input.sourceText || null,
+    source_document_ids: input.sourceDocumentIds ?? [],
+    source_version_ids: input.sourceVersionIds ?? [],
     // Teaching-style profile of the uploaded sources — lesson generation reads
     // this to write every page in the instructor's voice.
     source_profile: input.sourceProfile ?? null,
@@ -731,7 +748,23 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
 
   // Chunk and store source text so lesson generation and the doubt agent can
   // retrieve it semantically. Run after all course documents are inserted.
-  if (input.sourceText) {
+  if (input.sourceVersionIds?.length) {
+    const materialized = await attachIngestedSourcesToCourse({
+      db,
+      userId: input.userId,
+      generationJobId: input.generationJobId,
+      courseId,
+      sourceVersionIds: input.sourceVersionIds,
+    })
+    const concurrency = 4
+    for (let offset = 0; offset < materialized.pendingChunkIds.length; offset += concurrency) {
+      await Promise.allSettled(
+        materialized.pendingChunkIds
+          .slice(offset, offset + concurrency)
+          .map((chunkId) => embedSourceChunkById(db, chunkId)),
+      )
+    }
+  } else if (input.sourceText) {
     await createSourceChunks(db, courseId, input.userId, input.sourceText)
   }
 

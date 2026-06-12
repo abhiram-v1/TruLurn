@@ -5,12 +5,12 @@ import { getRequiredUserId } from '@/lib/server/currentUser'
 import { validateTopicSuitability } from '@/lib/course-generation/topicValidator'
 import { researchCurriculum, formatResearchBrief } from '@/lib/course-generation/research'
 import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 import { determineLessonStyle } from '@/lib/ai/skills/lessonStyle'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
 import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
+import { readIngestedSourceText, resumeSourceIngestionJobs } from '@/lib/sources/ingestion'
 
 const UNSUITABLE_MESSAGE =
   'This topic is not suitable for structured course creation. Please enter a subject that can be taught through multiple lessons, such as programming, mathematics, design, business, science, languages, or other professional skills.'
@@ -155,18 +155,33 @@ export async function GET(
         // Stage 2: extracting_sources
         // Ordering rewrites the source sequence; profiling learns how the material
         // teaches and which full subject it belongs to. Independent — run in parallel.
-        if (input.mode === 'source_grounded' && !completedStages.includes('extracting_sources')) {
+        if ((input.mode === 'source_grounded' || input.sourceIngestionJobIds?.length) && !completedStages.includes('extracting_sources')) {
           await updateStage('extracting_sources', 'Studying how your material teaches and inferring source order...', completedStages)
+          await resumeSourceIngestionJobs(db, input.sourceIngestionJobIds ?? [])
+          const durableExtraction = input.sourceVersionIds?.length
+            ? await readIngestedSourceText(db, userId, input.sourceVersionIds)
+            : { sourceText: input.sourceText ?? '', limitations: input.sourceLimitations ?? [] }
           const baseInput = {
             ...input,
             topic: input.topic ?? input.goals,
-            sourceLimitations: input.sourceLimitations ?? [],
+            sourceText: durableExtraction.sourceText || input.sourceText,
+            sourceLimitations: [
+              ...(input.sourceLimitations ?? []),
+              ...durableExtraction.limitations,
+            ],
           }
-          const [orderedInput, sourceProfile] = await Promise.all([
-            orderSourceGroundedInput(baseInput),
-            analyzeSourceProfile({ goals: baseInput.goals, sourceText: baseInput.sourceText ?? '' }),
-          ])
-          input = { ...orderedInput, sourceProfile }
+          if (input.mode === 'source_grounded' && !baseInput.sourceText?.trim()) {
+            throw new Error(`No readable source text is available. ${baseInput.sourceLimitations.join(' ')}`)
+          }
+          if (input.mode === 'source_grounded') {
+            const [orderedInput, sourceProfile] = await Promise.all([
+              orderSourceGroundedInput(baseInput),
+              analyzeSourceProfile({ goals: baseInput.goals, sourceText: baseInput.sourceText ?? '' }),
+            ])
+            input = { ...orderedInput, sourceProfile }
+          } else {
+            input = baseInput
+          }
           completedStages.push('extracting_sources')
           await updateStage('extracting_sources', 'Sources analyzed: teaching style extracted and order inferred.', completedStages, { input })
         }
@@ -197,8 +212,8 @@ export async function GET(
               ...input,
               curriculumResearchBrief: formatResearchBrief(currentJob.researchReport || null),
             })
-            const curriculumText = await generateWithGemini({ ...curriculumPrompt, purpose: 'primary' })
-            curriculum = parseGeminiJson<any>(curriculumText)
+            const curriculumText = await generateAI({ feature: 'curriculum_generation', ...curriculumPrompt })
+            curriculum = parseAIJson<any>(curriculumText)
           }
           completedStages.push('building_curriculum')
           await updateStage('building_curriculum', 'Curriculum built successfully.', completedStages, { curriculum })
@@ -236,8 +251,8 @@ export async function GET(
           await updateStage('building_atlas', 'Mapping prerequisites and dependency connections...', completedStages)
           let map = currentJob.map
           if (!map) {
-            const mapText = await generateWithGemini({ ...mapBuilderSkill(currentJob.curriculum), purpose: 'primary' })
-            map = parseGeminiJson<any>(mapText)
+            const mapText = await generateAI({ feature: 'map_generation', ...mapBuilderSkill(currentJob.curriculum) })
+            map = parseAIJson<any>(mapText)
           }
           completedStages.push('building_atlas')
           await updateStage('building_atlas', 'Atlas mapping completed.', completedStages, { map })
@@ -290,6 +305,7 @@ export async function GET(
               learningStyleReason: currentJob.learningStyleReason,
               researchReport: currentJob.researchReport,
               userId,
+              generationJobId: jobId,
             })
             courseId = persisted.courseId
             firstTopicId = persisted.firstTopicId

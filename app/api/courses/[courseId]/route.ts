@@ -1,9 +1,12 @@
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { deleteCourseWithLineage } from '@/lib/sources/deletion'
 
 // ── PATCH — update mutable course settings ───────────────────────────────────
-// Accepted fields: code_language (string | null), lesson_style (string | null)
+// Accepted fields: code_language (string | null), lesson_style (string | null),
+// source_coverage_preference ('complete' | 'smart' | 'core' | null — feeds the
+// adaptive source fidelity policy; null returns to style-derived coverage)
 export async function PATCH(
   request: Request,
   { params }: { params: { courseId: string } },
@@ -31,6 +34,7 @@ export async function PATCH(
     const ALLOWED: Record<string, (v: unknown) => boolean> = {
       code_language: (v) => v === null || typeof v === 'string',
       lesson_style:  (v) => v === null || typeof v === 'string',
+      source_coverage_preference: (v) => v === null || v === 'complete' || v === 'smart' || v === 'core',
     }
 
     const $set: Record<string, unknown> = { updated_at: new Date() }
@@ -61,22 +65,6 @@ export async function PATCH(
   }
 }
 
-const COURSE_SCOPED_COLLECTIONS = [
-  'branches',
-  'topics',
-  'topicEdges',
-  'courseSummaries',
-  'topicSummaries',
-  'pages',
-  'pageSummaries',
-  'doubtMessages',
-  'quizQuestions',
-  'quizAttempts',
-  'examSessions',
-  'examTurns',
-  'sourceChunks',
-] as const
-
 export async function DELETE(
   _request: Request,
   { params }: { params: { courseId: string } },
@@ -99,25 +87,8 @@ export async function DELETE(
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
 
-    const deleteResults = await Promise.all(
-      COURSE_SCOPED_COLLECTIONS.map(async (collectionName) => {
-        const result = await db.collection(collectionName).deleteMany({ course_id: courseId })
-        return [collectionName, result.deletedCount] as const
-      }),
-    )
-
-    const courseResult = await db.collection('courses').deleteOne({
-      _id: courseId as any,
-      user_id: userId,
-    })
-
-    return NextResponse.json({
-      deleted: true,
-      counts: {
-        courses: courseResult.deletedCount,
-        ...Object.fromEntries(deleteResults),
-      },
-    })
+    const result = await deleteCourseWithLineage(db, { userId, courseId })
+    return NextResponse.json(result, { status: result.deleted ? 200 : 500 })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown course deletion error'
     const status = message.includes('sign in') ? 401 : 500

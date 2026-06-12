@@ -1,5 +1,4 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 
 type TopicValidationResult =
   | { valid: true }
@@ -51,8 +50,8 @@ OR
 }`
 
   try {
-    const text = await generateWithGemini({ system: SYSTEM, user, purpose: 'primary' })
-    const result = parseGeminiJson<{ valid: boolean; reason?: string }>(text)
+    const text = await generateAI({ feature: 'topic_validation', system: SYSTEM, user })
+    const result = parseAIJson<{ valid: boolean; reason?: string }>(text)
     if (result.valid === false) {
       return { valid: false, reason: result.reason ?? 'Topic lacks sufficient educational depth.' }
     }

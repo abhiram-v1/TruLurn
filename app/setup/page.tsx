@@ -15,9 +15,12 @@ export default function SetupPage({ searchParams }: { searchParams?: { job?: str
           </Link>
         </div>
       </header>
-      <div style={{ marginTop: 34 }}>
+      <div className="setup-page-header">
+        <p className="eyebrow">New course</p>
         <h1 className="page-heading">Build a curriculum</h1>
-        <p className="page-subtitle">Choose the learning scope. The generated Atlas is stored first, then opened in its dedicated course workspace.</p>
+        <p className="page-subtitle">
+          Five quick decisions shape the whole course. Everything except the goal can be changed later.
+        </p>
       </div>
       <TopicInput initialJobId={initialJobId} />
     </main>

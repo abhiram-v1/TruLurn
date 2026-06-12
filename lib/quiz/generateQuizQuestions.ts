@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
+import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
 
 // Per-session question count: conceptual courses get explain; programming courses get code.
 export const QUIZ_SESSION_SIZE = 5
@@ -126,11 +126,14 @@ export async function generateQuizQuestions(
     : '- 1 x "explain": Ask the student to explain a specific causal mechanism from the lesson. Must target a different relationship than the apply question. Set options and correct_answer to null.'
   const finalRubricType = allowCode ? 'code' : 'explain'
 
-  const system = `You are TruLurn's quiz question writer. Write exactly ${QUIZ_SESSION_SIZE} diagnostic questions that reveal whether a student truly understands this topic, not whether they memorized it.
+  const system = `You are TruLurn's quiz question writer. Write exactly ${QUIZ_SESSION_SIZE} diagnostic questions that reveal whether the learner truly understands this topic, not whether they memorized it.
+
+${buildAudienceDirective(course.learner_persona, course.goals)}
+Question scenarios must come from THIS learner's world — never default to classroom or "a student does X" framing.
 
 WHAT MAKES A GOOD QUESTION:
 - Grounded: rooted in the specific lesson content. Do not ask about things not covered.
-- Hard: requires active reasoning. A student who read but did not understand the mechanism should fail.
+- Hard: requires active reasoning. A learner who read but did not understand the mechanism should fail.
 - Specific: use concrete numbers, named concepts, and specific scenarios. Never use generic academic wording.
 - Mechanism-first: test WHY or HOW, never just WHAT.
 
@@ -179,8 +182,8 @@ FULL LESSON CONTENT TAUGHT:
 ${lessonContext}
 ${doubtContext ? `\nSTUDENT'S PRIOR DOUBTS ON THIS TOPIC (use to target the quiz):\n${doubtContext}` : ''}`
 
-  const raw = await generateWithGemini({ system, user, purpose: 'primary', responseMimeType: 'text/plain' })
-  const questions = parseGeminiJson<any[]>(raw)
+  const raw = await generateAI({ feature: 'quiz_generation', system, user, responseMimeType: 'text/plain' })
+  const questions = parseAIJson<any[]>(raw)
 
   if (!Array.isArray(questions) || questions.length === 0) {
     throw new Error('Quiz generation returned an invalid response.')

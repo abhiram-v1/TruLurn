@@ -8,6 +8,11 @@ export type SourceExtraction = {
   limitations: string[]
 }
 
+export type SourceFileExtraction = {
+  text: string | null
+  limitation: string | null
+}
+
 export function isTextSource(file: File): boolean {
   const name = file.name.toLowerCase()
   return file.type.startsWith('text/') || TEXT_EXTENSIONS.some((ext) => name.endsWith(ext))
@@ -27,15 +32,23 @@ export function isRichSource(file: File): boolean {
  *  - The service is unreachable (not running)
  *  - The service returned a non-OK response
  */
-async function convertViaMarkItDown(file: File): Promise<string | null> {
+export async function convertViaMarkItDown(file: File): Promise<string | null> {
   const serviceUrl = process.env.MARKITDOWN_SERVICE_URL
+    ?? (process.env.NODE_ENV === 'development' ? 'http://127.0.0.1:3002' : undefined)
   if (!serviceUrl) return null
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 60_000)
 
   try {
     const form = new FormData()
     form.append('file', file)
 
-    const res = await fetch(`${serviceUrl}/convert`, { method: 'POST', body: form })
+    const res = await fetch(`${serviceUrl}/convert`, {
+      method: 'POST',
+      body: form,
+      signal: controller.signal,
+    })
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
@@ -48,6 +61,39 @@ async function convertViaMarkItDown(file: File): Promise<string | null> {
   } catch (e) {
     console.warn(`[MarkItDown] Service unreachable for ${file.name}:`, e)
     return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function extractTextFromSourceFile(file: File): Promise<SourceFileExtraction> {
+  if (isTextSource(file)) {
+    const text = await file.text()
+    return text.trim()
+      ? { text: text.trim(), limitation: null }
+      : { text: null, limitation: `${file.name} was empty.` }
+  }
+
+  if (isRichSource(file)) {
+    const markdown = await convertViaMarkItDown(file)
+    if (markdown) return { text: markdown.trim(), limitation: null }
+
+    const serviceConfigured = Boolean(
+      process.env.MARKITDOWN_SERVICE_URL || process.env.NODE_ENV === 'development',
+    )
+    return {
+      text: null,
+      limitation: serviceConfigured
+        ? `${file.name} could not be converted - the MarkItDown service is unavailable or returned no text.`
+        : `${file.name} was skipped - rich document conversion is not configured. Start the MarkItDown service and set MARKITDOWN_SERVICE_URL.`,
+    }
+  }
+
+  return {
+    text: null,
+    limitation:
+      `${file.name}: unsupported format. ` +
+      'Upload text, Markdown, JSON, CSV, PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) files.',
   }
 }
 

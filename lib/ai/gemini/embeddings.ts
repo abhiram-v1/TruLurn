@@ -1,8 +1,4 @@
-type GeminiEmbeddingTask =
-  | 'SEMANTIC_SIMILARITY'
-  | 'RETRIEVAL_DOCUMENT'
-  | 'RETRIEVAL_QUERY'
-  | 'QUESTION_ANSWERING'
+import type { AIEmbeddingTask } from '@/lib/ai/types'
 
 type GeminiEmbeddingResponse = {
   embedding?: {
@@ -31,10 +27,10 @@ function normalizeVector(values: number[]) {
   return values.map((value) => value / magnitude)
 }
 
-function formatEmbeddingInput(text: string, taskType: GeminiEmbeddingTask) {
+function formatEmbeddingInput(text: string, taskType: AIEmbeddingTask, model: string) {
   const cleanText = text.replace(/\s+/g, ' ').trim()
 
-  if (!GEMINI_EMBEDDING_MODEL.includes('embedding-2')) {
+  if (!model.includes('embedding-2')) {
     return cleanText
   }
 
@@ -51,10 +47,13 @@ function formatEmbeddingInput(text: string, taskType: GeminiEmbeddingTask) {
 
 export async function embedText(
   text: string,
-  taskType: GeminiEmbeddingTask = 'SEMANTIC_SIMILARITY',
+  taskType: AIEmbeddingTask = 'SEMANTIC_SIMILARITY',
+  options: { model?: string; dimensions?: number } = {},
 ): Promise<number[]> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
-  const content = formatEmbeddingInput(text, taskType)
+  const model = options.model ?? GEMINI_EMBEDDING_MODEL
+  const dimensions = options.dimensions ?? GEMINI_EMBEDDING_DIMENSIONS
+  const content = formatEmbeddingInput(text, taskType, model)
 
   if (!apiKey) {
     throw new Error('Missing GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY in .env.local')
@@ -68,14 +67,14 @@ export async function embedText(
     content: {
       parts: [{ text: content.slice(0, 16000) }],
     },
-    output_dimensionality: GEMINI_EMBEDDING_DIMENSIONS,
+    output_dimensionality: dimensions,
   }
 
-  if (!GEMINI_EMBEDDING_MODEL.includes('embedding-2')) {
+  if (!model.includes('embedding-2')) {
     body.taskType = taskType
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}/${GEMINI_EMBEDDING_MODEL}:embedContent`, {
+  const response = await fetch(`${GEMINI_ENDPOINT}/${model}:embedContent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -96,5 +95,5 @@ export async function embedText(
     throw new Error('Gemini returned an empty embedding.')
   }
 
-  return GEMINI_EMBEDDING_MODEL.includes('embedding-2') ? values : normalizeVector(values)
+  return model.includes('embedding-2') ? values : normalizeVector(values)
 }

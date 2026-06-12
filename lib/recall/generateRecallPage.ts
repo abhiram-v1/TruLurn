@@ -1,28 +1,28 @@
 import crypto from 'crypto'
 import type { Db } from 'mongodb'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 import type { SessionPageEntry, StudySessionDoc } from '@/lib/recall/session'
 import { pagesSinceLastBreak } from '@/lib/recall/session'
 
 // ── Recall page generation ────────────────────────────────────────────────────
-// Turns the material covered in the current study stretch into an active-recall
-// page: quick concept summaries, retrieval questions, and connection questions
-// that link concepts across the topics just studied. Questions are self-rated
-// (got it / shaky / forgot) — no AI evaluation round-trip, so the break stays fast.
+// Turns the material covered in the current study stretch into lightweight
+// memory cues. Students recall privately; this flow never reveals answers or
+// treats a prompt as mastery evidence.
 
 export type RecallItemType = 'recall' | 'connection' | 'application'
-export type RecallRating = 'got_it' | 'shaky' | 'forgot'
 
 export type RecallItem = {
   id: string
   type: RecallItemType
   concept: string
-  /** Topic the concept came from (for stats attribution). */
+  /** Primary source location for tagging and direct lesson navigation. */
   topic_id: string | null
+  topic_title: string | null
+  page_number: number | null
   prompt: string
-  answer: string
-  rating?: RecallRating | null
+  /** Retained so older stored recall sessions remain readable. */
+  answer?: string | null
+  rating?: 'got_it' | 'shaky' | 'forgot' | null
 }
 
 export type RecallSummaryItem = {
@@ -47,6 +47,7 @@ export type RecallSessionDoc = {
   summaries: RecallSummaryItem[]
   items: RecallItem[]
   stats: { total: number; got_it: number; shaky: number; forgot: number } | null
+  reviewed_item_ids?: string[]
   created_at: Date
   completed_at: Date | null
 }
@@ -65,15 +66,7 @@ function formatCoveredMaterial(pages: SessionPageEntry[]): string {
 
 function normalizeContent(raw: any, pages: SessionPageEntry[]): RecallPageContent {
   const validTopicIds = new Set(pages.map((p) => p.topic_id))
-  const summaries: RecallSummaryItem[] = Array.isArray(raw?.summaries)
-    ? raw.summaries
-        .map((s: any) => ({
-          concept: String(s?.concept ?? '').trim(),
-          summary: String(s?.summary ?? '').trim(),
-        }))
-        .filter((s: RecallSummaryItem) => s.concept && s.summary)
-        .slice(0, 6)
-    : []
+  const fallbackPage = pages.at(-1) ?? null
 
   const items: RecallItem[] = Array.isArray(raw?.questions)
     ? raw.questions
@@ -81,24 +74,32 @@ function normalizeContent(raw: any, pages: SessionPageEntry[]): RecallPageConten
           const type = ['recall', 'connection', 'application'].includes(String(q?.type))
             ? (String(q.type) as RecallItemType)
             : 'recall'
-          const topicId = String(q?.topic_id ?? '')
+          const requestedTopicId = String(q?.topic_id ?? '')
+          const topicId = validTopicIds.has(requestedTopicId)
+            ? requestedTopicId
+            : fallbackPage?.topic_id ?? null
+          const sourcePages = pages.filter((page) => page.topic_id === topicId)
+          const requestedPageNumber = Number(q?.page_number)
+          const sourcePage = sourcePages.find((page) => page.page_number === requestedPageNumber)
+            ?? sourcePages.at(-1)
+            ?? fallbackPage
           return {
             id: crypto.randomUUID(),
             type,
             concept: String(q?.concept ?? '').trim(),
-            topic_id: validTopicIds.has(topicId) ? topicId : null,
+            topic_id: sourcePage?.topic_id ?? topicId,
+            topic_title: sourcePage?.topic_title ?? null,
+            page_number: sourcePage?.page_number ?? null,
             prompt: String(q?.prompt ?? '').trim(),
-            answer: String(q?.answer ?? '').trim(),
-            rating: null,
           }
         })
-        .filter((q: RecallItem) => q.prompt && q.answer)
+        .filter((q: RecallItem) => q.prompt && q.topic_id)
         .slice(0, 7)
     : []
 
   return {
     headline: String(raw?.headline ?? '').trim() || 'Quick recall break',
-    summaries,
+    summaries: [],
     items,
   }
 }
@@ -106,25 +107,28 @@ function normalizeContent(raw: any, pages: SessionPageEntry[]): RecallPageConten
 export async function generateRecallContent({
   courseTitle,
   pages,
+  audienceDirective,
 }: {
   courseTitle: string
   pages: SessionPageEntry[]
+  /** Who the learner is (buildAudienceDirective) — keeps cues framed for them. */
+  audienceDirective?: string
 }): Promise<RecallPageContent> {
   const multiTopic = new Set(pages.map((p) => p.topic_id)).size > 1
 
-  const system = `You are TruLurn's recall-break designer.
-A student pauses mid-study for a 3-5 minute active-recall break covering ONLY the material they just studied.
-Retrieval strengthens memory far more than re-reading, so questions must force the student to produce the answer from memory — never recognize it.
+  const system = `You are TruLurn's recall-prompt designer.
+A learner pauses mid-study for a short active-recall break covering ONLY the material they just studied.
+These are private memory cues, not quiz questions. The learner reflects mentally and is never asked to submit or reveal an answer.
+${audienceDirective ? `\n${audienceDirective}\n` : ''}
 
 Rules:
 - Use ONLY the covered material supplied. Never test anything the student hasn't just seen.
-- Questions are open recall prompts the student answers in their head, then self-checks. No multiple choice.
+- Write open recall prompts only. No multiple choice, answer choices, model answers, scoring, or requests to submit a response.
 - "recall" questions target one concept: definitions in own words, why something works, what a step does.
 - "connection" questions ask how two concepts JUST studied relate, differ, or feed each other.${multiTopic ? ' Prefer pairs from different topics.' : ''}
-- "application" questions give a tiny concrete situation and ask the student to apply a just-learned idea.
-- Answers are model answers: 1-3 sentences, concrete, the gist a correct response must contain.
+- "application" questions give a tiny concrete situation and ask the learner to mentally apply a just-learned idea.
 - Wording stays friendly and direct. No exam tone, no "explain in detail".
-- Each question carries the topic_id (verbatim from the material block) of its primary concept.
+- Each question carries the topic_id and page_number (verbatim from the material block) of its primary source.
 Return only valid JSON.`
 
   const user = `Course: ${courseTitle}
@@ -137,32 +141,28 @@ ${formatCoveredMaterial(pages)}
 Build the recall break. Return exactly:
 {
   "headline": "one short encouraging line naming what the stretch covered",
-  "summaries": [
-    { "concept": "concept name", "summary": "1-2 sentence refresher in plain words" }
-  ],
   "questions": [
     {
       "type": "recall|connection|application",
-      "concept": "primary concept being tested",
+      "concept": "primary concept being recalled",
       "topic_id": "topic_id of the primary concept",
-      "prompt": "the question",
-      "answer": "model answer, 1-3 sentences"
+      "page_number": 1,
+      "prompt": "the memory cue"
     }
   ]
 }
 
 Sizing:
-- 3-5 summaries covering the most load-bearing concepts.
 - 4-6 questions total: mostly "recall", at least one "connection" when two or more distinct concepts were covered, at most one "application".`
 
-  const raw = await generateWithGemini({
+  const raw = await generateAI({
+    feature: 'recall_page_generation',
     system,
     user,
-    purpose: 'primary',
     responseMimeType: 'application/json',
   })
 
-  return normalizeContent(parseGeminiJson<any>(raw), pages)
+  return normalizeContent(parseAIJson<any>(raw), pages)
 }
 
 /**
@@ -174,11 +174,13 @@ export async function createRecallSession({
   session,
   courseTitle,
   trigger,
+  audienceDirective,
 }: {
   db: Db
   session: StudySessionDoc
   courseTitle: string
   trigger: RecallSessionDoc['trigger']
+  audienceDirective?: string
 }): Promise<RecallSessionDoc> {
   const collection = db.collection<RecallSessionDoc>('recallSessions')
 
@@ -194,7 +196,7 @@ export async function createRecallSession({
     throw new Error('Nothing new to recall yet — study a little more first.')
   }
 
-  const content = await generateRecallContent({ courseTitle, pages })
+  const content = await generateRecallContent({ courseTitle, pages, audienceDirective })
   if (!content.items.length) {
     throw new Error('Could not build recall questions for this stretch.')
   }
@@ -217,72 +219,43 @@ export async function createRecallSession({
   return doc
 }
 
-/**
- * Record self-ratings for a completed recall break and propagate per-topic
- * recall stats (consumed by the knowledge graph and the personalization engine).
- */
+/** Complete a prompt-only recall break without creating mastery evidence. */
 export async function completeRecallSession({
   db,
   recallSessionId,
   userId,
-  ratings,
+  reviewedItemIds,
 }: {
   db: Db
   recallSessionId: string
   userId: string
-  ratings: Record<string, RecallRating>
+  reviewedItemIds: string[]
 }): Promise<RecallSessionDoc | null> {
   const collection = db.collection<RecallSessionDoc>('recallSessions')
   const session = await collection.findOne({ _id: recallSessionId as any, user_id: userId })
   if (!session) return null
 
   const now = new Date()
-  const validRatings: RecallRating[] = ['got_it', 'shaky', 'forgot']
-  const items = session.items.map((item) => ({
-    ...item,
-    rating: validRatings.includes(ratings[item.id] as RecallRating)
-      ? (ratings[item.id] as RecallRating)
-      : item.rating ?? null,
-  }))
-
-  const stats = {
-    total: items.length,
-    got_it: items.filter((i) => i.rating === 'got_it').length,
-    shaky: items.filter((i) => i.rating === 'shaky').length,
-    forgot: items.filter((i) => i.rating === 'forgot').length,
-  }
+  const validItemIds = new Set(session.items.map((item) => item.id))
+  const reviewed = [...new Set(reviewedItemIds)].filter((itemId) => validItemIds.has(itemId))
 
   await collection.updateOne(
     { _id: session._id },
-    { $set: { items, stats, status: 'completed', completed_at: now } },
+    {
+      $set: {
+        reviewed_item_ids: reviewed,
+        stats: null,
+        status: 'completed',
+        completed_at: now,
+      },
+    },
   )
 
-  // Per-topic recall stats: hits strengthen a node, misses flag it for attention.
-  const byTopic = new Map<string, { attempts: number; hits: number; misses: number }>()
-  for (const item of items) {
-    if (!item.topic_id || !item.rating) continue
-    const entry = byTopic.get(item.topic_id) ?? { attempts: 0, hits: 0, misses: 0 }
-    entry.attempts += 1
-    if (item.rating === 'got_it') entry.hits += 1
-    if (item.rating === 'forgot') entry.misses += 1
-    byTopic.set(item.topic_id, entry)
+  return {
+    ...session,
+    reviewed_item_ids: reviewed,
+    stats: null,
+    status: 'completed',
+    completed_at: now,
   }
-
-  await Promise.all(
-    [...byTopic.entries()].map(([topicId, entry]) =>
-      db.collection('topics').updateOne(
-        { _id: topicId as any, course_id: session.course_id },
-        {
-          $inc: {
-            'recall_stats.attempts': entry.attempts,
-            'recall_stats.hits': entry.hits,
-            'recall_stats.misses': entry.misses,
-          },
-          $set: { 'recall_stats.last_recall_at': now, updated_at: now },
-        },
-      ),
-    ),
-  )
-
-  return { ...session, items, stats, status: 'completed', completed_at: now }
 }

@@ -1,6 +1,5 @@
 import type { Db } from 'mongodb'
-import { generateWithGemini } from '@/lib/ai/gemini/client'
-import { parseGeminiJson } from '@/lib/ai/gemini/json'
+import { generateAI, parseAIJson } from '@/lib/ai'
 
 // ── Prerequisite gap detection ─────────────────────────────────────────────────
 // When a student repeatedly fails a topic quiz, the real problem is often not the
@@ -105,10 +104,10 @@ ${candidatesText}
 Decide whether one of these prerequisites is the real root cause.`
 
   try {
-    const raw = await generateWithGemini({
+    const raw = await generateAI({
+      feature: 'prerequisite_gap_analysis',
       system,
       user,
-      purpose: 'agent',
       responseMimeType: 'text/plain',
       responseSchema: {
         name: 'prerequisite_gap',
@@ -123,7 +122,7 @@ Decide whether one of these prerequisites is the real root cause.`
         },
       },
     })
-    const parsed = parseGeminiJson<any>(raw)
+    const parsed = parseAIJson<any>(raw)
     if (!parsed?.has_gap) return null
 
     const chosenId = String(parsed.prerequisite_id ?? '').trim()
