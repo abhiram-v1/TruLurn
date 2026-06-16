@@ -2,6 +2,7 @@ import { generateAI, parseAIJson } from '@/lib/ai'
 import { buildPlanFidelityDirective, policyFromCourse, type SourceFidelityPolicy } from '@/lib/course-generation/sourceFidelity'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { ContentKind } from '@/types'
+import { VISUAL_REPRESENTATION_PLANNING_RULES } from '@/lib/ai/skills/dataChart'
 import {
   normalizeBrief,
   validateLearningArchitectureBrief,
@@ -22,6 +23,7 @@ import {
 // cost a model call.
 
 export type PageTargetLength = 'short' | 'medium' | 'long'
+export type PageBreakPreference = 'concept_boundary' | 'natural_pause' | 'soft_overflow'
 
 export type TopicPagePlan = {
   page_number: number
@@ -29,22 +31,35 @@ export type TopicPagePlan = {
   content_kind: ContentKind
   page_sequence_role: PageSequenceRole
   target_length: PageTargetLength
+  target_words: number
+  soft_max_words: number
+  concepts: string[]
+  start_boundary: string
+  end_boundary: string
+  continues_from_previous: boolean
+  continues_to_next: boolean
+  break_preference: PageBreakPreference
+  break_reason: string
   brief: LearningArchitectureBrief | null
 }
 
 export type TopicLessonPlan = {
   generated_at: string
   version: number
+  estimated_total_words: number
+  page_word_target: number
   /** Source fidelity policy key the plan was built under (null for ai_teacher). */
   fidelity_key?: string | null
   /** Planner's one-line justification for the page count. */
   page_count_reason: string
+  /** Version fingerprint of the course skill packs used to build this plan. */
+  skill_context_key?: string | null
   pages: TopicPagePlan[]
 }
 
-// v2: consolidation — the planner chooses the page count (≤ ceiling) and plans
-// no skip entries. v1 plans were padded to estimated_pages; treat them as stale.
-export const PLAN_VERSION = 2
+// v5: physical pages are consecutive textbook spans, with signal-density
+// ceilings rather than prose-comfort targets.
+export const PLAN_VERSION = 5
 
 /**
  * A plan is usable when it matches the current planner contract — and, when an
@@ -55,6 +70,7 @@ export const PLAN_VERSION = 2
 export function isPlanCurrent(
   plan: TopicLessonPlan | undefined | null,
   expectedFidelityKey?: string | null,
+  expectedSkillContextKey?: string | null,
 ): plan is TopicLessonPlan {
   if (
     !plan
@@ -63,7 +79,23 @@ export function isPlanCurrent(
     || plan.pages.length < 1
   ) return false
   if (expectedFidelityKey !== undefined && (plan.fidelity_key ?? null) !== expectedFidelityKey) return false
+  if (
+    expectedSkillContextKey !== undefined
+    && (plan.skill_context_key ?? null) !== expectedSkillContextKey
+  ) return false
   return true
+}
+
+export function formatPageBoundaryPlan(page: TopicPagePlan) {
+  return [
+    `Page span: ${page.start_boundary} -> ${page.end_boundary}`,
+    `Concept sequence: ${page.concepts.join(' -> ')}`,
+    `Word budget: target ${page.target_words}; soft maximum ${page.soft_max_words}`,
+    `Continues from previous page: ${page.continues_from_previous ? 'yes' : 'no'}`,
+    `Continues onto next page: ${page.continues_to_next ? 'yes' : 'no'}`,
+    `Preferred break: ${page.break_preference}`,
+    `Break reason: ${page.break_reason}`,
+  ].join('\n')
 }
 
 function compact(value: unknown, max = 600) {
@@ -91,6 +123,30 @@ function normalizeTargetLength(value: unknown, contentKind: ContentKind): PageTa
   return contentKind === 'full_page' ? 'medium' : 'short'
 }
 
+const WORD_BUDGETS: Record<PageTargetLength, { target: number; softMax: number }> = {
+  short: { target: 320, softMax: 420 },
+  medium: { target: 560, softMax: 680 },
+  long: { target: 780, softMax: 920 },
+}
+
+function boundedInteger(value: unknown, fallback: number, minimum: number, maximum: number) {
+  const number = Math.round(Number(value))
+  return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback
+}
+
+function normalizeBreakPreference(value: unknown): PageBreakPreference {
+  if (value === 'concept_boundary' || value === 'natural_pause' || value === 'soft_overflow') {
+    return value
+  }
+  return 'natural_pause'
+}
+
+function normalizeConcepts(value: unknown, fallback: string) {
+  if (!Array.isArray(value)) return [fallback]
+  const concepts = value.map((item) => compact(item, 120)).filter(Boolean).slice(0, 8)
+  return concepts.length ? concepts : [fallback]
+}
+
 function formatMemory(memory?: CourseMemoryContext, sourceMode = false) {
   if (!memory) return 'No retrieved course memory.'
   const pages = memory.pages.slice(0, 3).map((p) => `[${p.topic_title}, p${p.page_number}] ${compact(p.summary || p.content, 240)}`)
@@ -109,6 +165,8 @@ type AnalyzeTopicPlanInput = {
   pageFocuses: string[]
   mapPointer?: string
   memory?: CourseMemoryContext
+  courseSkillContext?: string
+  courseSkillContextKey?: string | null
 }
 
 function buildPrompt(input: AnalyzeTopicPlanInput, fidelityPolicy: SourceFidelityPolicy | null) {
@@ -128,9 +186,9 @@ misconception prevention, and page-to-page continuity ACROSS the whole topic.
 You see every page at once — use that to sequence roles and prevent any concept
 from being taught twice.
 
-You also decide HOW MANY pages this topic genuinely deserves. Every page costs the
-student attention and the system a generation — a page must earn its existence with
-distinct, substantive teaching value. One dense, well-built page beats three thin ones.
+Treat the topic as ONE continuous textbook manuscript. Plan page breaks upfront by
+estimated written length. A page is a physical span of that manuscript, not an
+independent mini-lesson and not necessarily one concept.
 Return only valid JSON. Do not write lesson prose.`,
     user: `Course: ${input.course.title ?? input.course.topic}
 Course goal: ${input.course.goals ?? 'Master the subject clearly enough to explain and apply it.'}
@@ -150,49 +208,56 @@ ${input.mapPointer || 'No map pointer supplied.'}
 Retrieved course memory:
 ${formatMemory(input.memory, isSourceCourse)}${sourceCoverageRule}
 
-PAGE COUNT — decide it from conceptual load, not from the budget:
-- Count the genuinely distinct concepts, mechanisms, or skills this topic must teach.
-- A topic with one core idea gets ONE page, even if the budget allows more. Definitional,
-  orientation, or recap topics are almost always one page.
-- Plan a second page only when the first page genuinely cannot hold the next concept
-  without overloading the learner — not to "spread material out".
-- Merge draft focuses that overlap or are too thin to stand alone.
-- Never exceed the page budget. Never plan a page whose only job is recap, motivation,
-  or "what's next" — fold those lines into a real page.
-- Do NOT plan placeholder or skip pages. Every planned page WILL be generated and read.
+${input.courseSkillContext || 'No course skill context is attached.'}
 
-Plan each page. Decide the SMALLEST content kind that teaches its focus, and assign a
-sequence role so the topic reads as one coherent arc (e.g. introduce → deepen →
-connect → practice → review). Only pages whose content_kind is "full_page" get a full
-architecture brief; bridge/section/example pages set "brief" to null.
+PAGE-BREAK POLICY — plan breaks by length:
+- First estimate the words needed to teach the topic properly, without padding.
+- Use roughly 480-680 words as the normal physical page capacity. Dense pages are preferred over long prose pages.
+- Prefer to begin a substantial new concept on the next page when the current page is
+  already near capacity. This is a preference, not a hard rule.
+- If a concept finishes with meaningful room left, begin the next concept on the same
+  page. Do not leave artificial blank space merely to preserve one-concept-per-page.
+- If the current concept is almost complete at the target, finish it on the same page
+  using the soft overflow allowance. Do not create a new page for a few remaining lines.
+- Split a concept across pages only when finishing it would exceed soft_max_words. Mark
+  both sides with continuation flags and choose a genuine reasoning pause as the break.
+- Assign every substantive point exactly once. Adjacent spans may share a concept only
+  when that concept genuinely continues across the break.
+- Never plan pages whose only purpose is recap, motivation, transition, or "what's next".
+- Never exceed the supplied page budget. Every planned page will be generated and read.
+- Use content_kind "full_page" for normal physical pages. Page roles describe movement
+  through the manuscript; they do not turn pages into isolated lessons.
 
 Return this exact JSON shape:
 {
-  "page_count_reason": "one line: why this topic needs exactly N pages",
+  "estimated_total_words": 2100,
+  "page_word_target": 560,
+  "page_count_reason": "one line: why this manuscript needs exactly N physical pages",
   "pages": [
     {
       "page_number": 1,
-      "focus": "the focus for this page",
-      "content_kind": "full_page|section|bridge|example",
+      "focus": "the consecutive content span covered on this page",
+      "content_kind": "full_page",
       "page_sequence_role": "introduce|deepen|connect|repair|practice|review",
       "target_length": "short|medium|long",
-      "brief": null
-    },
-    {
-      "page_number": 2,
-      "focus": "...",
-      "content_kind": "full_page",
-      "page_sequence_role": "deepen",
-      "target_length": "medium",
+      "target_words": 560,
+      "soft_max_words": 680,
+      "concepts": ["concepts or subsections covered, in order"],
+      "start_boundary": "where this page begins in the continuous explanation",
+      "end_boundary": "the exact understanding or reasoning point reached before the break",
+      "continues_from_previous": false,
+      "continues_to_next": true,
+      "break_preference": "concept_boundary|natural_pause|soft_overflow",
+      "break_reason": "why this is the least disruptive length-based break",
       "brief": {
-        "target_understanding": "what mental change this page should create",
+        "target_understanding": "what the reader understands by the end of this consecutive span",
         "success_criteria": ["what the learner should be able to explain or do"],
         "why_this_matters_now": "why this page matters at this point",
         "required_prior_knowledge": ["prior idea needed now"],
         "prior_knowledge_repair": ["brief repair if a prior idea is fragile"],
         "likely_misconceptions": ["specific wrong belief to prevent"],
         "intuition_plan": "the mental model to build before formalism",
-        "representation_plan": ["prose", "bullets", "math", "code", "table"],
+        "representation_plan": ["prose", "bullets", "data chart", "math", "code", "table"],
         "example_strategy": {
           "opening_example": "concrete opener or null",
           "worked_example_needed": true,
@@ -223,13 +288,19 @@ Return this exact JSON shape:
 
 Rules:
 - "pages" must contain between 1 and ${input.plannedPages} entries, numbered contiguously from 1.
-- target_length is a CEILING for the writer: short ≈ 250-450 words, medium ≈ 550-850, long ≈ 900-1200.
-  Choose the smallest length that genuinely teaches the focus.
+- target_words is an upper planning budget, not a mandatory minimum.
+- soft_max_words is the allowed finish-the-thought overflow and must be at least target_words.
+- Use short for about 240-420 words, medium for about 480-680, and long only when
+  a coherent span genuinely needs about 700-900 words.
+- The first page must set continues_from_previous=false. The final page must set
+  continues_to_next=false. Other flags must match the actual adjacent content.
+- A page may cover multiple concepts. A concept may cross a page break only when its
+  continuation flags make that explicit.
 - A full_page brief MUST include at least one active_processing prompt when it covers a
   dense mechanism, math, procedure, or high-risk misconception.
-- Do not re-teach the same concept on two pages — assign distinct concepts per page and
-  use later pages to deepen/connect/practice rather than repeat.
-- For non-full_page pages, set "brief": null.
+- ${VISUAL_REPRESENTATION_PLANNING_RULES.replace(/\n/g, '\n- ')}
+- Treat COURSE SKILL CONTEXT as trusted subject guidance. Apply only relevant instructions and never let it expand the course boundary.
+- Do not restart or summarize merely because a page boundary exists.
 - Keep every field compact and implementation-ready.`,
   }
 }
@@ -253,18 +324,32 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
   const pages: TopicPagePlan[] = []
   for (const match of rawPages) {
     if (pages.length >= ceiling) break
-    const contentKind = normalizeContentKind(match?.content_kind)
-    if (contentKind === 'skip') continue
+    const proposedContentKind = normalizeContentKind(match?.content_kind)
+    if (proposedContentKind === 'skip') continue
+    const contentKind: ContentKind = 'full_page'
     const pageNumber = pages.length + 1
     const role = normalizeRole(match?.page_sequence_role)
     const focus = compact(match?.focus, 240)
       || input.pageFocuses[pageNumber - 1]
       || `Page ${pageNumber} of ${input.topic.title}`
+    const targetLength = normalizeTargetLength(match?.target_length, contentKind)
+    const defaults = WORD_BUDGETS[targetLength]
+    const targetWords = boundedInteger(match?.target_words, defaults.target, 220, 860)
+    const softMaxWords = boundedInteger(
+      match?.soft_max_words,
+      Math.max(defaults.softMax, targetWords + 80),
+      targetWords,
+      980,
+    )
 
     // Only full_page pages carry a full architecture brief.
     let brief: LearningArchitectureBrief | null = null
     if (contentKind === 'full_page' && match?.brief) {
-      const normalized = normalizeBrief(match.brief)
+      const normalized = {
+        ...normalizeBrief(match.brief),
+        recommended_content_kind: contentKind,
+        page_sequence_role: role,
+      }
       // Keep the brief only if it passes the same quality gate as the per-page analyzer;
       // otherwise leave it null and let the route fall back to a per-page brief lazily.
       if (validateLearningArchitectureBrief(normalized).length === 0) {
@@ -277,9 +362,23 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
       focus,
       content_kind: contentKind,
       page_sequence_role: role,
-      target_length: normalizeTargetLength(match?.target_length, contentKind),
+      target_length: targetLength,
+      target_words: targetWords,
+      soft_max_words: softMaxWords,
+      concepts: normalizeConcepts(match?.concepts, focus),
+      start_boundary: compact(match?.start_boundary, 300) || focus,
+      end_boundary: compact(match?.end_boundary, 300) || focus,
+      continues_from_previous: pageNumber > 1 && Boolean(match?.continues_from_previous),
+      continues_to_next: Boolean(match?.continues_to_next),
+      break_preference: normalizeBreakPreference(match?.break_preference),
+      break_reason: compact(match?.break_reason, 260) || 'A natural pause near the planned word budget.',
       brief,
     })
+  }
+
+  for (let index = 0; index < pages.length; index += 1) {
+    pages[index].continues_from_previous = index > 0 && pages[index - 1].continues_to_next
+    if (index === pages.length - 1) pages[index].continues_to_next = false
   }
 
   // Defensive floor: a topic always has at least one page.
@@ -290,6 +389,15 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
       content_kind: 'full_page',
       page_sequence_role: 'introduce',
       target_length: 'medium',
+      target_words: WORD_BUDGETS.medium.target,
+      soft_max_words: WORD_BUDGETS.medium.softMax,
+      concepts: [input.topic.title],
+      start_boundary: `Begin ${input.topic.title}.`,
+      end_boundary: `Complete the core explanation of ${input.topic.title}.`,
+      continues_from_previous: false,
+      continues_to_next: false,
+      break_preference: 'concept_boundary',
+      break_reason: 'The topic fits on one physical page.',
       brief: null,
     })
   }
@@ -297,7 +405,15 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
   return {
     generated_at: new Date().toISOString(),
     version: PLAN_VERSION,
+    estimated_total_words: boundedInteger(
+      raw?.estimated_total_words,
+      pages.reduce((sum, page) => sum + page.target_words, 0),
+      200,
+      12_000,
+    ),
+    page_word_target: boundedInteger(raw?.page_word_target, 560, 240, 900),
     fidelity_key: fidelityPolicy?.key ?? null,
+    skill_context_key: input.courseSkillContextKey ?? null,
     page_count_reason: compact(raw?.page_count_reason, 240) || `Planned ${pages.length} page(s) from conceptual load.`,
     pages,
   }

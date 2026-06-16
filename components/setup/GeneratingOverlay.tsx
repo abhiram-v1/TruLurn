@@ -135,16 +135,15 @@ function GenerationGlyph({ name, animate = true }: { name: GlyphName; animate?: 
 export function GeneratingOverlay({
   jobId,
   onCancel,
-  onRetry,
 }: {
   jobId: string
   onCancel: () => void
-  onRetry: () => void
 }) {
   const [job, setJob] = useState<any>(null)
   const [elapsed, setElapsed] = useState(0)
   const [quoteIndex, setQuoteIndex] = useState(0)
   const [quoteVisible, setQuoteVisible] = useState(true)
+  const [retrying, setRetrying] = useState(false)
   // Bumped after the user approves the curriculum, to re-open the SSE stream and
   // let the worker resume from the curriculum-preview gate.
   const [reconnectNonce, setReconnectNonce] = useState(0)
@@ -327,6 +326,30 @@ export function GeneratingOverlay({
   const failed = job.status === 'failed'
   const activePhase = visibleStages[activeStageIndex] || visibleStages[0]
 
+  async function resumeFailedJob() {
+    if (retrying) return
+    setRetrying(true)
+    try {
+      const response = await fetch(`/api/generation-jobs/${jobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'retry' }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error ?? 'Could not resume generation.')
+      awaitingRef.current = false
+      setJob(data)
+      setReconnectNonce((value) => value + 1)
+    } catch (error) {
+      setJob((current: any) => ({
+        ...current,
+        error: error instanceof Error ? error.message : 'Could not resume generation.',
+      }))
+    } finally {
+      setRetrying(false)
+    }
+  }
+
   return (
     <div
       className={`course-gen-overlay${complete ? ' is-complete' : ''}${failed ? ' is-failed' : ''}`}
@@ -394,8 +417,8 @@ export function GeneratingOverlay({
                 {job.error || 'An unexpected error occurred during course generation.'}
               </p>
               <div className="course-gen-failed-actions">
-                <button type="button" className="button" onClick={onRetry}>
-                  Retry
+                <button type="button" className="button" onClick={() => void resumeFailedJob()} disabled={retrying}>
+                  {retrying ? 'Resuming...' : 'Retry'}
                 </button>
                 <button type="button" className="button-subtle" onClick={onCancel}>
                   Return to setup

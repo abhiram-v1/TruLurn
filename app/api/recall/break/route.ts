@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { createRecallSession, type RecallSessionDoc } from '@/lib/recall/generateRecallPage'
-import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
+import { buildAudienceDirective } from '@/lib/personalization/learnerAudience'
+import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
 import { getRecallBreakMode, snoozeBreak, type StudySessionDoc } from '@/lib/recall/session'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 
 function serializeRecallSession(doc: RecallSessionDoc, taggedItemIds: Set<string>) {
   return {
@@ -41,7 +44,20 @@ export async function POST(request: Request) {
     const db = await getDb()
     const course = await db.collection('courses').findOne(
       { _id: courseId as any, user_id: userId },
-      { projection: { title: 1, topic: 1, goals: 1, learner_persona: 1 } },
+      {
+        projection: {
+          title: 1,
+          topic: 1,
+          goals: 1,
+          teaching_persona: 1,
+          learner_audience: 1,
+          learner_persona: 1,
+          course_skill_keys: 1,
+          skill_set_keys: 1,
+          course_skill_key: 1,
+          skill_set_key: 1,
+        },
+      },
     )
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
@@ -67,13 +83,30 @@ export async function POST(request: Request) {
 
     const mode = await getRecallBreakMode(db, userId)
     const trigger: RecallSessionDoc['trigger'] = body.manual ? 'manual' : mode === 'off' ? 'manual' : mode
+    const courseSkillContext = await retrieveCourseSkillContext({
+      db,
+      course,
+      query: `${course.title ?? course.topic ?? 'Course'} recall`,
+      surface: 'recall',
+    }).catch((error) => {
+      console.warn('[recall] Course skill context unavailable.', error)
+      return null
+    })
 
     const recallSession = await createRecallSession({
       db,
       session,
       courseTitle: String(course.title ?? course.topic ?? 'Course'),
       trigger,
-      audienceDirective: buildAudienceDirective(course.learner_persona, course.goals),
+      audienceDirective: [
+        buildPersonaDirective({
+          persona: resolveCourseTeachingPersona(course),
+          surface: 'recall',
+        }),
+        courseSkillContext?.text,
+        COMPACT_CHART_OUTPUT_CONTRACT,
+        buildAudienceDirective(course.learner_audience ?? course.learner_persona, course.goals),
+      ].filter(Boolean).join('\n\n'),
     })
     const tagged = await db.collection('taggedReminders').find(
       {

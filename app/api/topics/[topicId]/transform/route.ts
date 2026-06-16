@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { generateAI } from '@/lib/ai'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 
 type TransformAction = 'simplify' | 'deeper' | 'example'
 
@@ -76,9 +79,30 @@ export async function POST(
     }
 
     const typedAction = action as TransformAction
+    const courseSkillContext = await retrieveCourseSkillContext({
+      db,
+      course,
+      query: `${topicTitle ?? 'current topic'} | ${selectedText.trim()}`,
+      surface: 'lesson',
+    }).catch((error) => {
+      console.warn('[transform] Course skill context unavailable.', error)
+      return null
+    })
     const result = await generateAI({
       feature: 'topic_transform',
-      system: SYSTEM[typedAction],
+      system: [
+        SYSTEM[typedAction],
+        buildPersonaDirective({
+          persona: resolveCourseTeachingPersona(course),
+          surface: 'lesson',
+          lesson: {
+            contentKind: 'section',
+            focus: topicTitle ?? 'the current topic',
+          },
+        }),
+        courseSkillContext?.text,
+        typedAction === 'simplify' ? null : COMPACT_CHART_OUTPUT_CONTRACT,
+      ].filter(Boolean).join('\n\n'),
       user: buildUserPrompt(typedAction, selectedText.trim(), topicTitle ?? 'the current topic'),
       responseMimeType: 'text/plain',
     })

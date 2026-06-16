@@ -1,0 +1,50 @@
+{
+  "nodes": [
+    {"id":"s001","type":"text","text":"TruLurn","x":0,"y":-620,"width":180,"height":70,"color":"2"},
+
+    {"id":"s002","type":"text","text":"1. CREATE THE COURSE","x":-520,"y":-500,"width":230,"height":50,"color":"4"},
+    {"id":"s003","type":"text","text":"Course inputs\n• AI as teacher or source based\n• Learning goals\n• Level, depth and style","x":-520,"y":-400,"width":280,"height":130},
+    {"id":"s004","type":"text","text":"Course generation\nTurns the inputs into a structured learning path","x":-180,"y":-390,"width":270,"height":100,"color":"3"},
+    {"id":"s005","type":"text","text":"Atlas\nThe course roadmap\nTopics, order and prerequisites","x":170,"y":-390,"width":250,"height":110,"color":"2"},
+
+    {"id":"s006","type":"text","text":"2. LEARN","x":-520,"y":-170,"width":160,"height":50,"color":"4"},
+    {"id":"s007","type":"text","text":"Lesson pages\nMain explanations and examples","x":-520,"y":-60,"width":230,"height":85},
+    {"id":"s008","type":"text","text":"Traccia\nSubtopics inside the current topic","x":-250,"y":-60,"width":220,"height":85},
+    {"id":"s009","type":"text","text":"Quiz\nChecks understanding and application","x":20,"y":-60,"width":220,"height":85},
+    {"id":"s010","type":"text","text":"Break & Recall\nShort memory checks while learning","x":290,"y":-60,"width":230,"height":85},
+    {"id":"s011","type":"text","text":"Agent chat\nExplains concepts, answers questions and helps across the app","x":-110,"y":100,"width":300,"height":105,"color":"2"},
+    {"id":"s012","type":"text","text":"Context & RAG\nFinds the right course, source and app knowledge for the agent","x":260,"y":110,"width":290,"height":100,"color":"3"},
+
+    {"id":"s013","type":"text","text":"3. ADAPT","x":-520,"y":300,"width":170,"height":50,"color":"4"},
+    {"id":"s014","type":"text","text":"Learning signals\nAnswers, questions, quiz results and recall performance","x":-520,"y":400,"width":280,"height":105},
+    {"id":"s015","type":"text","text":"Learner memory\nWhat the learner knows, struggles with and prefers","x":-170,"y":400,"width":270,"height":105,"color":"5"},
+    {"id":"s016","type":"text","text":"Adaptive engine\nChooses what to reinforce, review or explain differently","x":170,"y":400,"width":280,"height":105,"color":"3"},
+    {"id":"s017","type":"text","text":"Knowledge graph\nShows course relationships and the learner's knowledge state","x":510,"y":400,"width":280,"height":105,"color":"2"},
+    {"id":"s018","type":"text","text":"Better next learning step\nUpdated lessons, review timing, recommendations and graph state","x":0,"y":590,"width":350,"height":110,"color":"2"}
+  ],
+  "edges": [
+    {"id":"e001","fromNode":"s001","fromSide":"bottom","toNode":"s003","toSide":"top"},
+    {"id":"e002","fromNode":"s003","fromSide":"right","toNode":"s004","toSide":"left"},
+    {"id":"e003","fromNode":"s004","fromSide":"right","toNode":"s005","toSide":"left"},
+
+    {"id":"e004","fromNode":"s005","fromSide":"bottom","toNode":"s007","toSide":"top"},
+    {"id":"e005","fromNode":"s005","fromSide":"bottom","toNode":"s008","toSide":"top"},
+    {"id":"e006","fromNode":"s005","fromSide":"bottom","toNode":"s009","toSide":"top"},
+    {"id":"e007","fromNode":"s005","fromSide":"bottom","toNode":"s010","toSide":"top"},
+    {"id":"e008","fromNode":"s007","fromSide":"bottom","toNode":"s011","toSide":"top"},
+    {"id":"e009","fromNode":"s008","fromSide":"bottom","toNode":"s011","toSide":"top"},
+    {"id":"e010","fromNode":"s009","fromSide":"bottom","toNode":"s011","toSide":"top"},
+    {"id":"e011","fromNode":"s012","fromSide":"left","toNode":"s011","toSide":"right"},
+
+    {"id":"e012","fromNode":"s007","fromSide":"bottom","toNode":"s014","toSide":"top"},
+    {"id":"e013","fromNode":"s009","fromSide":"bottom","toNode":"s014","toSide":"top"},
+    {"id":"e014","fromNode":"s010","fromSide":"bottom","toNode":"s014","toSide":"top"},
+    {"id":"e015","fromNode":"s011","fromSide":"bottom","toNode":"s014","toSide":"top"},
+    {"id":"e016","fromNode":"s014","fromSide":"right","toNode":"s015","toSide":"left"},
+    {"id":"e017","fromNode":"s015","fromSide":"right","toNode":"s016","toSide":"left"},
+    {"id":"e018","fromNode":"s016","fromSide":"right","toNode":"s017","toSide":"left"},
+    {"id":"e019","fromNode":"s016","fromSide":"bottom","toNode":"s018","toSide":"top"},
+    {"id":"e020","fromNode":"s017","fromSide":"bottom","toNode":"s018","toSide":"right"},
+    {"id":"e021","fromNode":"s018","fromSide":"top","toNode":"s005","toSide":"bottom","label":"updates the learning path"}
+  ]
+}

@@ -10,11 +10,23 @@ export type AIResponseSchema = {
   schema: Record<string, unknown>
 }
 
+export type AIProviderUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  cachedInputTokens?: number
+  totalTokens?: number
+}
+
 export type AIProviderGenerateInput = {
   system: string
   user: string
   model?: string
   purpose?: AIPurpose
+  /** Internal routing metadata. It never changes the prompt sent to the model. */
+  auditFeature?: AIFeature
+  /** Stable request-family key used by providers that support prompt caching. */
+  promptCacheKey?: string
+  onUsage?: (usage: AIProviderUsage) => void
   reasoningEffort?: AIReasoningEffort
   signal?: AbortSignal
   responseMimeType?: 'application/json' | 'text/plain'
@@ -72,10 +84,8 @@ export type AIFeature =
   | 'exam_strategy'
   | 'flow_tracking'
   | 'graph_recommendation'
-  | 'learner_persona'
+  | 'learner_audience'
   | 'lesson_research'
-  | 'lesson_style_analysis'
-  | 'lesson_style_selection'
   | 'map_generation'
   | 'page_analysis'
   | 'prerequisite_gap_analysis'

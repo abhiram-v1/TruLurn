@@ -4,6 +4,7 @@ export type AISkillName =
   | 'flow_tracker'
   | 'scoped_chat'
   | 'source_learning_page'
+  | 'data_chart'
 
 export type SkillPrompt = {
   name: AISkillName
@@ -28,8 +29,7 @@ export type CurriculumSkillInput = {
   courseDepth: CourseDepth
   knowledgeLevel?: KnowledgeLevel
   learningPurpose?: LearningPurpose
-  /** User-chosen teaching style ('auto' = classifier decides post-curriculum). */
-  teachingStyle?: string
+  teachingPersona?: import('@/lib/personas').TeachingPersonaId
   sourceText?: string
   sourceOrderAnalysis?: string
   sourceProfile?: import('@/lib/course-generation/sourceProfile').SourceTeachingProfile | null

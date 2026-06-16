@@ -2,9 +2,10 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { deleteCourseWithLineage } from '@/lib/sources/deletion'
+import { normalizeTeachingPersona, TEACHING_PERSONAS } from '@/lib/personas'
 
 // ── PATCH — update mutable course settings ───────────────────────────────────
-// Accepted fields: code_language (string | null), lesson_style (string | null),
+// Accepted fields: code_language (string | null), teaching_persona,
 // source_coverage_preference ('complete' | 'smart' | 'core' | null — feeds the
 // adaptive source fidelity policy; null returns to style-derived coverage)
 export async function PATCH(
@@ -33,7 +34,7 @@ export async function PATCH(
     // Whitelist of fields the client is allowed to update
     const ALLOWED: Record<string, (v: unknown) => boolean> = {
       code_language: (v) => v === null || typeof v === 'string',
-      lesson_style:  (v) => v === null || typeof v === 'string',
+      teaching_persona: (v) => v === 'immersive_builder' || v === 'investigator',
       source_coverage_preference: (v) => v === null || v === 'complete' || v === 'smart' || v === 'core',
     }
 
@@ -45,6 +46,11 @@ export async function PATCH(
         }
         $set[key] = body[key]
       }
+    }
+    if ('teaching_persona' in body) {
+      const persona = normalizeTeachingPersona(body.teaching_persona)
+      $set.teaching_persona = persona
+      $set.teaching_persona_version = TEACHING_PERSONAS[persona].version
     }
 
     if (Object.keys($set).length === 1) {

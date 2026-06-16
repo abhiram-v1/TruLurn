@@ -4,6 +4,7 @@ import { signIn, useSession } from 'next-auth/react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 
 function GoogleIcon() {
   return (
@@ -43,7 +44,7 @@ export default function SignInPage() {
 
   useEffect(() => {
     if (status === 'authenticated') {
-      router.replace('/')
+      router.replace('/home')
     }
   }, [router, status])
 
@@ -56,6 +57,7 @@ export default function SignInPage() {
       <div className="signin-shell">
         <div className="signin-card">
           <Link href="/" className="signin-brand">
+            <TruLurnLogo size={32} />
             TruLurn
           </Link>
           <p className="signin-tagline">Checking your session...</p>
@@ -77,7 +79,7 @@ export default function SignInPage() {
         <div className="signin-providers">
           <button
             className="signin-provider-btn"
-            onClick={() => signIn('google', { callbackUrl: '/' })}
+            onClick={() => signIn('google', { callbackUrl: '/home' })}
           >
             <GoogleIcon />
             Continue with Google
@@ -85,7 +87,7 @@ export default function SignInPage() {
 
           <button
             className="signin-provider-btn"
-            onClick={() => signIn('github', { callbackUrl: '/' })}
+            onClick={() => signIn('github', { callbackUrl: '/home' })}
           >
             <GitHubIcon />
             Continue with GitHub

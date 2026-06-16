@@ -1,199 +1,210 @@
-export const dynamic = 'force-dynamic'
-
 import Link from 'next/link'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { AuthButtons } from '@/components/auth/AuthButtons'
-import { HomeCourseRow } from '@/components/home/HomeCourseRow'
-import { getDb } from '@/lib/db'
+import {
+  IconBrain,
+  IconMap,
+  IconMessageChatbot,
+  IconRotateClockwise,
+  IconTopologyStar3,
+  IconTarget,
+  IconArrowRight,
+} from '@tabler/icons-react'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 
-function timeGreeting() {
-  const h = new Date().getHours()
-  if (h < 12) return 'Good morning'
-  if (h < 17) return 'Good afternoon'
-  return 'Good evening'
-}
+const FEATURES = [
+  {
+    icon: <IconBrain size={22} stroke={1.6} />,
+    title: 'Curriculum built for you',
+    body: 'Describe what you want to learn. TruLurn generates a structured Atlas — a full map of branches and topics calibrated to your knowledge level and goals, not a generic syllabus.',
+  },
+  {
+    icon: <IconMap size={22} stroke={1.6} />,
+    title: 'Atlas course map',
+    body: 'A visual map of your entire curriculum. See exactly where you are, what\'s next, and how far you\'ve come — all in one place.',
+  },
+  {
+    icon: <IconMessageChatbot size={22} stroke={1.6} />,
+    title: 'Smart doubt chat',
+    body: 'Ask any question mid-lesson. TruLurn answers in the direct context of the page you just read — not a generic AI assistant response.',
+  },
+  {
+    icon: <IconRotateClockwise size={22} stroke={1.6} />,
+    title: 'Recall breaks',
+    body: 'Active retrieval sessions prompt you to reconstruct what you\'ve learned. Recall — not re-reading — is what builds memory that stays.',
+  },
+  {
+    icon: <IconTopologyStar3 size={22} stroke={1.6} />,
+    title: 'Knowledge graph',
+    body: 'A growing visual map of how every concept connects to every other. Spot gaps, revisit weak spots, and watch mastery compound over time.',
+  },
+  {
+    icon: <IconTarget size={22} stroke={1.6} />,
+    title: 'Adaptive quizzes',
+    body: 'Quizzes diagnose what you actually understand, not just what you remember. Wrong answers feed back into the system to re-teach precisely.',
+  },
+]
 
-type CourseRow = {
-  _id: unknown
-  title?: string
-  topic?: string
-  goals?: string
-  status?: string
-  branch_count?: number
-  topic_count?: number
-  created_at?: Date
-}
+const HOW_IT_WORKS = [
+  {
+    num: '1',
+    title: 'Tell TruLurn what you want to learn',
+    body: 'Type a topic, a learning goal, or paste a source document. No rigid course catalogue. No prerequisite structures. Just what you actually want to understand.',
+  },
+  {
+    num: '2',
+    title: 'Get your personal Atlas',
+    body: 'AI builds a complete curriculum in seconds — branches, topics, and a page-by-page lesson plan — calibrated to your stated knowledge level and purpose.',
+  },
+  {
+    num: '3',
+    title: 'Study with full AI support',
+    body: 'Adaptive lessons, mid-lesson doubt chat, spaced recall breaks, and progress quizzes all work together as you learn. The system updates as you do.',
+  },
+]
 
-function isRawPrompt(value?: string | null) {
-  if (!value) return false
-  const clean = value.trim()
-  return clean.length > 90 || clean.split(/\s+/).length > 12
-}
-
-function titleFromPrompt(value?: string | null) {
-  const clean = value
-    ?.replace(/^i\s+want\s+to\s+learn\s+/i, '')
-    .replace(/^learn\s+/i, '')
-    .replace(/\s+/g, ' ')
-    .trim() ?? ''
-  const sentence = clean.split(/[.!?]/)[0]?.trim() || clean
-  const fromMatch = sentence.match(/^(.+?)\s+from\s+(first principles|scratch|basics|fundamentals)\b/i)
-
-  if (fromMatch) {
-    const subject = fromMatch[1].replace(/\b(the|a|an)\b/gi, '').trim()
-    const qualifier = fromMatch[2]
-      .toLowerCase()
-      .replace(/\b\w/g, (char) => char.toUpperCase())
-    return `${subject} from ${qualifier}`.replace(/\s+/g, ' ').trim()
-  }
-
-  return sentence.split(/\s+/).slice(0, 6).join(' ').replace(/[,;:]$/, '').trim()
-}
-
-function courseDisplayTitle(course?: CourseRow | null) {
-  if (!course) return 'Generated curriculum'
-  const generatedTitle = course.title?.trim()
-  const legacyTopic = course.topic?.trim()
-
-  if (legacyTopic && !isRawPrompt(legacyTopic)) return legacyTopic
-  if (generatedTitle && !isRawPrompt(generatedTitle)) return generatedTitle
-  const derivedTitle = titleFromPrompt(course.goals ?? legacyTopic ?? generatedTitle)
-  if (derivedTitle) return derivedTitle
-  return 'Generated curriculum'
-}
-
-function courseMeta(course: CourseRow, branchCount?: number) {
-  const title = courseDisplayTitle(course)
-  const generatedTitle = course.title?.trim()
-  const parts: string[] = []
-
-  if (generatedTitle && generatedTitle !== title && !isRawPrompt(generatedTitle)) {
-    parts.push(generatedTitle)
-  }
-  if (branchCount !== undefined) {
-    parts.push(`${branchCount} branches`)
-  }
-
-  return parts.length ? parts.join(' / ') : 'Course workspace'
-}
-
-export default async function HomePage() {
+export default async function LandingPage() {
   const session = await getServerSession(authOptions)
-  const userId = session?.user ? (session.user as typeof session.user & { id?: string }).id : null
-  const firstName = session?.user?.name?.split(' ')[0] ?? null
-  const db = userId ? await getDb() : null
-  const courses = userId && db
-    ? await db.collection<CourseRow>('courses').find({ user_id: userId }).sort({ created_at: -1 }).toArray()
-    : []
-  const activeCourse = courses[0] ?? null
-  const activeCourseId = activeCourse ? String(activeCourse._id) : undefined
-  const branches = activeCourseId && db
-    ? await db.collection('branches').find({ course_id: activeCourseId }).toArray()
-    : []
-  const topics = activeCourseId && db
-    ? await db.collection('topics').find({ course_id: activeCourseId }).toArray()
-    : []
-  const activeTopic = topics.find((topic) => topic.state === 'active') ?? topics[0]
-  const activeTopicId = activeTopic ? String(activeTopic._id) : null
+  const isSignedIn = Boolean(session?.user)
+
+  const ctaHref = isSignedIn ? '/home' : '/auth/signin'
+  const ctaLabel = isSignedIn ? 'Open your dashboard' : 'Start learning free'
 
   return (
-    <main className="home-split-shell">
-      <section className="home-course-pane">
-        <header className="home-pane-topbar">
-          <Link className="brand" href="/">TruLurn</Link>
-          <div className="home-topbar-right">
-            <Link className="button-subtle" href="/setup">+ New course</Link>
-            <AuthButtons />
+    <div className="landing-shell">
+
+      {/* ── Nav ────────────────────────────────────────────────────────────── */}
+      <nav className="landing-nav">
+        <div className="landing-container landing-nav-inner">
+          <Link href="/" className="landing-brand">
+            <TruLurnLogo size={26} className="landing-brand-icon" />
+            TruLurn
+          </Link>
+          <div className="landing-nav-actions">
+            {isSignedIn ? (
+              <Link href="/home" className="landing-nav-cta">
+                Dashboard <IconArrowRight size={14} stroke={2} aria-hidden="true" />
+              </Link>
+            ) : (
+              <>
+                <Link href="/auth/signin" className="landing-nav-link">Sign in</Link>
+                <Link href="/auth/signin" className="landing-nav-cta">Get started free</Link>
+              </>
+            )}
           </div>
-        </header>
-
-        <div className="home-greeting">
-          <h1>{userId ? `${timeGreeting()}${firstName ? `, ${firstName}` : ''}` : 'Build learning that stays connected'}</h1>
-          <p>{userId ? 'Pick up where you left off.' : 'Sign in to generate and save isolated course workspaces.'}</p>
         </div>
+      </nav>
 
-        <div className="section-label">Your courses</div>
-        <div className="home-course-list">
-          {!userId ? (
-            <div className="empty-course-state">
-              <p>Generated courses are stored under your account. Sign in first, then create your first Atlas.</p>
-              <div className="empty-course-actions">
-                <Link className="button" href="/auth/signin">Sign in</Link>
-                <Link className="button-subtle" href="/auth/signin">Sign up</Link>
-              </div>
-            </div>
-          ) : null}
-
-          {userId && courses.length === 0 ? (
-            <div className="empty-course-state">
-              <p>No generated courses yet. Create one and it will appear here permanently.</p>
-              <Link className="button" href="/setup">Build a curriculum</Link>
-            </div>
-          ) : null}
-
-          {courses.map((course) => {
-            const courseId = String(course._id)
-            const isActive = courseId === activeCourseId
-            const branchCount = isActive ? branches.length : course.branch_count
-            const title = courseDisplayTitle(course)
-
-            return (
-              <HomeCourseRow
-                courseId={courseId}
-                key={courseId}
-                meta={courseMeta(course, branchCount)}
-                status={course.status === 'ready' ? 'active' : 'partial'}
-                title={title}
-              />
-            )
-          })}
-
-          {userId ? (
-            <Link className="home-add-course" href="/setup">
-              <span aria-hidden="true">+</span>
-              <span>Add a course</span>
+      {/* ── Hero ───────────────────────────────────────────────────────────── */}
+      <section className="landing-hero">
+        <div className="landing-container landing-hero-inner">
+          <div className="landing-eyebrow">AI-Guided Mastery System</div>
+          <h1 className="landing-headline">
+            Learn anything.<br />Own it completely.
+          </h1>
+          <p className="landing-hero-sub">
+            TruLurn builds you a personalized curriculum, teaches it page by page with
+            adaptive AI, and uses science-backed recall techniques to make what you
+            learn actually stick.
+          </p>
+          <div className="landing-hero-actions">
+            <Link href={ctaHref} className="landing-btn-primary">
+              {ctaLabel}
             </Link>
-          ) : null}
-        </div>
-
-        {activeCourseId ? (
-          <div className="home-pane-footer">
-            <Link href={`/course/${activeCourseId}`}>Atlas</Link>
-            {activeTopicId ? <Link href={`/learn/${activeCourseId}/${activeTopicId}`}>Continue study</Link> : null}
+            <Link href="#how-it-works" className="landing-btn-ghost">
+              See how it works
+            </Link>
           </div>
-        ) : null}
+          <p className="landing-hero-note">
+            No credit card · Works for any subject · Fully personalized
+          </p>
+        </div>
       </section>
 
-      <section className="home-visual-pane" aria-label="Course visual preview">
-        <div className="home-wave" aria-hidden="true">
-          <svg viewBox="0 0 96 900" preserveAspectRatio="none">
-            <path d="M0 0H40C74 92 78 168 48 246C18 324 20 404 54 486C88 568 80 648 38 726C12 774 8 834 34 900H0V0Z" />
-          </svg>
+      {/* ── Trust strip ────────────────────────────────────────────────────── */}
+      <div className="landing-trust">
+        <div className="landing-container">
+          <p>
+            Not another video platform. Not generic study notes. A personalized tutor
+            that builds a complete learning system around your specific goals — and
+            remembers what you know.
+          </p>
         </div>
-        <img
-          className="visual-artwork"
-          src="/svggenie-1779268612546.svg"
-          alt="Warm study illustration"
-        />
-        <div className="home-visual-note" aria-hidden="true">
-          <span>{courses.length || 'New'}</span>
-          <p>{courses.length === 1 ? 'course workspace' : courses.length > 1 ? 'course workspaces' : 'workspace ready'}</p>
-        </div>
-        <div className="continue-strip">
-          <div>
-            <span className="eyebrow">{activeCourse ? 'Continue' : 'Start'}</span>
-            <p>
-              {activeCourse && activeTopic
-                ? `${courseDisplayTitle(activeCourse)} / ${activeTopic.title}`
-                : 'Create your first stored course workspace'}
-            </p>
+      </div>
+
+      {/* ── Features ───────────────────────────────────────────────────────── */}
+      <section className="landing-features" id="features">
+        <div className="landing-container">
+          <div className="landing-section-eyebrow">What TruLurn gives you</div>
+          <h2 className="landing-section-head">
+            Everything a private tutor would do — at scale
+          </h2>
+          <div className="landing-features-grid">
+            {FEATURES.map((f) => (
+              <div key={f.title} className="landing-feature-card">
+                <div className="landing-feature-icon" aria-hidden="true">{f.icon}</div>
+                <h3 className="landing-feature-title">{f.title}</h3>
+                <p className="landing-feature-body">{f.body}</p>
+              </div>
+            ))}
           </div>
-          <Link className="button" href={activeCourseId && activeTopicId ? `/learn/${activeCourseId}/${activeTopicId}` : '/setup'}>
-            {activeCourse ? 'Open' : 'New'}
+        </div>
+      </section>
+
+      {/* ── How it works ───────────────────────────────────────────────────── */}
+      <section className="landing-how" id="how-it-works">
+        <div className="landing-container">
+          <div className="landing-section-eyebrow">How TruLurn works</div>
+          <h2 className="landing-section-head">
+            From goal to mastery in three steps
+          </h2>
+          <div className="landing-steps">
+            {HOW_IT_WORKS.map((step, i) => (
+              <div key={step.num} className="landing-step">
+                {i > 0 && <div className="landing-step-connector" aria-hidden="true" />}
+                <div className="landing-step-body">
+                  <div className="landing-step-num" aria-hidden="true">{step.num}</div>
+                  <h3 className="landing-step-title">{step.title}</h3>
+                  <p className="landing-step-desc">{step.body}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CTA ────────────────────────────────────────────────────────────── */}
+      <section className="landing-cta">
+        <div className="landing-container landing-cta-inner">
+          <h2 className="landing-cta-head">
+            Ready to learn something that sticks?
+          </h2>
+          <p className="landing-cta-sub">
+            Tell TruLurn what you want to master. Your personal Atlas is ready in seconds.
+          </p>
+          <Link href={ctaHref} className="landing-btn-primary landing-btn-lg">
+            {isSignedIn ? 'Go to your dashboard →' : 'Create your first Atlas →'}
           </Link>
         </div>
       </section>
-    </main>
+
+      {/* ── Footer ─────────────────────────────────────────────────────────── */}
+      <footer className="landing-footer">
+        <div className="landing-container landing-footer-inner">
+          <div>
+            <div className="landing-footer-brand">TruLurn</div>
+            <p className="landing-footer-tagline">AI-guided mastery system</p>
+          </div>
+          <nav className="landing-footer-links" aria-label="Footer">
+            <Link href="/auth/signin">Sign in</Link>
+            <Link href="/auth/signin">Sign up</Link>
+          </nav>
+          <p className="landing-footer-copy">
+            © {new Date().getFullYear()} TruLurn. All rights reserved.
+          </p>
+        </div>
+      </footer>
+
+    </div>
   )
 }

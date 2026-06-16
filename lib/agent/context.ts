@@ -1,4 +1,8 @@
 import type { Db } from 'mongodb'
+import {
+  buildAppKnowledgeContext,
+  shouldRetrieveAppKnowledge,
+} from '@/lib/agent/appKnowledge'
 
 type HistoryMessage = {
   role: 'user' | 'assistant'
@@ -13,6 +17,7 @@ export type AgentContextPlan = {
   needsGraph: boolean
   needsQuiz: boolean
   needsSemanticMemory: boolean
+  needsAppKnowledge: boolean
   reason: string
 }
 
@@ -95,6 +100,7 @@ export function planAgentContext(message: string, selectedContext?: string | nul
   const needsAtlas = hasAny(q, ATLAS_SIGNALS)
   const needsGraph = hasAny(q, GRAPH_SIGNALS)
   const needsQuiz = hasAny(q, QUIZ_SIGNALS)
+  const needsAppKnowledge = shouldRetrieveAppKnowledge(q)
   const referencesPageNumber = /\bpage\s+(?:number\s*)?\d{1,4}\b/.test(q)
   const needsSemanticMemory = hasAny(q, MEMORY_SIGNALS) || needsGraph || needsAtlas || referencesPageNumber
 
@@ -103,6 +109,7 @@ export function planAgentContext(message: string, selectedContext?: string | nul
     needsGraph ? 'Graph' : null,
     needsQuiz ? 'quiz' : null,
     needsSemanticMemory ? 'semantic memory' : null,
+    needsAppKnowledge ? 'product knowledge' : null,
   ].filter(Boolean)
 
   return {
@@ -110,6 +117,7 @@ export function planAgentContext(message: string, selectedContext?: string | nul
     needsGraph,
     needsQuiz,
     needsSemanticMemory,
+    needsAppKnowledge,
     reason: requested.length ? `Detected request for ${requested.join(', ')} context.` : 'Current page context is enough.',
   }
 }
@@ -271,16 +279,24 @@ export async function buildAgentWorkspaceContext({
   userId,
   currentTopicId,
   plan,
+  query,
 }: {
   db: Db
   courseId: string
   userId: string
   currentTopicId: string
   plan: AgentContextPlan
+  query: string
 }) {
+  const appKnowledgePromise = plan.needsAppKnowledge
+    ? buildAppKnowledgeContext({ db, userId, courseId, query })
+    : Promise.resolve('')
+
   if (!plan.needsAtlas && !plan.needsGraph && !plan.needsQuiz) {
-    return ''
+    return appKnowledgePromise
   }
+
+  const appKnowledge = await appKnowledgePromise
 
   const [course, branches, topics, edges, attempts, examSessions] = await Promise.all([
     db.collection('courses').findOne({ _id: courseId as any, user_id: userId }),
@@ -311,6 +327,10 @@ export async function buildAgentWorkspaceContext({
 
   if (plan.needsQuiz) {
     blocks.push(formatQuizSignals(attempts, examSessions, topics))
+  }
+
+  if (appKnowledge) {
+    blocks.push(appKnowledge)
   }
 
   return blocks.join('\n\n')

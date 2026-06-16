@@ -1,10 +1,14 @@
 import crypto from 'crypto'
 import { getDb } from '@/lib/db'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
-import type { LessonStyle } from '@/lib/ai/skills/lessonStyle'
+import { TEACHING_PERSONAS, type TeachingPersonaId } from '@/lib/personas'
 import type { CourseResearchReport } from '@/lib/course-generation/research'
 import { embedSourceChunkById } from '@/lib/vector/retrieval'
 import { attachIngestedSourcesToCourse } from '@/lib/sources/ingestion'
+import {
+  enforceSourceGroundedCurriculum,
+  enforceSourceGroundedMap,
+} from '@/lib/course-generation/sourceCurriculumIntegrity'
 
 // ── Source text chunking ──────────────────────────────────────────────────────
 // Split source text into ~1500-char chunks with paragraph-boundary awareness.
@@ -120,9 +124,8 @@ type PersistGeneratedCourseInput = CourseGenerationInput & {
   curriculum: any
   map: any
   userId: string
-  learningStyle?: LessonStyle
-  learningStyleReason?: string
-  learnerPersona?: import('@/lib/personalization/learnerPersona').LearnerPersona | null
+  teachingPersona?: TeachingPersonaId
+  learnerAudience?: import('@/lib/personalization/learnerAudience').LearnerAudienceProfile | null
   researchReport?: CourseResearchReport | null
   generationJobId?: string
 }
@@ -320,6 +323,14 @@ function computeRawPath(topic: any, rawById: Map<string, any>) {
 }
 
 export async function persistGeneratedCourse(input: PersistGeneratedCourseInput): Promise<PersistedGeneratedCourse> {
+  if (input.mode === 'source_grounded') {
+    input.curriculum = enforceSourceGroundedCurriculum(input.curriculum, {
+      sourceText: input.sourceText,
+      sourceProfile: input.sourceProfile,
+    })
+    enforceSourceGroundedMap(input.curriculum, input.map)
+  }
+
   const db = await getDb()
   const courseId = crypto.randomUUID()
   const branches = Array.isArray(input.map?.branches) ? input.map.branches : []
@@ -349,11 +360,11 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       allow_topic_jump: input.learningControl === 'open',
       require_quiz_to_unlock: input.learningControl === 'guided',
     },
-    learning_style: input.learningStyle ?? 'conceptual_technical',
-    learning_style_reason: input.learningStyleReason ?? null,
+    teaching_persona: input.teachingPersona ?? 'immersive_builder',
+    teaching_persona_version: TEACHING_PERSONAS[input.teachingPersona ?? 'immersive_builder'].version,
     // Who this learner is (derived from goals/setup, correctable via the agent).
     // Every user-facing generator reads it so nothing assumes a school student.
-    learner_persona: input.learnerPersona ?? null,
+    learner_audience: input.learnerAudience ?? null,
     research_confidence: input.researchReport?.research_confidence ?? null,
     source_text: input.sourceText || null,
     source_document_ids: input.sourceDocumentIds ?? [],
@@ -381,6 +392,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     topic_count: courseSummary.topic_count,
     status: 'ready',
     validation_report: (input.map as any)?.validation_report ?? null,
+    source_curriculum_validation: input.mode === 'source_grounded'
+      ? (input.curriculum as any)?.source_validation_report ?? null
+      : null,
     created_at: new Date(),
     updated_at: new Date(),
   })
@@ -440,12 +454,13 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     const spineLevel = Number.isFinite(curriculumTopic?.spine_level ?? topic.spine_level)
       ? Number(curriculumTopic?.spine_level ?? topic.spine_level)
       : 0
-    // Source-based courses: was this topic taught by the upload, or
-    // reconstructed to complete the subject (legacy)? Lesson generation uses
-    // this to decide how hard to lean on retrieved source chunks.
-    const sourceCoverage = ['covered', 'inferred'].includes(String(curriculumTopic?.source_coverage ?? topic.source_coverage))
-      ? String(curriculumTopic?.source_coverage ?? topic.source_coverage)
-      : null
+    // Source-grounded canonical topics have already passed the hard curriculum
+    // boundary validator. Legacy "inferred" coverage is never persisted here.
+    const sourceCoverage = input.mode === 'source_grounded'
+      ? 'covered'
+      : ['covered', 'inferred'].includes(String(curriculumTopic?.source_coverage ?? topic.source_coverage))
+        ? String(curriculumTopic?.source_coverage ?? topic.source_coverage)
+        : null
     // Source-based organization: prequel (foundations) / current / sequel
     // (next steps), all detected within the uploaded material itself.
     const conceptGroup = ['prequel', 'current', 'sequel'].includes(String(curriculumTopic?.concept_group ?? topic.concept_group))

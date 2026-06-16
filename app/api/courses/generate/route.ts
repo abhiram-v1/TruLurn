@@ -47,7 +47,7 @@ export async function POST(request: Request) {
         courseDepth: input.courseDepth,
         knowledgeLevel: input.knowledgeLevel,
         learningPurpose: input.learningPurpose,
-        teachingStyle: input.teachingStyle,
+        teachingPersona: input.teachingPersona,
         previewCurriculum: input.previewCurriculum,
         sourceText: input.sourceText || null,
         sourceLimitations: input.sourceLimitations || [],

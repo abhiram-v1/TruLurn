@@ -99,7 +99,7 @@ function normalizeProfile(raw: any): SourceTeachingProfile | null {
 /**
  * Read the uploaded material like a tutor reads school notes. One model call
  * covering: content understanding, teaching-pattern extraction, hidden-signal
- * detection, and curriculum reconstruction. Returns null on any failure —
+ * detection, and scope-boundary analysis. Returns null on any failure —
  * course generation degrades gracefully to source text alone.
  */
 export async function analyzeSourceProfile({
@@ -115,7 +115,7 @@ export async function analyzeSourceProfile({
     const text = await generateAI({
       feature: 'source_profile',
       system: `You are TruLurn's source material analyst.
-A learner uploaded study material so an AI tutor can teach them THE WHOLE SUBJECT the way the material's original instructor or author teaches it. The learner may be a school or university student, a working professional, a hobbyist, an educator, or a researcher — do not assume which. You do not summarize the content. You profile how it teaches and reconstruct the curriculum it belongs to.
+A learner uploaded study material so an AI tutor can teach exactly what that material covers, in the way its original instructor or author teaches it. The learner may be a school or university student, a working professional, a hobbyist, an educator, or a researcher — do not assume which. You do not summarize the content or complete the broader subject. You profile how the material teaches and identify its hard content boundary.
 Return only valid JSON. No markdown. No prose outside JSON.`,
       user: `The learner's goal:
 ${goals}
@@ -132,7 +132,7 @@ LAYER 1 — Content understanding:
 - educational_level: school year / undergrad / grad / professional, as evidenced by depth and phrasing.
 - document_type: "full_course" | "chapter" | "lecture_notes" | "slides" | "assignments" | "reference" | "mixed".
 - scope.covered_topics: the topics the material ACTUALLY covers.
-- scope.full_subject: the complete subject a serious course on this domain would cover.
+- scope.full_subject: the broader subject label, for orientation only. It must never become the generated course scope.
 - scope.coverage: "full" if the material spans the whole subject, "partial" for several units, "narrow" for one unit/chapter.
 
 LAYER 2 — Teaching pattern extraction:
@@ -150,10 +150,10 @@ LAYER 3 — Hidden signal detection:
 - implied_prerequisites: knowledge the material assumes without teaching.
 - addressed_misconceptions: mistakes/confusions the material explicitly warns about.
 
-LAYER 4 — Curriculum reconstruction:
-- reconstruction.prerequisite_topics: subject topics that should be taught BEFORE the covered material.
-- reconstruction.dependent_topics: subject topics that naturally FOLLOW the covered material.
-- reconstruction.recommended_course_scope: one paragraph describing the complete course this material implies, honoring the learner's goal.
+LAYER 4 — Scope boundary:
+- reconstruction.prerequisite_topics: background topics the material assumes but does not teach. These are out of scope.
+- reconstruction.dependent_topics: topics the material points toward but does not teach. These are out of scope.
+- reconstruction.recommended_course_scope: one paragraph describing only the course supported by the uploaded material.
 
 Return exactly:
 {

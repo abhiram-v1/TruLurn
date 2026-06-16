@@ -37,8 +37,10 @@ export async function convertViaMarkItDown(file: File): Promise<string | null> {
     ?? (process.env.NODE_ENV === 'development' ? 'http://127.0.0.1:3002' : undefined)
   if (!serviceUrl) return null
 
+  // Image-heavy PDFs run several vision captioning calls inside the service, so
+  // allow generous headroom (override with MARKITDOWN_TIMEOUT_MS).
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60_000)
+  const timeout = setTimeout(() => controller.abort(), Number(process.env.MARKITDOWN_TIMEOUT_MS ?? 180_000))
 
   try {
     const form = new FormData()

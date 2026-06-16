@@ -2,13 +2,16 @@ import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import type { EvaluationResult, ExamMode, ExamTurnSource, QuestionType } from '@/types'
 import { generateAI, parseAIJson } from '@/lib/ai'
-import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
+import { buildAudienceDirective } from '@/lib/personalization/learnerAudience'
+import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
 import { isContainerTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 import { unlockNextTopics } from '@/lib/db-helpers'
 import { evaluateQuizForGraph } from '@/lib/ai/graphEvaluator'
 import { detectPrerequisiteGap } from '@/lib/quiz/prerequisiteGaps'
 import { scheduleTopicReview, cancelTopicReview, recordReviewResult } from '@/lib/review/schedule'
 import { syncLearnerMemoryV2 } from '@/lib/memory/service'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 
 const FULL_TOPIC_MAX_FOLLOWUPS = 2
 const SPOT_CHECK_MAX = 3
@@ -34,6 +37,7 @@ type Blueprint = {
   targets: QuizTarget[]
   priorEvidence: string
   isProgramming: boolean
+  courseSkillContext: string
   // Topic metadata forwarded for the quiz planner
   topicMeta: {
     title: string
@@ -391,7 +395,7 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
     : [topic]
 
   const focusIds = focusTopics.length ? focusTopics.map((item: any) => String(item._id)) : [topicId]
-  const [branch, pages, pageSummaries, oldAttempts, recentSessions] = await Promise.all([
+  const [branch, pages, pageSummaries, oldAttempts, recentSessions, courseSkillContext] = await Promise.all([
     db.collection('branches').findOne({
       course_id: courseId,
       $or: [{ _id: topic.branch_id as any }, { branch_key: topic.branch_id }],
@@ -416,6 +420,12 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
       .sort({ completed_at: -1 })
       .limit(3)
       .toArray(),
+    retrieveCourseSkillContext({
+      db,
+      course,
+      query: [course.title, topic.title, topic.summary, topic.description].filter(Boolean).join(' | '),
+      surface: 'quiz',
+    }),
   ])
 
   const prereqIds = Array.from(new Set(focusTopics.flatMap((item: any) => (item.prerequisites ?? []).map(String))))
@@ -513,6 +523,7 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
     targets: targets.slice(0, 24),
     priorEvidence,
     isProgramming: isProgrammingContext(course, topic, programmingCheckText),
+    courseSkillContext: courseSkillContext?.text ?? '',
     topicMeta: {
       title:          String(topic.title ?? ''),
       conceptKind:    String(topic.concept_kind ?? topic.node_type ?? ''),
@@ -611,7 +622,17 @@ The engine has already chosen the concept, difficulty, and question type. Your o
 
 Write questions that show the learner where their understanding actually is — not to catch them out, but to give them an honest picture. The question should feel like a natural extension of the lesson, not an interrogation.
 
-${buildAudienceDirective(blueprint.course.learner_persona, blueprint.course.goals)}
+${buildPersonaDirective({
+  persona: resolveCourseTeachingPersona(blueprint.course),
+  surface: 'quiz',
+})}
+
+${blueprint.courseSkillContext}
+
+${buildAudienceDirective(
+  blueprint.course.learner_audience ?? blueprint.course.learner_persona,
+  blueprint.course.goals,
+)}
 Question scenarios must come from THIS learner's world — a professional gets workplace scenarios, a hobbyist gets everyday ones, a school/university student may get classroom or exam-style ones. Never write "a student does X" framing by default.
 
 General rules:
@@ -621,6 +642,9 @@ General rules:
 - For critical concepts, test reasoning or application. Never ask for pure recall.
 - For code questions, ask for a bounded implementation of about 8–25 lines that demonstrates the concept in action.
 - The rubric should describe what a genuinely clear answer looks like, not a perfect one.
+- When visual interpretation is the tested skill, the question may include a chart using the contract below. Otherwise do not add one.
+
+${COMPACT_CHART_OUTPUT_CONTRACT}
 
 FORMATTING CODE IN QUESTIONS — follow these exactly:
 - Whenever the question shows a code snippet, ALWAYS wrap it in a fenced code block with the language tag.

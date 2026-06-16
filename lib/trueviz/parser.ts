@@ -1,4 +1,6 @@
-import type { NeuralNetSpec, ParseResult, TruVizSpec } from './types'
+import type { NeuralNetSpec, DataChartSpec, ParseResult, TruVizSpec } from './types'
+
+const CHART_TYPES = new Set(['bar', 'line', 'scatter', 'pie', 'histogram', 'area'])
 
 /**
  * Parse a raw JSON string from a ```trueviz code fence into a typed TruVizSpec.
@@ -32,9 +34,13 @@ export function parseTruViz(raw: string): ParseResult {
     return validateNeuralNet(obj, raw)
   }
 
+  if (obj.type === 'data-chart') {
+    return validateDataChart(obj, raw)
+  }
+
   return {
     ok: false,
-    error: `Unknown TruViz type: "${obj.type}". Currently supported: "neural-net".`,
+    error: `Unknown diagram type: "${obj.type}". Supported: "neural-net", "data-chart".`,
     raw,
   }
 }
@@ -63,4 +69,57 @@ function validateNeuralNet(obj: Record<string, unknown>, raw: string): ParseResu
   }
 
   return { ok: true, spec: obj as unknown as NeuralNetSpec as TruVizSpec }
+}
+
+function validateDataChart(obj: Record<string, unknown>, raw: string): ParseResult {
+  if (!obj.chartType || typeof obj.chartType !== 'string' || !CHART_TYPES.has(obj.chartType)) {
+    return {
+      ok: false,
+      error: `data-chart must have a "chartType" field set to one of: ${[...CHART_TYPES].join(', ')}.`,
+      raw,
+    }
+  }
+
+  if (!Array.isArray(obj.data) || obj.data.length === 0) {
+    return { ok: false, error: 'data-chart "data" must be a non-empty array of row objects.', raw }
+  }
+
+  if (obj.data.length > 200) {
+    return { ok: false, error: 'data-chart "data" exceeds the 200-row maximum.', raw }
+  }
+
+  const chartType = obj.chartType
+
+  if (chartType !== 'pie') {
+    const xAxis = obj.xAxis as Record<string, unknown> | undefined
+    if (!xAxis || typeof xAxis.key !== 'string' || !xAxis.key) {
+      return { ok: false, error: 'data-chart requires an "xAxis.key" string for non-pie charts.', raw }
+    }
+
+    if (!Array.isArray(obj.series) || obj.series.length === 0) {
+      return { ok: false, error: 'data-chart requires at least one entry in "series" for non-pie charts.', raw }
+    }
+
+    if (obj.series.length > 8) {
+      return { ok: false, error: 'data-chart "series" exceeds the 8-series maximum.', raw }
+    }
+
+    for (let i = 0; i < (obj.series as unknown[]).length; i++) {
+      const s = (obj.series as Record<string, unknown>[])[i]
+      if (!s || typeof s.key !== 'string' || !s.key) {
+        return { ok: false, error: `data-chart series[${i}] must have a "key" string.`, raw }
+      }
+    }
+  } else {
+    const firstRow = (obj.data as Record<string, unknown>[])[0]
+    if (!('name' in firstRow) || !('value' in firstRow)) {
+      return {
+        ok: false,
+        error: 'data-chart pie type requires data rows with "name" and "value" keys.',
+        raw,
+      }
+    }
+  }
+
+  return { ok: true, spec: obj as unknown as DataChartSpec as TruVizSpec }
 }

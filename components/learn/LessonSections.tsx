@@ -210,11 +210,9 @@ function PrerequisitesBlock({ section }: { section: LessonSection }) {
         <span className="ls-prereq-label">Builds on</span>
         <span className="ls-prereq-chevron">{open ? '▲' : '▼'}</span>
       </button>
-      {open && (
-        <div className="ls-prereq-body">
-          <MarkdownContent>{section.content}</MarkdownContent>
-        </div>
-      )}
+      <div className="ls-prereq-body" hidden={!open}>
+        <MarkdownContent>{section.content}</MarkdownContent>
+      </div>
     </div>
   )
 }
@@ -326,10 +324,14 @@ function CheckpointItem({ question, hint, index }: { question: string; hint: str
       </div>
       {hint && (
         <div className="ls-checkpoint-hint-row">
-          {hintOpen
-            ? <div className="ls-checkpoint-hint"><MarkdownContent>{hint}</MarkdownContent></div>
-            : <button className="ls-hint-btn" type="button" onClick={() => setHintOpen(true)}>Show hint</button>
-          }
+          <div className="ls-checkpoint-hint" hidden={!hintOpen}>
+            <MarkdownContent>{hint}</MarkdownContent>
+          </div>
+          {!hintOpen ? (
+            <button className="ls-hint-btn" type="button" onClick={() => setHintOpen(true)}>
+              Show hint
+            </button>
+          ) : null}
         </div>
       )}
     </div>

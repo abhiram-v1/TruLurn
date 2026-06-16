@@ -1,4 +1,7 @@
+import { createHash } from 'crypto'
+import type { Db } from 'mongodb'
 import { parseAIJson, searchAI, type AIWebSource } from '@/lib/ai'
+import { recordAIUsageEvent } from '@/lib/ai/usage'
 import type { CourseDepth, LearningControlMode } from '@/lib/ai/skills/types'
 
 export type CurriculumResearchConfidence = 'low' | 'medium' | 'high'
@@ -146,15 +149,86 @@ export type LessonResearchResult = {
   sources: AIWebSource[]
 }
 
+type LessonResearchCacheScope = {
+  db: Db
+  userId: string
+  courseId: string
+  topicId: string
+  pageNumber: number
+}
+
+const LESSON_RESEARCH_CACHE_VERSION = 'lesson-research-v1'
+const LESSON_RESEARCH_CACHE_TTL_MS = 30 * 24 * 60 * 60_000
+
+function lessonResearchCacheKey(input: {
+  courseTitle: string
+  topicTitle: string
+  focus: string
+  cache: LessonResearchCacheScope
+}) {
+  return createHash('sha256')
+    .update(LESSON_RESEARCH_CACHE_VERSION)
+    .update('\0')
+    .update(input.cache.courseId)
+    .update('\0')
+    .update(input.cache.topicId)
+    .update('\0')
+    .update(String(input.cache.pageNumber))
+    .update('\0')
+    .update(input.courseTitle)
+    .update('\0')
+    .update(input.topicTitle)
+    .update('\0')
+    .update(input.focus)
+    .digest('hex')
+}
+
 export async function researchLessonConcept({
   courseTitle,
   topicTitle,
   focus,
+  cache,
 }: {
   courseTitle: string
   topicTitle: string
   focus: string
+  cache?: LessonResearchCacheScope
 }): Promise<LessonResearchResult> {
+  const cacheId = cache
+    ? lessonResearchCacheKey({ courseTitle, topicTitle, focus, cache })
+    : null
+  if (cache && cacheId) {
+    const cached = await cache.db.collection('lessonResearchCache').findOne({
+      _id: cacheId as any,
+      user_id: cache.userId,
+      expires_at: { $gt: new Date() },
+    })
+    if (cached?.result?.found && typeof cached.result.context === 'string') {
+      recordAIUsageEvent({
+        feature: 'lesson_research',
+        provider: 'openai',
+        operation: 'search',
+        status: 'avoided',
+        reason: 'lesson_research_cache',
+      })
+      if (process.env.LOG_AI_USAGE === '1') {
+        console.info(JSON.stringify({
+          event: 'ai_call_avoided',
+          reason: 'lesson_research_cache',
+          feature: 'lesson_research',
+          course_id: cache.courseId,
+          topic_id: cache.topicId,
+          page_number: cache.pageNumber,
+        }))
+      }
+      return {
+        found: true,
+        context: cached.result.context,
+        sources: Array.isArray(cached.result.sources) ? cached.result.sources : [],
+      }
+    }
+  }
+
   try {
     const { text, sources } = await searchAI({
       feature: 'lesson_research',
@@ -179,11 +253,31 @@ Keep total length under 400 words.`,
       ? `\nSources consulted: ${sources.slice(0, 4).map((s) => s.domain ?? s.title ?? s.url).join(', ')}`
       : ''
 
-    return {
+    const result: LessonResearchResult = {
       found: true,
       context: text.trim().slice(0, 2200) + sourceNote,
       sources,
     }
+    if (cache && cacheId) {
+      await cache.db.collection('lessonResearchCache').updateOne(
+        { _id: cacheId as any },
+        {
+          $set: {
+            user_id: cache.userId,
+            course_id: cache.courseId,
+            topic_id: cache.topicId,
+            page_number: cache.pageNumber,
+            version: LESSON_RESEARCH_CACHE_VERSION,
+            result,
+            expires_at: new Date(Date.now() + LESSON_RESEARCH_CACHE_TTL_MS),
+            updated_at: new Date(),
+          },
+          $setOnInsert: { created_at: new Date() },
+        },
+        { upsert: true },
+      )
+    }
+    return result
   } catch {
     // Non-fatal — lesson generation continues without research context
     return { found: false, context: '', sources: [] }

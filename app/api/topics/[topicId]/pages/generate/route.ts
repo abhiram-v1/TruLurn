@@ -1,8 +1,15 @@
-﻿import { NextResponse } from 'next/server'
+export const dynamic = 'force-dynamic'
+export const maxDuration = 300
+
+import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import crypto from 'crypto'
 import { getRequiredUserId } from '@/lib/server/currentUser'
-import { buildPageDocument, generateTopicPage } from '@/lib/topic-pages/generateTopicPage'
+import {
+  buildPageDocument,
+  generateTopicPage,
+  type GeneratedTopicPage,
+} from '@/lib/topic-pages/generateTopicPage'
 import { buildGenerationPointer, firstTeachableDescendant, isContainerTopic, nextRecommendedTeachableTopic } from '@/lib/traccia/sequence'
 import { buildSequenceContextPack } from '@/lib/traccia/sequenceContext'
 import {
@@ -13,16 +20,32 @@ import {
 } from '@/lib/vector/retrieval'
 import { ensureLexicalSearchIndexes, ensureVectorSearchIndexes } from '@/lib/vector/indexes'
 import { invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
-import { analyzeLearningArchitecture, validateGeneratedPageAgainstArchitecture, type LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
-import { analyzeTopicPlan, isPlanCurrent, type TopicLessonPlan } from '@/lib/learning-architecture/analyzeTopicPlan'
+import { analyzeLearningArchitecture, type LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
+import {
+  analyzeTopicPlan,
+  formatPageBoundaryPlan,
+  isPlanCurrent,
+  type TopicLessonPlan,
+} from '@/lib/learning-architecture/analyzeTopicPlan'
 import { policyFromCourse } from '@/lib/course-generation/sourceFidelity'
 import { researchLessonConcept } from '@/lib/course-generation/research'
-import { buildPersonalizationDirective, getLearnerProfile } from '@/lib/personalization/engine'
+import { buildLearnerStateContext, getLearnerProfile } from '@/lib/personalization/engine'
 import {
   buildSourceEvidencePackets,
   SourceGroundingError,
   verifyGroundedLesson,
 } from '@/lib/grounding/sourceGrounding'
+import {
+  evaluateLessonQuality,
+  LessonQualityError,
+  type LessonQualityRepairRecord,
+  type LessonQualityReport,
+} from '@/lib/topic-pages/lessonQuality'
+import {
+  buildGenerationAuthority,
+  CourseScopeError,
+} from '@/lib/topic-pages/generationAuthority'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 
 type GeneratePageBody = {
   courseId?: string
@@ -79,6 +102,15 @@ export async function POST(
       return NextResponse.json({ error: 'Topic not found.' }, { status: 404 })
     }
 
+    const scopePreflight = buildGenerationAuthority({
+      course,
+      topic,
+      pageNumber,
+      pageCount: 1,
+      focus: fallbackPageFocus(topic, pageNumber),
+    })
+    if (!scopePreflight.scope.allowed) throw new CourseScopeError(scopePreflight)
+
     const branchTopics = await db.collection('topics')
       .find({ course_id: courseId, branch_id: topic.branch_id })
       .sort({ sequence_index: 1, position: 1 })
@@ -133,6 +165,8 @@ export async function POST(
       }
     }
 
+    const t0 = performance.now()
+
     const memoryQuery = [
       course.title ?? course.topic,
       topic.title,
@@ -143,7 +177,13 @@ export async function POST(
     // Fetch previous pages, course memory, and the learner profile in parallel —
     // independent operations. Project only the fields formatPreviousPages uses;
     // sections (largest field) excluded. The profile is cached, so this is cheap.
-    const [previousPages, memory, learnerProfile] = await Promise.all([
+    const [
+      previousPages,
+      memory,
+      learnerProfile,
+      courseSkillPlanningContext,
+      courseSkillLessonContext,
+    ] = await Promise.all([
       db.collection('pages')
         .find({
           course_id: courseId,
@@ -172,6 +212,24 @@ export async function POST(
         console.warn('[pageGen] Learner profile unavailable — generating without personalization.', error)
         return null
       }),
+      retrieveCourseSkillContext({
+        db,
+        course,
+        query: memoryQuery,
+        surface: 'planning',
+      }).catch((error) => {
+        console.warn('[pageGen] Course skill context unavailable.', error)
+        return null
+      }),
+      retrieveCourseSkillContext({
+        db,
+        course,
+        query: memoryQuery,
+        surface: 'lesson',
+      }).catch((error) => {
+        console.warn('[pageGen] Lesson skill context unavailable.', error)
+        return null
+      }),
     ])
 
     if (String(course.mode ?? '') === 'source_grounded' && !memory.sourceChunks.length) {
@@ -195,9 +253,21 @@ export async function POST(
       ?? (topic.needs_review && !customInstruction ? topic.review_approach ?? 'explain_again' : undefined)
     const isAdHoc = Boolean(customInstruction || effectiveApproach)
 
-    // The curriculum's page estimate is only a CEILING — the topic plan decides
-    // the real page count from actual conceptual load.
-    const estimatedCeiling = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 3))
+    // The curriculum page count is an early estimate, not a physical pagination
+    // limit. Give the length planner modest headroom so content can flow onto
+    // another page instead of producing an overloaded final page.
+    const estimatedPages = Math.max(1, Number(topic.estimated_pages ?? topic.total_pages_planned ?? 3))
+    const retrievedSourceWords = memory.sourceChunks.reduce(
+      (sum, chunk) => sum + String(chunk.content ?? '').split(/\s+/).filter(Boolean).length,
+      0,
+    )
+    const sourceLengthPages = retrievedSourceWords > 0
+      ? Math.ceil(retrievedSourceWords / 700)
+      : 0
+    const planningPageLimit = Math.min(
+      15,
+      Math.max(estimatedPages + 2, sourceLengthPages, estimatedPages),
+    )
 
     // Topic-level plan: ONE call per topic, cached on the topic document, replacing
     // the per-page architecture brief. Generated lazily on first touch. The plan
@@ -209,14 +279,22 @@ export async function POST(
     // key, so the topic re-plans on next touch instead of serving a plan
     // built under the old policy. ai_teacher courses key to null (no churn).
     const expectedFidelityKey = policyFromCourse(course)?.key ?? null
+    const expectedSkillContextKey = courseSkillPlanningContext?.key ?? null
     async function ensureTopicPlan(): Promise<TopicLessonPlan> {
       const existing = planTopic.lesson_plan as TopicLessonPlan | undefined
-      if (isPlanCurrent(existing, expectedFidelityKey)) return existing
+      if (isPlanCurrent(existing, expectedFidelityKey, expectedSkillContextKey)) return existing
       const pageFocuses: string[] = Array.isArray(planTopic.page_focuses) && planTopic.page_focuses.length
         ? planTopic.page_focuses.map((entry: any, i: number) => String(entry?.focus ?? fallbackPageFocus(planTopic, i + 1)))
-        : Array.from({ length: estimatedCeiling }, (_, i) => fallbackPageFocus(planTopic, i + 1))
+        : Array.from({ length: estimatedPages }, (_, i) => fallbackPageFocus(planTopic, i + 1))
       const plan = await analyzeTopicPlan({
-        course, topic: planTopic, plannedPages: estimatedCeiling, pageFocuses, mapPointer: pointer.text, memory,
+        course,
+        topic: planTopic,
+        plannedPages: planningPageLimit,
+        pageFocuses,
+        mapPointer: pointer.text,
+        memory,
+        courseSkillContext: courseSkillPlanningContext?.text,
+        courseSkillContextKey: expectedSkillContextKey,
       })
       await db.collection('topics').updateOne(
         { _id: params.topicId as any, course_id: courseId },
@@ -225,16 +303,19 @@ export async function POST(
       return plan
     }
 
-    // Custom pages are deliberate student requests and may extend past the plan;
-    // everything else is governed by it.
-    const plan = customInstruction ? null : await ensureTopicPlan()
-    const planLength = plan ? plan.pages.length : null
+    const t1 = performance.now()
+
+    const plan = await ensureTopicPlan()
+
+    const t2 = performance.now()
+
+    const planLength = plan.pages.length
     const planned = plan?.pages.find((p) => p.page_number === pageNumber) ?? null
 
     // ── Hard cap ─────────────────────────────────────────────────────────────
     // Navigation and prefetch can never mint pages past the plan. This returns
     // before any model call, so over-eager clients cost nothing.
-    if (planLength !== null && !existing && pageNumber > planLength) {
+    if (!existing && pageNumber > planLength) {
       return NextResponse.json({
         topicComplete: true,
         plannedPages: planLength,
@@ -242,7 +323,7 @@ export async function POST(
       })
     }
 
-    const plannedPages = planLength ?? estimatedCeiling
+    const plannedPages = planLength
     const focus = customInstruction
       ? customInstruction
       : (planned?.focus ?? topic.page_focuses?.[pageNumber - 1]?.focus ?? fallbackPageFocus(topic, pageNumber))
@@ -263,10 +344,13 @@ export async function POST(
       pageNumber,
       plannedPages,
       focus,
+      contentKind: planned?.content_kind ?? 'full_page',
       previousPages,
       memory,
       mapPointer: pointer.text,
       sequenceContext: sequenceContext.text,
+      courseSkillContext: courseSkillPlanningContext?.text,
+      pageBoundaryContext: planned ? formatPageBoundaryPlan(planned) : undefined,
     }
 
     // Web research is the most expensive per-page call — spend it only where it
@@ -281,29 +365,61 @@ export async function POST(
           courseTitle: course.title ?? course.topic ?? '',
           topicTitle: topic.title ?? '',
           focus,
+          cache: {
+            db,
+            userId,
+            courseId,
+            topicId: params.topicId,
+            pageNumber,
+          },
         })
       : Promise.resolve({ found: false, context: '', sources: [] })
 
-    // Ad-hoc requests (custom focus / regeneration) get a fresh per-page brief —
-    // the cached topic plan didn't account for the ad-hoc intent.
+    // Determine whether a fresh brief is needed from the AI.
+    // Full-page plans cache the brief; ad-hoc requests and missing plans always need a new one.
+    const needsFreshBrief =
+      isAdHoc ||
+      !planned ||
+      (planned.content_kind === 'full_page' && !planned.brief)
+    const cachedBrief: LearningArchitectureBrief | undefined =
+      !needsFreshBrief && planned?.content_kind === 'full_page' ? (planned.brief ?? undefined) : undefined
+
     let learningArchitecture: LearningArchitectureBrief | undefined
-    if (isAdHoc) {
-      learningArchitecture = await analyzeLearningArchitecture(perPageBriefArgs)
-    } else if (planned && planned.content_kind === 'full_page') {
-      // Full pages use the planned brief; if the plan couldn't produce a valid one, repair lazily.
-      learningArchitecture = planned.brief ?? await analyzeLearningArchitecture(perPageBriefArgs)
-    } else if (!planned) {
-      // Regenerating an existing page that sits beyond the current plan (legacy
-      // topics generated before plan consolidation) → per-page brief.
-      learningArchitecture = await analyzeLearningArchitecture(perPageBriefArgs)
+    let lessonResearch: Awaited<ReturnType<typeof researchLessonConcept>>
+
+    if (needsFreshBrief) {
+      // Both are independent AI calls (~1–2 s each) — run them together.
+      ;[learningArchitecture, lessonResearch] = await Promise.all([
+        analyzeLearningArchitecture(perPageBriefArgs),
+        researchPromise,
+      ])
     } else {
-      // Simple planned page (bridge/section/example) → no architecture brief needed.
-      learningArchitecture = undefined
+      // Brief is cached from the topic plan; research can finish in the background.
+      learningArchitecture = cachedBrief
+      lessonResearch = await researchPromise
     }
 
-    const lessonResearch = await researchPromise
+    const authority = buildGenerationAuthority({
+      course,
+      topic,
+      pageNumber,
+      pageCount: plannedPages,
+      focus,
+      plannedPage: planned,
+      architecture: learningArchitecture,
+    })
+    if (!authority.scope.allowed) throw new CourseScopeError(authority)
 
-    let generated = await generateTopicPage({
+    const nextTopicForPage = nextRecommendedTeachableTopic(branchTopics as any, String(topic._id))
+    const priorExample = previousPages.at(-1)?.example_to_use ?? undefined
+    const relevantLearnerConcepts = [
+      ...(Array.isArray(topic.key_concepts) ? topic.key_concepts.map(String) : []),
+      ...(learningArchitecture?.required_prior_knowledge ?? []),
+      ...(learningArchitecture?.prior_knowledge_repair ?? []),
+    ].filter((value): value is string => Boolean(value))
+    if (!relevantLearnerConcepts.length) relevantLearnerConcepts.push(focus)
+
+    const generationInput = {
       course,
       topic,
       pageNumber,
@@ -315,43 +431,48 @@ export async function POST(
       approach: effectiveApproach,
       customInstruction,
       lessonResearch: lessonResearch.found ? lessonResearch.context : undefined,
-      personalizationDirective: buildPersonalizationDirective(learnerProfile),
-      plannedPageCount: planLength ?? undefined,
-      plannedContentKind: planned?.content_kind,
-      plannedRole: planned?.page_sequence_role,
-      plannedTargetLength: planned?.target_length,
-      plannedFocus: planned?.focus,
+      courseSkillContext: courseSkillLessonContext?.text,
+      learnerStateContext: buildLearnerStateContext(
+        learnerProfile,
+        relevantLearnerConcepts,
+      ),
+      authority,
       sourceEvidence,
-    })
-
-    if (
-      String(course.mode ?? '') === 'source_grounded'
-      && topic.source_coverage !== 'inferred'
-      && generated.should_generate_page
-      && generated.content_kind !== 'skip'
-    ) {
-      const verified = await verifyGroundedLesson({
-        sections: generated.sections,
-        packets: sourceEvidence,
+      nextTopicTitle: nextTopicForPage ? String(nextTopicForPage.title) : undefined,
+      priorExample,
+    }
+    const generateAndVerify = async (qualityRepair?: {
+      report: LessonQualityReport
+      previousDraft: GeneratedTopicPage
+    }) => {
+      let draft = await generateTopicPage({
+        ...generationInput,
+        qualityRepair,
       })
-      generated = {
-        ...generated,
-        sections: verified.sections,
-        content: verified.content,
-        source_citations: verified.citations,
-        grounding: verified.report,
+      if (
+        String(course.mode ?? '') === 'source_grounded'
+        && topic.source_coverage !== 'inferred'
+        && draft.should_generate_page
+        && draft.content_kind !== 'skip'
+      ) {
+        const verified = await verifyGroundedLesson({
+          sections: draft.sections,
+          packets: sourceEvidence,
+        })
+        draft = {
+          ...draft,
+          sections: verified.sections,
+          content: verified.content,
+          source_citations: verified.citations,
+          grounding: verified.report,
+        }
       }
+      return draft
     }
 
-    // Validate page against architecture brief. Mismatches are warnings, not hard errors —
-    // the brief is a teaching guide, not a contract the generator must satisfy perfectly.
-    // Simple pages carry no brief, so there is nothing to validate against.
-    if (learningArchitecture) {
-      const architectureWarnings = validateGeneratedPageAgainstArchitecture(generated, learningArchitecture)
-      if (architectureWarnings.length) {
-        console.warn('[pageGen] Architecture validation warnings for topic', params.topicId, ':', architectureWarnings)
-      }
-    }
+    const t3 = performance.now()
+
+    let generated = await generateAndVerify()
 
     if (!generated.should_generate_page || generated.content_kind === 'skip') {
       const nextTopic = nextRecommendedTeachableTopic(branchTopics as any, String(topic._id))
@@ -393,6 +514,69 @@ export async function POST(
         redirectTo: nextTopic ? `/learn/${courseId}/${encodeURIComponent(String(nextTopic._id))}` : `/course/${courseId}`,
       })
     }
+
+    const t4 = performance.now()
+
+    const sourceGrounded = String(course.mode ?? '') === 'source_grounded'
+      && topic.source_coverage !== 'inferred'
+    const qualityRepairHistory: LessonQualityRepairRecord[] = []
+    let lessonQuality = evaluateLessonQuality({
+      page: generated,
+      topic,
+      pageNumber,
+      previousPages,
+      architecture: learningArchitecture,
+      sourceGrounded,
+      pagePlan: planned,
+    })
+
+    if (!lessonQuality.accepted) {
+      qualityRepairHistory.push({
+        attempt: 1,
+        trigger_score: lessonQuality.overall_score,
+        issues: lessonQuality.issues,
+        created_at: new Date(),
+      })
+      const previousDraft = generated
+      generated = await generateAndVerify({
+        report: lessonQuality,
+        previousDraft,
+      })
+      lessonQuality = evaluateLessonQuality({
+        page: generated,
+        topic,
+        pageNumber,
+        previousPages,
+        architecture: learningArchitecture,
+        sourceGrounded,
+        pagePlan: planned,
+      })
+    }
+
+    generated = {
+      ...generated,
+      lesson_quality: lessonQuality,
+      quality_repair_history: qualityRepairHistory,
+    }
+
+    if (!lessonQuality.accepted) {
+      await db.collection('learningEvents').insertOne({
+        _id: crypto.randomUUID() as any,
+        course_id: courseId,
+        topic_id: params.topicId,
+        user_id: userId,
+        event_type: 'lesson_quality_rejected',
+        page_number: pageNumber,
+        quality_score: lessonQuality.overall_score,
+        quality_threshold: lessonQuality.threshold,
+        quality_dimensions: lessonQuality.dimensions,
+        quality_issues: lessonQuality.issues,
+        repair_attempts: qualityRepairHistory.length,
+        created_at: new Date(),
+      })
+      throw new LessonQualityError(lessonQuality)
+    }
+
     const pageDocument = buildPageDocument({
       courseId,
       topicId: params.topicId,
@@ -429,6 +613,9 @@ export async function POST(
       page_sequence_role: generated.learning_architecture?.page_sequence_role ?? null,
       source_citations: generated.source_citations ?? [],
       grounding: generated.grounding ?? null,
+      lesson_quality: generated.lesson_quality ?? null,
+      quality_repair_history: generated.quality_repair_history ?? [],
+      generation_authority: generated.generation_authority ?? null,
       created_at: new Date(),
     })
     // Run both concept-map writes in parallel — independent collections.
@@ -451,6 +638,23 @@ export async function POST(
       ),
     ])
     invalidateConceptMapCache(courseId)
+    await db.collection('learningEvents').insertOne({
+      _id: crypto.randomUUID() as any,
+      course_id: courseId,
+      topic_id: params.topicId,
+      user_id: userId,
+      event_type: qualityRepairHistory.length
+        ? 'lesson_quality_repaired'
+        : 'lesson_quality_accepted',
+      page_id: String(pageDocument._id),
+      page_number: generated.page_number,
+      quality_score: lessonQuality.overall_score,
+      quality_threshold: lessonQuality.threshold,
+      quality_dimensions: lessonQuality.dimensions,
+      quality_issues: lessonQuality.issues,
+      repair_attempts: qualityRepairHistory.length,
+      created_at: new Date(),
+    })
     if (
       generated.reused_concepts.length
       || generated.reminder_concepts.length
@@ -523,6 +727,29 @@ export async function POST(
       )
     }
 
+    const t5 = performance.now()
+    // Structured timing log — grep for 'page_generation_timing' to monitor pipeline.
+    void db.collection('learningEvents').insertOne({
+      _id: crypto.randomUUID() as any,
+      course_id: courseId,
+      topic_id: params.topicId,
+      user_id: userId,
+      event_type: 'page_generation_timing',
+      page_id: String(pageDocument._id),
+      page_number: pageNumber,
+      timings: {
+        context_ms: Math.round(t1 - t0),
+        plan_ms: Math.round(t2 - t1),
+        brief_research_ms: Math.round(t3 - t2),
+        generation_ms: Math.round(t4 - t3),
+        quality_ms: Math.round(t5 - t4),
+        total_ms: Math.round(t5 - t0),
+      },
+      repair_attempts: qualityRepairHistory.length,
+      had_cached_brief: !needsFreshBrief,
+      created_at: new Date(),
+    }).catch(() => {})
+
     await embedPageById(db, String(pageDocument._id)).catch((error) => {
       console.warn('Failed to embed generated page.', error)
     })
@@ -537,9 +764,19 @@ export async function POST(
     const status = message.includes('sign in')
       ? 401
       : error instanceof SourceGroundingError
+        || error instanceof LessonQualityError
+        || error instanceof CourseScopeError
         ? 422
         : 500
 
-    return NextResponse.json({ error: message }, { status })
+    return NextResponse.json({
+      error: message,
+      ...(error instanceof LessonQualityError
+        ? { code: error.code, lessonQuality: error.report }
+        : {}),
+      ...(error instanceof CourseScopeError
+        ? { code: error.code, generationAuthority: error.contract }
+        : {}),
+    }, { status })
   }
 }

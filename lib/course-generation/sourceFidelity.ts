@@ -9,12 +9,12 @@ import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfil
 // drops content an exam student needs.
 //
 // So the policy is DERIVED, never asked: a pure function of signals the
-// system already has — the teaching style, course depth, learning purpose,
+// system already has — course depth, learning purpose,
 // the source profile's own exam signals, and any explicit coverage request
 // the student made through the in-app agent. It is recomputed fresh on every
 // generation call, so when any of those signals change mid-course (style
 // switch, agent request), every future page and topic plan adapts
-// automatically. No new settings UI, no sliders.
+// automatically. Teaching persona controls delivery, not source scope.
 
 export type SourceCoverageLevel = 'complete' | 'smart' | 'core'
 export type SourcePresentation = 'compact' | 'standard' | 'expansive'
@@ -35,8 +35,6 @@ export type SourceFidelityPolicy = {
 
 export type SourceFidelitySignals = {
   mode?: string | null
-  /** Resolved teaching style: course.lesson_style ?? course.learning_style, or the setup teachingStyle. */
-  teachingStyle?: string | null
   courseDepth?: string | null
   learningPurpose?: string | null
   sourceProfile?: SourceTeachingProfile | null
@@ -50,24 +48,9 @@ type PolicyBase = {
   amplification: SourceAmplification
 }
 
-// Base stance per teaching style. These are starting points, not verdicts —
-// modulators below shift them, and an explicit student request overrides coverage.
-const STYLE_BASES: Record<string, PolicyBase & { why: string }> = {
-  exam_oriented:        { coverage: 'complete', presentation: 'compact',   amplification: 'light',    why: 'Exam-oriented style: everything examinable must be covered, compactly.' },
-  procedural_reference: { coverage: 'complete', presentation: 'compact',   amplification: 'light',    why: 'Procedural style: steps and conditions cannot be dropped.' },
-  concise_speed:        { coverage: 'core',     presentation: 'compact',   amplification: 'light',    why: 'Concise style: key concepts only, maximum density.' },
-  deep_conceptual:      { coverage: 'complete', presentation: 'expansive', amplification: 'rich',     why: 'Deep-conceptual style: thorough coverage from multiple angles.' },
-  first_principles:     { coverage: 'smart',    presentation: 'standard',  amplification: 'rich',     why: 'First-principles style: substantive coverage with heavy intuition building.' },
-  visual_analogy:       { coverage: 'smart',    presentation: 'standard',  amplification: 'rich',     why: 'Visual style: substantive coverage carried by added mental pictures.' },
-  explanatory_narrative:{ coverage: 'smart',    presentation: 'standard',  amplification: 'rich',     why: 'Narrative style: substantive coverage woven into explanatory prose.' },
-  socratic:             { coverage: 'smart',    presentation: 'standard',  amplification: 'standard', why: 'Socratic style: substantive coverage through guided questioning.' },
-  project_based:        { coverage: 'smart',    presentation: 'standard',  amplification: 'standard', why: 'Project style: coverage in service of the build.' },
-  applied_professional: { coverage: 'smart',    presentation: 'standard',  amplification: 'standard', why: 'Applied style: coverage framed as decisions and tradeoffs.' },
-}
-
 const DEFAULT_BASE: PolicyBase & { why: string } = {
   coverage: 'smart', presentation: 'standard', amplification: 'standard',
-  why: 'Default stance: all substantive source points covered, peripheral detail compressible.',
+  why: 'Base source stance: all substantive points covered, peripheral detail compressible.',
 }
 
 const COVERAGE_ORDER: SourceCoverageLevel[] = ['core', 'smart', 'complete']
@@ -93,7 +76,7 @@ export function resolveSourceFidelityPolicy(signals: SourceFidelitySignals): Sou
   if (String(signals.mode ?? '') !== 'source_grounded') return null
 
   const reasons: string[] = []
-  const base = STYLE_BASES[String(signals.teachingStyle ?? '')] ?? DEFAULT_BASE
+  const base = DEFAULT_BASE
   reasons.push(base.why)
 
   let { coverage, presentation, amplification } = base
@@ -141,7 +124,6 @@ export function resolveSourceFidelityPolicy(signals: SourceFidelitySignals): Sou
 export function policyFromCourse(course: any): SourceFidelityPolicy | null {
   return resolveSourceFidelityPolicy({
     mode: course?.mode,
-    teachingStyle: course?.lesson_style ?? course?.learning_style,
     courseDepth: course?.course_depth,
     learningPurpose: course?.learning_purpose,
     sourceProfile: course?.source_profile ?? null,

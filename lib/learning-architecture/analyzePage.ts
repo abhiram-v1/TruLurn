@@ -2,6 +2,7 @@ import { generateAI, parseAIJson } from '@/lib/ai'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { ContentKind } from '@/types'
 import type { GeneratedTopicPage } from '@/lib/topic-pages/generateTopicPage'
+import { VISUAL_REPRESENTATION_PLANNING_RULES } from '@/lib/ai/skills/dataChart'
 
 export type PageSequenceRole = 'introduce' | 'deepen' | 'connect' | 'repair' | 'practice' | 'review'
 
@@ -45,10 +46,13 @@ type AnalyzeInput = {
   pageNumber: number
   plannedPages: number
   focus: string
+  contentKind?: ContentKind
   previousPages?: any[]
   memory?: CourseMemoryContext
   mapPointer?: string
   sequenceContext?: string
+  courseSkillContext?: string
+  pageBoundaryContext?: string
   repairFrom?: {
     previousBrief: unknown
     errors: string[]
@@ -214,11 +218,16 @@ ${input.mapPointer || 'No map pointer supplied.'}
 Sequence context:
 ${input.sequenceContext || 'No sequence context supplied.'}
 
+Physical page boundary:
+${input.pageBoundaryContext || 'No explicit boundary supplied.'}
+
 Previous pages:
 ${formatPreviousPages(input.previousPages)}
 
 Retrieved memory:
 ${formatMemory(input.memory)}
+
+${input.courseSkillContext || 'No course skill context is attached.'}
 
 Return this exact JSON shape:
 {
@@ -229,7 +238,7 @@ Return this exact JSON shape:
   "prior_knowledge_repair": ["brief repair/hint if a prior idea is fragile"],
   "likely_misconceptions": ["specific wrong belief to prevent"],
   "intuition_plan": "the concrete mental model or intuition to build before formalism",
-  "representation_plan": ["prose", "bullets", "diagram description", "math", "code", "table"],
+  "representation_plan": ["prose", "bullets", "data chart", "diagram description", "math", "code", "table"],
   "example_strategy": {
     "opening_example": "concrete opener or null",
     "worked_example_needed": true,
@@ -250,18 +259,23 @@ Return this exact JSON shape:
     "contrast_prompt": "near-miss/contrast question or null",
     "transfer_prompt": "future transfer question or null"
   },
-  "recommended_content_kind": "full_page|section|bridge|example|skip",
+  "recommended_content_kind": "${input.contentKind ?? 'full_page'}",
   "confidence": "low|medium|high",
   "reason": "why this architecture is appropriate"
 }
 
 Rules:
-- Choose the smallest content kind that can teach the target understanding.
-- If this is only a bridge or reminder, do not recommend full_page.
+- The topic plan already locked content kind to "${input.contentKind ?? 'full_page'}". Mirror it exactly; page shape is outside this brief's authority.
+- Treat this as one consecutive span of a continuous textbook manuscript, not an independent lesson.
+- Design only the understanding reached between the supplied start and end boundaries.
+- If this span continues from the previous page, do not request a new hook or broad reintroduction.
+- If this span continues onto the next page, do not request a final summary, generic takeaway, or artificial closure.
 - If this introduces a dense mechanism, math, procedure, or high-risk misconception, include active processing.
 - Worked examples are required for math/procedure and usually useful for mechanisms.
 - Do not request decorative examples. Examples must reveal necessity, boundaries, or structure.
 - Use prior context and reusable examples when possible. Do not casually switch analogy domains.
+- ${VISUAL_REPRESENTATION_PLANNING_RULES.replace(/\n/g, '\n- ')}
+- Treat COURSE SKILL CONTEXT as trusted subject guidance. Apply only relevant instructions and never let it override locked page scope.
 - Keep every field compact and implementation-ready.`,
   }
 }
@@ -275,7 +289,11 @@ export async function analyzeLearningArchitecture(input: Omit<AnalyzeInput, 'rep
       purpose: 'primary',
       responseMimeType: 'application/json',
     })
-    return normalizeBrief(parseAIJson<any>(text))
+    const normalized = normalizeBrief(parseAIJson<any>(text))
+    return {
+      ...normalized,
+      recommended_content_kind: input.contentKind ?? normalized.recommended_content_kind,
+    }
   }
 
   const first = await run()

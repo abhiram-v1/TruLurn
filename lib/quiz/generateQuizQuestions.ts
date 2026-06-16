@@ -1,6 +1,9 @@
 import type { Db } from 'mongodb'
 import { generateAI, parseAIJson } from '@/lib/ai'
-import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
+import { buildAudienceDirective } from '@/lib/personalization/learnerAudience'
+import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 
 // Per-session question count: conceptual courses get explain; programming courses get code.
 export const QUIZ_SESSION_SIZE = 5
@@ -112,9 +115,15 @@ export async function generateQuizQuestions(
 ): Promise<RawQuestion[]> {
   const courseId = String(course._id)
   const topicId = String(topic._id)
-  const { lessonContext, doubtContext, pageCount } = await buildQuizTopicContext(
-    db, courseId, topicId, userId,
-  )
+  const [{ lessonContext, doubtContext, pageCount }, courseSkillContext] = await Promise.all([
+    buildQuizTopicContext(db, courseId, topicId, userId),
+    retrieveCourseSkillContext({
+      db,
+      course,
+      query: [course.title, topic.title, topic.summary, topic.description].filter(Boolean).join(' | '),
+      surface: 'quiz',
+    }),
+  ])
 
   if (!lessonContext.trim() || pageCount === 0) {
     throw new Error('No lesson content found. Study the topic before taking the quiz.')
@@ -128,7 +137,14 @@ export async function generateQuizQuestions(
 
   const system = `You are TruLurn's quiz question writer. Write exactly ${QUIZ_SESSION_SIZE} diagnostic questions that reveal whether the learner truly understands this topic, not whether they memorized it.
 
-${buildAudienceDirective(course.learner_persona, course.goals)}
+${buildPersonaDirective({
+  persona: resolveCourseTeachingPersona(course),
+  surface: 'quiz',
+})}
+
+${courseSkillContext?.text ?? ''}
+
+${buildAudienceDirective(course.learner_audience ?? course.learner_persona, course.goals)}
 Question scenarios must come from THIS learner's world — never default to classroom or "a student does X" framing.
 
 WHAT MAKES A GOOD QUESTION:
@@ -136,6 +152,9 @@ WHAT MAKES A GOOD QUESTION:
 - Hard: requires active reasoning. A learner who read but did not understand the mechanism should fail.
 - Specific: use concrete numbers, named concepts, and specific scenarios. Never use generic academic wording.
 - Mechanism-first: test WHY or HOW, never just WHAT.
+- When visual interpretation is the tested skill, a question may include a chart using the contract below. Otherwise do not add one.
+
+${COMPACT_CHART_OUTPUT_CONTRACT}
 
 QUESTION TYPES: generate exactly one of each, in any order:
 - 1 x "mcq": Write a question with 4 options. The 3 wrong distractors must be genuinely plausible: at least one should swap cause and effect, one should use correct vocabulary with wrong reasoning. A student who read but did not understand the mechanism should hesitate on at least two distractors. Set correct_answer to the exact string of the correct option. Set rubric to null.

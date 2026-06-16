@@ -1,4 +1,5 @@
 import { generateAI } from '@/lib/ai'
+import { shouldRetrieveAppKnowledge } from '@/lib/agent/appKnowledge'
 import type { ActionIntent } from '@/types/agent'
 import type { DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
 
@@ -34,7 +35,8 @@ ACTION labels (student is issuing an unambiguous command at the lesson):
   GENERATE_PAGE   — generate a new custom page
 
   SKIP_CURRENT    - student says they already understand this and wants to move on or skip remaining ungenerated pages
-  CHANGE_STYLE    - student wants to change how ALL future lessons are written (more math, more code, more practical, etc.)
+  CHANGE_PERSONA  - student explicitly asks to switch the teaching persona used for ALL future lessons
+                    Examples: "switch to Investigator", "use Immersive Builder from now on"
                     Key signal: refers to "lessons", "pages" (plural), "the course", "from now on", "going forward"
                     NOT this action: "can you make this more practical?" or "show more examples here" (those are current_page)
 
@@ -70,7 +72,7 @@ const INTENT_MAP: Record<string, ActionIntent> = {
   GO_TO_TOPIC:         'go_to_topic',
   GENERATE_PAGE:       'generate_page',
   SKIP_CURRENT:        'skip_current',
-  CHANGE_STYLE:        'change_lesson_style',
+  CHANGE_PERSONA:      'change_teaching_persona',
 }
 
 function normalizeMessage(message: string) {
@@ -169,6 +171,31 @@ function deterministicActionIntent(message: string): ActionIntent | null {
     return 'custom_quiz'
   }
 
+  if (
+    /\b(switch|change|use|activate)\b.*\b(investigator|immersive builder|teaching persona|persona)\b/.test(text)
+  ) {
+    return 'change_teaching_persona'
+  }
+
+  return null
+}
+
+export function classifyIntentDeterministically(message: string): ClassifyResult | null {
+  const deterministic = deterministicActionIntent(message)
+  if (deterministic) return { kind: 'action', intent: deterministic }
+
+  if (shouldRetrieveAppKnowledge(message)) {
+    return { kind: 'doubt', questionType: 'current_page' }
+  }
+
+  const normalized = normalizeMessage(message)
+  if (/\b(earlier|previously|previous topic|we covered|you said|remind me|course page|global page)\b/.test(normalized)) {
+    return { kind: 'doubt', questionType: 'course_specific' }
+  }
+  if (/\b(this|here|the page|above|selected passage|this example|this diagram)\b/.test(normalized)) {
+    return { kind: 'doubt', questionType: 'current_page' }
+  }
+
   return null
 }
 
@@ -177,8 +204,8 @@ export async function classifyIntent(
   pageFocus: string,
   recentAssistantMessage?: string,
 ): Promise<ClassifyResult> {
-  const deterministic = deterministicActionIntent(message)
-  if (deterministic) return { kind: 'action', intent: deterministic }
+  const deterministic = classifyIntentDeterministically(message)
+  if (deterministic) return deterministic
 
   try {
     const lines: string[] = []

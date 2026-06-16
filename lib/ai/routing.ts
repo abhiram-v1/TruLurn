@@ -54,17 +54,15 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
       openai: ['OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
       gemini: ['GEMINI_GRAPH_MODEL'],
     },
-    { gemini: 'gemini-2.0-flash-lite' },
+    { gemini: 'gemini-2.5-flash-lite' },
   ),
-  learner_persona: route('agent'),
+  learner_audience: route('agent'),
   lesson_research: {
     capability: 'web_search',
     purpose: 'agent',
     defaultProvider: 'openai',
     modelEnvironmentVariables: { openai: ['OPENAI_RESEARCH_MODEL', 'OPENAI_AGENT_MODEL'] },
   },
-  lesson_style_analysis: route('agent'),
-  lesson_style_selection: route('agent'),
   map_generation: route('primary', {
     openai: ['OPENAI_MAP_MODEL', 'OPENAI_PRIMARY_MODEL'],
     gemini: ['GEMINI_MAP_MODEL', 'GEMINI_MODEL'],
@@ -156,9 +154,20 @@ export function resolveAIFeatureRoute(feature: AIFeature): ResolvedAIFeatureRout
   const provider = configuredProvider
     ?? (definition.defaultProvider === 'global' ? globalProvider() : definition.defaultProvider)
   const configuredFallbacks = parseFallbackProviders(process.env[fallbackKey], fallbackKey)
-  const fallbackProviders = Array.from(new Set(
+
+  let fallbackProviders = Array.from(new Set(
     configuredFallbacks ?? (configuredProvider ? [] : definition.fallbackProviders ?? []),
   )).filter((fallback) => fallback !== provider)
+
+  // Auto-fallback default: failover to the alternative provider if no fallbacks are explicitly set
+  if (fallbackProviders.length === 0) {
+    if (provider === 'openai') {
+      fallbackProviders = ['gemini']
+    } else if (provider === 'gemini') {
+      fallbackProviders = ['openai']
+    }
+  }
+
   const model = resolveAIProviderModel(feature, provider)
 
   return {

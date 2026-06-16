@@ -1,10 +1,15 @@
 import { createHash } from 'crypto'
+import { aiFetch } from '@/lib/ai/http'
+import type { AIProviderUsage } from '@/lib/ai/types'
 
 type OpenAIGenerateInput = {
   system: string
   user: string
   model?: string
   purpose?: 'primary' | 'agent'
+  auditFeature?: string
+  promptCacheKey?: string
+  onUsage?: (usage: AIProviderUsage) => void
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   signal?: AbortSignal
   responseMimeType?: 'application/json' | 'text/plain'
@@ -44,20 +49,38 @@ type OpenAIResponse = {
 }
 
 // Stable cache key per distinct system prompt — groups same-prefix requests so
-// OpenAI routes them to the same prompt cache, improving the hit rate on top of
-// the automatic prefix caching. Different prompt families (writer, planner,
-// graph, quiz) hash to different keys automatically.
-function promptCacheKey(system: string) {
-  return `tl_${createHash('sha1').update(system).digest('hex').slice(0, 24)}`
+// OpenAI routes matching prompt families to the same cache shard, improving the
+// hit rate without changing the prompt content sent to the model.
+function promptCacheKey(seed: string) {
+  return `tl_${createHash('sha1').update(seed).digest('hex').slice(0, 24)}`
 }
 
 // Log prompt-cache effectiveness so caching is observable. Set LOG_AI_USAGE=1 to enable.
-function logOpenAIUsage(model: string, data: OpenAIResponse) {
+function logOpenAIUsage(model: string, data: OpenAIResponse, input: OpenAIGenerateInput) {
   if (process.env.LOG_AI_USAGE !== '1' || !data.usage) return
-  const input = data.usage.input_tokens ?? 0
+  const inputTokens = data.usage.input_tokens ?? 0
   const cached = data.usage.input_tokens_details?.cached_tokens ?? 0
-  const pct = input > 0 ? Math.round((cached / input) * 100) : 0
-  console.info(`[ai] ${model} input=${input} cached=${cached} (${pct}%) output=${data.usage.output_tokens ?? 0}`)
+  const pct = inputTokens > 0 ? Math.round((cached / inputTokens) * 100) : 0
+  console.info(JSON.stringify({
+    event: 'ai_usage',
+    provider: 'openai',
+    feature: input.auditFeature ?? 'unknown',
+    model,
+    input_tokens: inputTokens,
+    cached_input_tokens: cached,
+    cache_hit_percent: pct,
+    output_tokens: data.usage.output_tokens ?? 0,
+  }))
+}
+
+function reportOpenAIUsage(data: OpenAIResponse, input: OpenAIGenerateInput) {
+  if (!data.usage) return
+  input.onUsage?.({
+    inputTokens: data.usage.input_tokens ?? 0,
+    cachedInputTokens: data.usage.input_tokens_details?.cached_tokens ?? 0,
+    outputTokens: data.usage.output_tokens ?? 0,
+    totalTokens: (data.usage.input_tokens ?? 0) + (data.usage.output_tokens ?? 0),
+  })
 }
 
 export type OpenAIWebSource = {
@@ -153,7 +176,7 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       { role: 'system', content: input.system },
       { role: 'user', content: input.user },
     ],
-    prompt_cache_key: promptCacheKey(input.system),
+    prompt_cache_key: promptCacheKey(input.promptCacheKey ?? input.system),
   }
 
   if (input.responseSchema) {
@@ -178,15 +201,14 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
     body.reasoning = { effort: input.reasoningEffort }
   }
 
-  const response = await fetch(OPENAI_ENDPOINT, {
+  const response = await aiFetch(OPENAI_ENDPOINT, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-    signal: input.signal,
-  })
+  }, { signal: input.signal })
 
   const data = (await response.json()) as OpenAIResponse
 
@@ -194,7 +216,8 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
     throw new Error(data.error?.message ?? `OpenAI request failed with status ${response.status}`)
   }
 
-  logOpenAIUsage(model, data)
+  logOpenAIUsage(model, data, input)
+  reportOpenAIUsage(data, input)
 
   const text = extractOutputText(data)
 
@@ -230,21 +253,23 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
         },
       ],
       tool_choice: { type: toolType },
-      prompt_cache_key: promptCacheKey(input.system),
+      prompt_cache_key: promptCacheKey(input.promptCacheKey ?? input.system),
     }
 
     // JSON mode (response_format: json_object) is incompatible with web search tools —
     // OpenAI rejects requests that combine both. The prompt already instructs the model
     // to return JSON, so the shared JSON parser handles the output without format enforcement.
 
-    const response = await fetch(OPENAI_ENDPOINT, {
+    // Web search runs a tool loop (search + synthesis), so it legitimately takes
+    // longer than a plain completion — give it a wider ceiling.
+    const response = await aiFetch(OPENAI_ENDPOINT, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
-    })
+    }, { signal: input.signal, timeoutMs: Number(process.env.AI_SEARCH_TIMEOUT_MS ?? 180_000) })
 
     const data = (await response.json()) as OpenAIResponse
     return { response, data }
@@ -262,7 +287,8 @@ export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): 
     throw new Error(data.error?.message ?? `OpenAI web search request failed with status ${response.status}`)
   }
 
-  logOpenAIUsage(model, data)
+  logOpenAIUsage(model, data, input)
+  reportOpenAIUsage(data, input)
 
   const text = extractOutputText(data)
 

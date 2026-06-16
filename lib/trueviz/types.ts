@@ -50,11 +50,14 @@ export type NeuralNetSpec = {
   compact?: boolean
 }
 
+export type { DataChartSpec, ChartType, ChartSeries } from './chartSpec'
+import type { DataChartSpec } from './chartSpec'
+
 // ── Future diagram types go here ──────────────────────────────────────────────
 // export type AttentionMapSpec = { type: 'attention-map'; ... }
 // export type DecisionTreeSpec = { type: 'decision-tree'; ... }
 
-export type TruVizSpec = NeuralNetSpec // | AttentionMapSpec | DecisionTreeSpec | …
+export type TruVizSpec = NeuralNetSpec | DataChartSpec
 
 export type ParseResult =
   | { ok: true; spec: TruVizSpec }

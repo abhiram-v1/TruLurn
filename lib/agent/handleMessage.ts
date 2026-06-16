@@ -1,5 +1,8 @@
 import type { Db } from 'mongodb'
-import { classifyIntent } from '@/lib/agent/classifyIntent'
+import {
+  classifyIntent,
+  classifyIntentDeterministically,
+} from '@/lib/agent/classifyIntent'
 import { executeAction } from '@/lib/agent/executeAction'
 import { handleDoubt } from '@/lib/doubts/handleDoubt'
 import type { AgentMessage } from '@/types/agent'
@@ -17,8 +20,12 @@ type HandleMessageInput = {
 export async function handleMessage(input: HandleMessageInput): Promise<AgentMessage> {
   const { db, userId, courseId, topicId, pageNumber, message, selectedContext } = input
 
+  const immediateClassification = classifyIntentDeterministically(message)
+
   // Fetch the two context items needed for classification in parallel.
-  const [page, lastAssistant] = await Promise.all([
+  const [page, lastAssistant] = await (immediateClassification
+    ? Promise.resolve([null, null])
+    : Promise.all([
     db.collection('pages').findOne(
       { course_id: courseId, topic_id: topicId, page_number: pageNumber },
       { projection: { focus: 1 } },
@@ -27,15 +34,16 @@ export async function handleMessage(input: HandleMessageInput): Promise<AgentMes
       { course_id: courseId, user_id: userId, role: 'assistant' },
       { sort: { created_at: -1 }, projection: { content: 1 } },
     ),
-  ])
+    ]))
 
   // Combined classifier — returns either an action intent OR a doubt question
   // type, replacing two sequential AI calls with one.
-  const classification = await classifyIntent(
-    message,
-    page?.focus ?? '',
-    lastAssistant?.content ?? undefined,
-  )
+  const classification = immediateClassification
+    ?? await classifyIntent(
+      message,
+      page?.focus ?? '',
+      lastAssistant?.content ?? undefined,
+    )
 
   if (classification.kind === 'action') {
     const result = await executeAction({

@@ -9,10 +9,11 @@ import { LearningControlSelector } from '@/components/setup/LearningControlSelec
 import { CourseDepthSelector } from '@/components/setup/CourseDepthSelector'
 import { KnowledgeLevelSelector } from '@/components/setup/KnowledgeLevelSelector'
 import { LearningPurposeSelector } from '@/components/setup/LearningPurposeSelector'
-import { TeachingStyleSelector, type TeachingStyleChoice } from '@/components/setup/TeachingStyleSelector'
+import { TeachingPersonaSelector } from '@/components/setup/TeachingPersonaSelector'
 import { RecallBreakSelector, type RecallBreakMode } from '@/components/setup/RecallBreakSelector'
 import { GeneratingOverlay } from '@/components/setup/GeneratingOverlay'
 import type { CourseDepth, CourseMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/types'
+import type { TeachingPersonaId } from '@/lib/personas'
 
 type GenerateCourseResponse = {
   jobId?: string
@@ -73,7 +74,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
   const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel>('intermediate')
   const [learningPurpose, setLearningPurpose] = useState<LearningPurpose>('practitioner')
-  const [teachingStyle, setTeachingStyle] = useState<TeachingStyleChoice>('auto')
+  const [teachingPersona, setTeachingPersona] = useState<TeachingPersonaId>('immersive_builder')
   const [recallBreakMode, setRecallBreakMode] = useState<RecallBreakMode>('auto')
   const [recallBreakDuration, setRecallBreakDuration] = useState(10)
   const [previewCurriculum, setPreviewCurriculum] = useState(true)
@@ -146,13 +147,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
     window.history.replaceState(null, '', '/setup')
   }
 
-  async function handleRetry() {
-    setActiveJobId(null)
-    setIsGenerating(false)
-    window.history.replaceState(null, '', '/setup')
-    await startGeneration()
-  }
-
   async function startGeneration() {
     if (goalTooShort) return
 
@@ -188,7 +182,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       formData.append('courseDepth', courseDepth)
       formData.append('knowledgeLevel', knowledgeLevel)
       formData.append('learningPurpose', learningPurpose)
-      formData.append('teachingStyle', teachingStyle)
+      formData.append('teachingPersona', teachingPersona)
       formData.append('previewCurriculum', String(previewCurriculum))
 
       if (sourceFiles) {
@@ -334,7 +328,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
         >
           <KnowledgeLevelSelector value={knowledgeLevel} onChange={setKnowledgeLevel} />
           <LearningPurposeSelector value={learningPurpose} onChange={setLearningPurpose} />
-          <TeachingStyleSelector value={teachingStyle} onChange={setTeachingStyle} />
+          <TeachingPersonaSelector value={teachingPersona} onChange={setTeachingPersona} />
         </SetupSection>
 
         <SetupSection
@@ -372,11 +366,10 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       </form>
 
       {isGenerating && activeJobId ? (
-        <GeneratingOverlay
-          jobId={activeJobId}
-          onCancel={handleCancel}
-          onRetry={handleRetry}
-        />
+          <GeneratingOverlay
+            jobId={activeJobId}
+            onCancel={handleCancel}
+          />
       ) : null}
 
       {topicUnsuitable ? (

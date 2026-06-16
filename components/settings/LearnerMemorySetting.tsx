@@ -22,6 +22,18 @@ type SkillItem = {
   state: string
 }
 
+type ConceptStateItem = {
+  course_id: string
+  concept_key: string
+  label: string
+  stage: string
+  confidence: number
+  freshness: string
+  source: string
+  evidence_count: number
+  evidence_summary: Record<string, number>
+}
+
 type MisconceptionItem = {
   course_id: string
   misconception_key: string
@@ -33,6 +45,7 @@ type MisconceptionItem = {
 type MemoryResponse = {
   memories: MemoryItem[]
   skills: SkillItem[]
+  concept_states: ConceptStateItem[]
   misconceptions: MisconceptionItem[]
   courseTitles: Record<string, string>
 }
@@ -40,9 +53,8 @@ type MemoryResponse = {
 function memoryLabel(key: string) {
   if (key === 'teaching.knowledge_level') return 'Preferred knowledge level'
   if (key === 'teaching.source_coverage') return 'Source coverage'
-  if (key === 'learner.persona') return 'Learner profile'
+  if (key === 'learner.audience') return 'Learner profile'
   if (key === 'learning.comprehension_support') return 'Observed lesson support'
-  if (key.startsWith('teaching.directive.')) return 'Teaching preference'
   return key.replace(/[._-]+/g, ' ')
 }
 
@@ -83,7 +95,7 @@ export function LearnerMemorySetting() {
   const summary = useMemo(() => {
     if (status !== 'authenticated') return 'Sign in to inspect durable learner memory'
     if (!data) return 'Review what TruLurn remembers and uses for personalization'
-    return `${data.memories.length} preferences, ${data.skills.length} assessed skills, ${data.misconceptions.length} active misconceptions`
+    return `${data.memories.length} preferences, ${data.concept_states.length} concept states, ${data.misconceptions.length} active misconceptions`
   }, [data, status])
 
   async function save(memory: MemoryItem) {
@@ -120,6 +132,28 @@ export function LearnerMemorySetting() {
       await load()
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Could not delete memory.')
+      setLoading(false)
+    }
+  }
+
+  async function correctConcept(state: ConceptStateItem, stage: string) {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await fetch('/api/memory', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          courseId: state.course_id,
+          conceptKey: state.concept_key,
+          stage,
+        }),
+      })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || 'Could not correct concept state.')
+      await load()
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not correct concept state.')
       setLoading(false)
     }
   }
@@ -194,10 +228,50 @@ export function LearnerMemorySetting() {
             </section>
           ) : data ? <p className="memory-empty">No durable preferences have been recorded yet.</p> : null}
 
+          {data?.concept_states.length ? (
+            <section>
+              <h3>Concept knowledge</h3>
+              <p>Different evidence types have different strength. Page views and questions establish familiarity; evaluated answers establish understanding, application, or transfer.</p>
+              <div className="memory-record-list">
+                {data.concept_states.slice(0, 24).map((state) => (
+                  <article className="memory-record" key={`${state.course_id}:${state.concept_key}`}>
+                    <div>
+                      <strong>{state.label}</strong>
+                      <small>
+                        {data.courseTitles[state.course_id] ?? 'Course'}
+                        {' · '}
+                        {state.evidence_count} evidence item{state.evidence_count === 1 ? '' : 's'}
+                        {' · '}
+                        {state.freshness}
+                        {' · '}
+                        {state.source.replace(/_/g, ' ')}
+                      </small>
+                    </div>
+                    <div className="memory-record-value">
+                      <select
+                        aria-label={`Correct knowledge state for ${state.label}`}
+                        value={state.stage}
+                        disabled={loading}
+                        onChange={(event) => void correctConcept(state, event.target.value)}
+                      >
+                        <option value="never_encountered">Never encountered</option>
+                        <option value="recognizes">Recognizes</option>
+                        <option value="understands">Understands</option>
+                        <option value="applies">Can apply</option>
+                        <option value="transfers">Can transfer</option>
+                        <option value="forgetting">Forgetting</option>
+                      </select>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {data?.skills.length ? (
             <section>
-              <h3>Assessment-backed skill state</h3>
-              <p>Skill strength comes only from evaluated quiz evidence and fades toward uncertainty over time.</p>
+              <h3>Legacy assessment estimates</h3>
+              <p>These numeric estimates remain available for compatibility while concept knowledge drives lesson personalization.</p>
               <div className="memory-chip-list">
                 {data.skills.slice(0, 12).map((skill) => (
                   <span key={`${skill.course_id}:${skill.skill_key}`}>

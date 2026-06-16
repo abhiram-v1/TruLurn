@@ -29,6 +29,7 @@ import {
   IconFlask,
   IconSparkles,
 } from '@tabler/icons-react'
+import { TruViz } from '@/components/trueviz/TruViz'
 
 SyntaxHighlighter.registerLanguage('python', python)
 SyntaxHighlighter.registerLanguage('sql', sql)
@@ -204,13 +205,17 @@ const components: Components = {
   pre({ children }) {
     return <>{children}</>
   },
-  // Inline code → pill; block code (language-* or multiline) → CodeBlock with highlighting
+  // Inline code → pill; block code → syntax highlight, diagram, or chart renderer
   code({ className, children }) {
     const lang = /language-(\w+)/.exec(className || '')?.[1] || ''
-    const value = String(children)
+    const value = String(children).replace(/\n$/, '')
     const isBlock = Boolean(className?.startsWith('language-')) || value.includes('\n')
     if (isBlock) {
-      return <CodeBlock language={lang} value={value.replace(/\n$/, '')} />
+      // Diagram fences: trueviz (neural-net etc.) and chart (data-chart)
+      if (lang === 'trueviz' || lang === 'chart') {
+        return <TruViz raw={value} />
+      }
+      return <CodeBlock language={lang} value={value} />
     }
     return <code className="md-inline-code">{children}</code>
   },

@@ -2,8 +2,10 @@ import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import { generateAI } from '@/lib/ai'
 import { firstTeachableDescendant, isTeachableTopic, nextRecommendedTeachableTopic, previousTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
-import { resolveStyleFromMessage, STYLE_CATALOG } from '@/lib/ai/skills/lessonStyle'
+import { resolveTeachingPersonaFromMessage, TEACHING_PERSONAS } from '@/lib/personas'
 import type { ActionIntent, UIAction } from '@/types/agent'
+import { recordRegenerationAttempt } from '@/lib/learning/adaptiveLoop'
+import { CIRCUIT_BREAK_MESSAGE } from '@/lib/learning/adaptiveSignals'
 
 type ExecuteActionInput = {
   db: Db
@@ -126,6 +128,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
     }
 
     case 'explain_again': {
+      const loop = await recordRegenerationAttempt(db, courseId, topicId, 'explain_again')
+      if (loop.shouldStop) return { content: CIRCUIT_BREAK_MESSAGE, uiAction: null }
       return {
         content: 'Regenerating this page with a different angle and framing.',
         uiAction: { action: 'regenerate_page', approach: 'explain_again' },
@@ -133,6 +137,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
     }
 
     case 'go_deeper': {
+      const loop = await recordRegenerationAttempt(db, courseId, topicId, 'go_deeper')
+      if (loop.shouldStop) return { content: CIRCUIT_BREAK_MESSAGE, uiAction: null }
       return {
         content: 'Regenerating with more depth and detail.',
         uiAction: { action: 'regenerate_page', approach: 'go_deeper' },
@@ -140,6 +146,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
     }
 
     case 'simplify': {
+      const loop = await recordRegenerationAttempt(db, courseId, topicId, 'simplify')
+      if (loop.shouldStop) return { content: CIRCUIT_BREAK_MESSAGE, uiAction: null }
       return {
         content: 'Generating a simplified version of this page.',
         uiAction: { action: 'regenerate_page', approach: 'simplify' },
@@ -147,6 +155,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
     }
 
     case 'show_example': {
+      const loop = await recordRegenerationAttempt(db, courseId, topicId, 'show_example')
+      if (loop.shouldStop) return { content: CIRCUIT_BREAK_MESSAGE, uiAction: null }
       return {
         content: 'Regenerating with a focus on concrete examples.',
         uiAction: { action: 'regenerate_page', approach: 'show_example' },
@@ -183,21 +193,32 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
       }
     }
 
-    case 'change_lesson_style': {
-      const newStyle = await resolveStyleFromMessage(message)
-      if (!newStyle) {
+    case 'change_teaching_persona': {
+      const persona = resolveTeachingPersonaFromMessage(message)
+      if (!persona) {
         return {
-          content: "I couldn't figure out which style you're after. Try describing what you want — for example: \"make lessons more mathematical\", \"use more code examples\", or \"keep it conceptual and practical\".",
+          content: 'Choose a teaching persona by name: **Immersive Builder** for meaning-to-precision explanations, or **Investigator** for evidence, diagnosis, and hidden mechanisms.',
           uiAction: null,
         }
       }
       await db.collection('courses').updateOne(
         { _id: courseId as any, user_id: input.userId },
-        { $set: { learning_style: newStyle, updated_at: new Date() } },
+        {
+          $set: {
+            teaching_persona: persona,
+            teaching_persona_version: TEACHING_PERSONAS[persona].version,
+            updated_at: new Date(),
+          },
+          $unset: {
+            lesson_style: '',
+            learning_style: '',
+            learning_style_reason: '',
+            style_directives: '',
+          },
+        },
       )
-      const styleName = STYLE_CATALOG[newStyle]?.name ?? newStyle
       return {
-        content: `Done — lessons from here on will use the **${styleName}** style. Pages already generated won't change, but every new page will follow the updated approach.`,
+        content: `Switched to **${TEACHING_PERSONAS[persona].name}**. Existing pages stay unchanged unless regenerated; every new or regenerated page, agent explanation, quiz, and recall cue will use this persona.`,
         uiAction: null,
       }
     }
@@ -212,7 +233,7 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
 
       if (policy === 'guided' || policy === 'strict') {
         return {
-          content: 'I can move you forward after there is some evidence from the current topic. Try the quiz, or ask me what still matters here and I will keep it short.',
+          content: 'I can move you forward after there is some evidence from the current topic. Try the quiz, or ask me what still matters here and I will explain it fully.',
           uiAction: null,
         }
       }

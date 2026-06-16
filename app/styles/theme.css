@@ -256,6 +256,7 @@
 [data-theme='dark'] .roadmap-scroll,
 [data-theme='dark'] .roadmap-rail,
 [data-theme='dark'] .messages,
+[data-theme='dark'] .lcn-list,
 [data-theme='dark'] .markdown-body pre {
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
@@ -264,6 +265,7 @@
 [data-theme='dark'] .roadmap-scroll::-webkit-scrollbar-thumb,
 [data-theme='dark'] .roadmap-rail::-webkit-scrollbar-thumb,
 [data-theme='dark'] .messages::-webkit-scrollbar-thumb,
+[data-theme='dark'] .lcn-list::-webkit-scrollbar-thumb,
 [data-theme='dark'] .markdown-body pre::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   background-clip: padding-box;
@@ -273,6 +275,7 @@
 [data-theme='dark'] .roadmap-scroll::-webkit-scrollbar-thumb:hover,
 [data-theme='dark'] .roadmap-rail::-webkit-scrollbar-thumb:hover,
 [data-theme='dark'] .messages::-webkit-scrollbar-thumb:hover,
+[data-theme='dark'] .lcn-list::-webkit-scrollbar-thumb:hover,
 [data-theme='dark'] .markdown-body pre::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
   background-clip: padding-box;
@@ -350,6 +353,20 @@
 [data-theme='dark'] .tpp-bar,
 [data-theme='dark'] .roadmap-card-progress-track {
   background: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .chart-wrap {
+  box-shadow: none;
+}
+
+[data-theme='dark'] .chart-skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-bg-secondary) 0%,
+    var(--color-surface-elevated) 50%,
+    var(--color-bg-secondary) 100%
+  );
+  background-size: 200% 100%;
 }
 
 [data-theme='dark'] .trueviz-error {

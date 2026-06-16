@@ -1,3 +1,4 @@
+import { aiFetch } from '@/lib/ai/http'
 import type { AIEmbeddingTask } from '@/lib/ai/types'
 
 type GeminiEmbeddingResponse = {
@@ -74,14 +75,14 @@ export async function embedText(
     body.taskType = taskType
   }
 
-  const response = await fetch(`${GEMINI_ENDPOINT}/${model}:embedContent`, {
+  const response = await aiFetch(`${GEMINI_ENDPOINT}/${model}:embedContent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-goog-api-key': apiKey,
     },
     body: JSON.stringify(body),
-  })
+  }, { timeoutMs: Number(process.env.AI_EMBED_TIMEOUT_MS ?? 60_000) })
 
   const data = (await response.json()) as GeminiEmbeddingResponse
 

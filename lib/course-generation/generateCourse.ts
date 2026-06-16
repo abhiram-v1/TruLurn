@@ -1,12 +1,15 @@
 import { generateAI, parseAIJson } from '@/lib/ai'
 import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
-import { determineLessonStyle } from '@/lib/ai/skills/lessonStyle'
-import { deriveLearnerPersona } from '@/lib/personalization/learnerPersona'
+import { deriveLearnerAudience } from '@/lib/personalization/learnerAudience'
 import { formatResearchBrief, researchCurriculum, type CourseResearchReport } from '@/lib/course-generation/research'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
 import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
 import { validateGraph, type ValidatorTopic, type ValidatorEdge } from '@/lib/course-generation/validateGraph'
+import {
+  enforceSourceGroundedCurriculum,
+  enforceSourceGroundedMap,
+} from '@/lib/course-generation/sourceCurriculumIntegrity'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
 
 // Walk the curriculum tree and collect each topic's AI-emitted prerequisite_strength map.
@@ -33,7 +36,7 @@ function buildStrengthMap(curriculum: any): Map<string, Record<string, string>> 
 
 // Validate + repair the candidate prerequisite graph in place on the map, so the
 // AI's hallucinations never reach persistence or the renderer.
-function sanitizeGeneratedMap(map: any, curriculum: any) {
+export function sanitizeGeneratedMap(map: any, curriculum: any) {
   if (!map || !Array.isArray(map.topics) || !map.topics.length) return
   const strengthMap = buildStrengthMap(curriculum)
 
@@ -108,23 +111,17 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     curriculumResearchBrief: formatResearchBrief(researchReport),
   })
   const curriculumText = await generateAI({ feature: 'curriculum_generation', ...curriculumPrompt })
-  const curriculum = parseAIJson<any>(curriculumText)
+  let curriculum = parseAIJson<any>(curriculumText)
+  if (input.mode === 'source_grounded') {
+    curriculum = enforceSourceGroundedCurriculum(curriculum, {
+      sourceText: input.sourceText,
+      sourceProfile: input.sourceProfile,
+    })
+  }
 
-  // Run map build and style determination in parallel — both only need the curriculum.
-  // A user-chosen teaching style skips the pedagogy classifier entirely.
-  const branchTitles = Array.isArray(curriculum?.branches)
-    ? curriculum.branches.map((b: any) => String(b?.title ?? '')).filter(Boolean)
-    : []
-
-  const userPickedStyle = input.teachingStyle && input.teachingStyle !== 'auto'
-  const [mapText, styleResult, learnerPersona] = await Promise.all([
+  const [mapText, learnerAudience] = await Promise.all([
     generateAI({ feature: 'map_generation', ...mapBuilderSkill(curriculum) }),
-    userPickedStyle
-      ? Promise.resolve({ style: input.teachingStyle as any, reason: 'Chosen by the student at course setup.' })
-      : determineLessonStyle(input.goals, curriculum?.title ?? input.topic, branchTitles),
-    // Who is this learner? Derived from the goals + setup signals so lessons,
-    // quizzes, and the agent never default to school-student framing.
-    deriveLearnerPersona({
+    deriveLearnerAudience({
       goals: input.goals,
       knowledgeLevel: input.knowledgeLevel,
       learningPurpose: input.learningPurpose,
@@ -136,14 +133,16 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
 
   // Validate + repair the AI-generated graph topology before anything consumes it.
   sanitizeGeneratedMap(map, curriculum)
+  if (input.mode === 'source_grounded') {
+    enforceSourceGroundedMap(curriculum, map)
+  }
 
   const persisted = await persistGeneratedCourse({
     ...input,
     curriculum,
     map,
-    learningStyle: styleResult.style,
-    learningStyleReason: styleResult.reason,
-    learnerPersona,
+    teachingPersona: input.teachingPersona,
+    learnerAudience,
     researchReport,
   })
 

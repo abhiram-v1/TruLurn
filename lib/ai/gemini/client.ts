@@ -1,3 +1,4 @@
+import { aiFetch } from '@/lib/ai/http'
 import type { AIProviderGenerateInput } from '@/lib/ai/types'
 
 type GeminiPart = { text: string }
@@ -16,6 +17,12 @@ type GeminiResponse = {
   error?: {
     message?: string
   }
+  usageMetadata?: {
+    promptTokenCount?: number
+    candidatesTokenCount?: number
+    totalTokenCount?: number
+    cachedContentTokenCount?: number
+  }
 }
 
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -24,6 +31,8 @@ export async function generateWithGemini({
   system,
   user,
   model,
+  auditFeature,
+  onUsage,
   responseMimeType = 'application/json',
   signal,
 }: AIProviderGenerateInput): Promise<string> {
@@ -45,7 +54,7 @@ export async function generateWithGemini({
     },
   ]
 
-  const response = await fetch(`${GEMINI_ENDPOINT}/${selectedModel}:generateContent`, {
+  const response = await aiFetch(`${GEMINI_ENDPOINT}/${selectedModel}:generateContent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -60,13 +69,33 @@ export async function generateWithGemini({
         responseMimeType,
       },
     }),
-    signal,
-  })
+  }, { signal })
 
   const data = (await response.json()) as GeminiResponse
 
   if (!response.ok) {
     throw new Error(data.error?.message ?? `Gemini request failed with status ${response.status}`)
+  }
+
+  if (process.env.LOG_AI_USAGE === '1' && data.usageMetadata) {
+    console.info(JSON.stringify({
+      event: 'ai_usage',
+      provider: 'gemini',
+      feature: auditFeature ?? 'unknown',
+      model: selectedModel,
+      input_tokens: data.usageMetadata.promptTokenCount ?? 0,
+      cached_input_tokens: data.usageMetadata.cachedContentTokenCount ?? 0,
+      output_tokens: data.usageMetadata.candidatesTokenCount ?? 0,
+      total_tokens: data.usageMetadata.totalTokenCount ?? 0,
+    }))
+  }
+  if (data.usageMetadata) {
+    onUsage?.({
+      inputTokens: data.usageMetadata.promptTokenCount ?? 0,
+      cachedInputTokens: data.usageMetadata.cachedContentTokenCount ?? 0,
+      outputTokens: data.usageMetadata.candidatesTokenCount ?? 0,
+      totalTokens: data.usageMetadata.totalTokenCount ?? 0,
+    })
   }
 
   const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text).join('\n').trim()

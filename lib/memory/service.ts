@@ -5,9 +5,17 @@ import type {
   LearnerMemoryKind,
   LearnerMemoryRecord,
   LearnerMemoryStatus,
+  LearnerConceptState,
   LearnerMisconceptionState,
   LearnerSkillState,
 } from '@/lib/memory/types'
+import {
+  deriveConceptKnowledgeEstimate,
+  normalizeConceptKey,
+  type ConceptEvidence,
+  type ConceptEvidenceKind,
+  type ConceptKnowledgeStage,
+} from '@/lib/personalization/conceptKnowledge'
 
 const MEMORY_SCHEMA_VERSION = 'learner-memory-v2'
 const MEMORY_SYNC_TTL_MS = 10 * 60 * 1000
@@ -123,17 +131,31 @@ export async function upsertLearnerMemory(db: Db, input: MemoryInput) {
       ...((active.evidence_refs as string[] | undefined) ?? []),
       ...(input.evidenceRefs ?? []),
     ])].slice(-50)
+    // Re-confirmation of the same value by a higher-authority source should
+    // upgrade the authority (and stop decay when it becomes explicit/setting),
+    // not just bump confidence. Otherwise a fact the user later states explicitly
+    // keeps decaying as if it were still a single inference.
+    const activeRank = AUTHORITY_RANK[String(active.authority) as LearnerMemoryAuthority] ?? 0
+    const upgradeAuthority = AUTHORITY_RANK[input.authority] > activeRank
+    const authorityFields = upgradeAuthority
+      ? {
+          authority: input.authority,
+          source: input.source,
+          half_life_days: input.halfLifeDays ?? null,
+        }
+      : {}
     await collection.updateOne(
       { _id: active._id },
       {
         $set: {
           confidence: Math.max(Number(active.confidence ?? 0), clamp(input.confidence)),
           evidence_refs: evidenceRefs,
+          ...authorityFields,
           updated_at: now,
         },
       },
     )
-    return { id: String(active._id), status: 'active' as const, changed: false }
+    return { id: String(active._id), status: 'active' as const, changed: upgradeAuthority }
   }
 
   const incomingRank = AUTHORITY_RANK[input.authority]
@@ -277,39 +299,24 @@ export async function recordExplicitCourseMemories({
       source: 'course.source_coverage_preference',
     }))
   }
-  if (course.learner_persona?.label) {
-    const personaInput: MemoryInput = {
+  const learnerAudience = course.learner_audience ?? course.learner_persona
+  if (learnerAudience?.label) {
+    const audienceInput: MemoryInput = {
       userId,
       courseId,
       kind: 'profile',
-      key: 'learner.persona',
-      value: String(course.learner_persona.label),
-      confidence: course.learner_persona.source === 'stated' ? 1 : 0.55,
-      authority: course.learner_persona.source === 'stated'
+      key: 'learner.audience',
+      value: String(learnerAudience.label),
+      confidence: learnerAudience.source === 'stated' ? 1 : 0.55,
+      authority: learnerAudience.source === 'stated'
         ? 'explicit_user'
         : 'single_inference',
-      source: `course.learner_persona.${course.learner_persona.source ?? 'derived'}`,
-      halfLifeDays: course.learner_persona.source === 'stated' ? null : 120,
+      source: `course.learner_audience.${learnerAudience.source ?? 'derived'}`,
+      halfLifeDays: learnerAudience.source === 'stated' ? null : 120,
     }
-    writes.push(course.learner_persona.source === 'stated'
-      ? upsertLearnerMemory(db, personaInput)
-      : upsertMemoryCandidate(db, personaInput))
-  }
-  const directives = Array.isArray(course.style_directives)
-    ? course.style_directives.map(String).filter(Boolean)
-    : []
-  for (const directive of directives.slice(-5)) {
-    const directiveKey = crypto.createHash('sha1').update(normalizeMemoryValue(directive)).digest('hex').slice(0, 12)
-    writes.push(upsertLearnerMemory(db, {
-      userId,
-      courseId,
-      kind: 'preference',
-      key: `teaching.directive.${directiveKey}`,
-      value: directive,
-      confidence: 1,
-      authority: 'explicit_user',
-      source: 'course.style_directives',
-    }))
+    writes.push(learnerAudience.source === 'stated'
+      ? upsertLearnerMemory(db, audienceInput)
+      : upsertMemoryCandidate(db, audienceInput))
   }
   await Promise.all(writes)
 }
@@ -543,6 +550,213 @@ async function reconcileAssessmentState(db: Db, userId: string, courseId: string
   }
 }
 
+function evidenceDate(value: unknown) {
+  const date = new Date(value as any)
+  return Number.isFinite(date.getTime()) ? date : new Date(0)
+}
+
+async function reconcileConceptKnowledgeState(db: Db, userId: string, courseId: string) {
+  const [studySessions, recallSessions, doubtMessages, feedback, examTurns, topics] = await Promise.all([
+    db.collection('studySessions')
+      .find({ user_id: userId, course_id: courseId })
+      .sort({ updated_at: -1 })
+      .limit(40)
+      .project({ pages: 1 })
+      .toArray(),
+    db.collection('recallSessions')
+      .find({ user_id: userId, course_id: courseId, status: 'completed' })
+      .sort({ completed_at: -1 })
+      .limit(30)
+      .project({ items: 1, reviewed_item_ids: 1, completed_at: 1 })
+      .toArray(),
+    db.collection('doubtMessages')
+      .find({ user_id: userId, course_id: courseId, role: 'user' })
+      .sort({ created_at: -1 })
+      .limit(120)
+      .project({ topic_id: 1, content: 1, created_at: 1 })
+      .toArray(),
+    db.collection('lessonFeedback')
+      .find({ user_id: userId, course_id: courseId })
+      .sort({ updated_at: -1 })
+      .limit(120)
+      .project({ topic_id: 1, signal: 1, updated_at: 1, created_at: 1 })
+      .toArray(),
+    db.collection('examTurns')
+      .find({
+        user_id: userId,
+        course_id: courseId,
+        status: 'evaluated',
+        evaluation: { $exists: true },
+      })
+      .sort({ evaluated_at: -1 })
+      .limit(300)
+      .project({
+        topic_id: 1,
+        concept: 1,
+        roadmap_node_id: 1,
+        type: 1,
+        difficulty: 1,
+        evaluation: 1,
+        evaluated_at: 1,
+      })
+      .toArray(),
+    db.collection('topics')
+      .find({ course_id: courseId })
+      .project({ title: 1, key_concepts: 1 })
+      .toArray(),
+  ])
+
+  const topicMap = new Map(topics.map((topic) => [String(topic._id), topic]))
+  const evidenceByConcept = new Map<string, {
+    label: string
+    topicId: string | null
+    evidence: ConceptEvidence[]
+  }>()
+  const add = (
+    labelValue: unknown,
+    topicId: string | null,
+    evidence: ConceptEvidence,
+  ) => {
+    const label = String(labelValue ?? '').trim()
+    const key = normalizeConceptKey(label)
+    if (!key) return
+    const current = evidenceByConcept.get(key) ?? { label, topicId, evidence: [] }
+    current.label = label || current.label
+    current.topicId = topicId ?? current.topicId
+    if (!current.evidence.some((item) => item.id === evidence.id)) current.evidence.push(evidence)
+    evidenceByConcept.set(key, current)
+  }
+
+  for (const session of studySessions) {
+    for (const page of (session.pages as any[]) ?? []) {
+      const topicId = page.topic_id ? String(page.topic_id) : null
+      const labels = Array.isArray(page.key_concepts) && page.key_concepts.length
+        ? page.key_concepts
+        : [page.topic_title]
+      for (const label of labels) {
+        add(label, topicId, {
+          id: `page:${session._id}:${topicId}:${page.page_number}:${normalizeConceptKey(label)}`,
+          kind: 'lesson_view',
+          successful: null,
+          weight: 0.25,
+          observed_at: evidenceDate(page.first_viewed_at),
+        })
+      }
+    }
+  }
+
+  for (const session of recallSessions) {
+    const reviewed = new Set(((session.reviewed_item_ids as string[]) ?? []).map(String))
+    for (const item of (session.items as any[]) ?? []) {
+      if (!reviewed.has(String(item.id))) continue
+      add(item.concept, item.topic_id ? String(item.topic_id) : null, {
+        id: `recall:${session._id}:${item.id}`,
+        kind: 'recall_prompt',
+        successful: null,
+        weight: 0.35,
+        observed_at: evidenceDate(session.completed_at),
+      })
+    }
+  }
+
+  for (const message of doubtMessages) {
+    const topicId = message.topic_id ? String(message.topic_id) : null
+    const topic = topicId ? topicMap.get(topicId) : null
+    const content = String(message.content ?? '').toLowerCase()
+    const candidates = [
+      ...((topic?.key_concepts as unknown[]) ?? []),
+      topic?.title,
+    ].map(String).filter(Boolean)
+    const matched = candidates.filter((label) => content.includes(label.toLowerCase()))
+    for (const label of matched.length ? matched : candidates.slice(0, 1)) {
+      add(label, topicId, {
+        id: `chat:${message._id}:${normalizeConceptKey(label)}`,
+        kind: 'chat_discussion',
+        successful: null,
+        weight: 0.2,
+        observed_at: evidenceDate(message.created_at),
+      })
+    }
+  }
+
+  for (const item of feedback) {
+    const topicId = item.topic_id ? String(item.topic_id) : null
+    const topic = topicId ? topicMap.get(topicId) : null
+    const labels = ((topic?.key_concepts as unknown[]) ?? []).map(String)
+    const candidates = labels.length ? labels : [String(topic?.title ?? '')]
+    for (const label of candidates.slice(0, 8)) {
+      add(label, topicId, {
+        id: `feedback:${item._id}:${normalizeConceptKey(label)}`,
+        kind: 'lesson_feedback',
+        successful: item.signal === 'got_it' || item.signal === 'too_basic'
+          ? true
+          : item.signal === 'lost_me'
+            ? false
+            : null,
+        weight: 0.2,
+        observed_at: evidenceDate(item.updated_at ?? item.created_at),
+      })
+    }
+  }
+
+  for (const turn of examTurns) {
+    const label = String(turn.concept ?? turn.roadmap_node_id ?? '').trim()
+    const type = String(turn.type ?? 'explain')
+    const difficulty = Number(turn.difficulty ?? 1)
+    let kind: ConceptEvidenceKind = 'assessment_recall'
+    if (type === 'explain') kind = 'assessment_explain'
+    else if (type === 'apply' || type === 'code' || type === 'spot_error') {
+      kind = difficulty >= 4 ? 'assessment_transfer' : 'assessment_apply'
+    }
+    add(label, turn.topic_id ? String(turn.topic_id) : null, {
+      id: `assessment:${turn._id}`,
+      kind,
+      successful: Boolean((turn.evaluation as any)?.passed),
+      weight: clamp(0.8 + difficulty * 0.15, 0.8, 1.6),
+      observed_at: evidenceDate(turn.evaluated_at),
+    })
+  }
+
+  const existingStates = await db.collection('learnerConceptStates')
+    .find({ user_id: userId, course_id: courseId })
+    .toArray()
+  const existingMap = new Map(existingStates.map((state) => [String(state.concept_key), state]))
+  const now = new Date()
+
+  for (const [conceptKey, entry] of evidenceByConcept) {
+    const estimate = deriveConceptKnowledgeEstimate(entry.evidence, now)
+    const existing = existingMap.get(conceptKey)
+    const overrideStage = existing?.user_override_stage as ConceptKnowledgeStage | undefined
+    await db.collection('learnerConceptStates').updateOne(
+      { user_id: userId, course_id: courseId, concept_key: conceptKey },
+      {
+        $set: {
+          label: entry.label,
+          topic_id: entry.topicId,
+          stage: overrideStage ?? estimate.stage,
+          confidence: overrideStage ? 1 : estimate.confidence,
+          freshness: estimate.freshness,
+          source: overrideStage ? 'explicit_user' : estimate.source,
+          evidence_count: estimate.evidence_count,
+          evidence_summary: estimate.evidence_summary,
+          evidence_refs: entry.evidence.map((item) => item.id).slice(-100),
+          last_evidence_at: estimate.last_evidence_at,
+          schema_version: MEMORY_SCHEMA_VERSION,
+          updated_at: now,
+        },
+        $setOnInsert: {
+          _id: crypto.randomUUID() as any,
+          user_id: userId,
+          course_id: courseId,
+          concept_key: conceptKey,
+          created_at: now,
+        },
+      },
+      { upsert: true },
+    )
+  }
+}
+
 async function expireDecayedMemories(db: Db, userId: string, courseId: string) {
   const candidates = await db.collection('learnerMemories')
     .find({
@@ -602,6 +816,7 @@ export async function syncLearnerMemoryV2({
   await Promise.all([
     reconcileBehavioralCandidates(db, userId, courseId),
     reconcileAssessmentState(db, userId, courseId),
+    reconcileConceptKnowledgeState(db, userId, courseId),
     expireDecayedMemories(db, userId, courseId),
   ])
 
@@ -620,10 +835,13 @@ export async function getLearnerMemorySnapshot(
   db: Db,
   userId: string,
   courseId?: string,
+  options: { sync?: boolean } = {},
 ) {
-  if (courseId) await syncLearnerMemoryV2({ db, userId, courseId })
+  if (courseId && options.sync !== false) {
+    await syncLearnerMemoryV2({ db, userId, courseId })
+  }
   const scope = { user_id: userId, ...(courseId ? { course_id: courseId } : {}) }
-  const [memories, skills, misconceptions] = await Promise.all([
+  const [memories, skills, conceptStates, misconceptions] = await Promise.all([
     db.collection('learnerMemories')
       .find({ ...scope, status: 'active' })
       .sort({ updated_at: -1 })
@@ -633,6 +851,11 @@ export async function getLearnerMemorySnapshot(
       .find(scope)
       .sort({ effective_mastery: 1, updated_at: -1 })
       .limit(100)
+      .toArray(),
+    db.collection('learnerConceptStates')
+      .find(scope)
+      .sort({ updated_at: -1 })
+      .limit(200)
       .toArray(),
     db.collection('learnerMisconceptionStates')
       .find({ ...scope, status: 'active' })
@@ -694,6 +917,21 @@ export async function getLearnerMemorySnapshot(
         last_assessed_at: skill.last_assessed_at ? new Date(skill.last_assessed_at) : null,
       }
     }) as LearnerSkillState[],
+    concept_states: conceptStates.map((state) => ({
+      course_id: String(state.course_id),
+      concept_key: String(state.concept_key),
+      label: String(state.label),
+      topic_id: state.topic_id ? String(state.topic_id) : null,
+      stage: state.stage,
+      confidence: Number(state.confidence ?? 0),
+      freshness: state.freshness ?? 'unknown',
+      source: state.source ?? 'observed',
+      evidence_count: Number(state.evidence_count ?? 0),
+      evidence_summary: state.evidence_summary ?? {},
+      evidence_refs: state.evidence_refs ?? [],
+      last_evidence_at: state.last_evidence_at ? new Date(state.last_evidence_at) : null,
+      updated_at: new Date(state.updated_at),
+    })) as LearnerConceptState[],
     misconceptions: misconceptions.map((item) => ({
       course_id: String(item.course_id),
       misconception_key: String(item.misconception_key),
@@ -795,22 +1033,8 @@ export async function correctLearnerMemory({
       update.knowledge_level = String(value)
     } else if (key === 'teaching.source_coverage' && ['complete', 'smart', 'core'].includes(String(value))) {
       update.source_coverage_preference = String(value)
-    } else if (key === 'learner.persona') {
-      update.learner_persona = { label: String(value).slice(0, 120), directive: '', source: 'stated' }
-    } else if (key.startsWith('teaching.directive.')) {
-      const course = await db.collection('courses').findOne(
-        { _id: courseId as any, user_id: userId },
-        { projection: { style_directives: 1 } },
-      )
-      const directives = Array.isArray(course?.style_directives)
-        ? course.style_directives.map(String)
-        : []
-      update.style_directives = directives
-        .map((directive) =>
-          normalizeMemoryValue(directive) === String(existing.normalized_value)
-            ? String(value).slice(0, 300)
-            : directive)
-        .slice(-5)
+    } else if (key === 'learner.audience') {
+      update.learner_audience = { label: String(value).slice(0, 120), directive: '', source: 'stated' }
     }
     await db.collection('courses').updateOne(
       { _id: courseId as any, user_id: userId },
@@ -819,6 +1043,66 @@ export async function correctLearnerMemory({
     await db.collection('learnerProfiles').deleteOne({ user_id: userId, course_id: courseId })
   }
   return result
+}
+
+export async function correctLearnerConceptState({
+  db,
+  userId,
+  courseId,
+  conceptKey,
+  stage,
+}: {
+  db: Db
+  userId: string
+  courseId: string
+  conceptKey: string
+  stage: ConceptKnowledgeStage
+}) {
+  const allowed: ConceptKnowledgeStage[] = [
+    'never_encountered',
+    'recognizes',
+    'understands',
+    'applies',
+    'transfers',
+    'forgetting',
+  ]
+  if (!allowed.includes(stage)) throw new Error('Invalid concept knowledge stage.')
+  const existing = await db.collection('learnerConceptStates').findOne({
+    user_id: userId,
+    course_id: courseId,
+    concept_key: conceptKey,
+  })
+  if (!existing) return null
+  const now = new Date()
+  await db.collection('learnerConceptStates').updateOne(
+    { _id: existing._id },
+    {
+      $set: {
+        stage,
+        confidence: 1,
+        source: 'explicit_user',
+        user_override_stage: stage,
+        user_override_at: now,
+        updated_at: now,
+      },
+    },
+  )
+  await Promise.all([
+    db.collection('learnerProfiles').deleteOne({ user_id: userId, course_id: courseId }),
+    db.collection('learningEvents').insertOne({
+      _id: crypto.randomUUID() as any,
+      user_id: userId,
+      course_id: courseId,
+      topic_id: existing.topic_id ?? null,
+      event_type: 'learner_concept_state_corrected',
+      concept_key: conceptKey,
+      concept_label: existing.label,
+      previous_stage: existing.stage,
+      corrected_stage: stage,
+      created_at: now,
+    }),
+  ])
+  return { conceptKey, stage }
 }
 
 export async function deleteLearnerMemory(db: Db, userId: string, memoryId: string) {
@@ -853,15 +1137,10 @@ export async function deleteLearnerMemory(db: Db, userId: string, memoryId: stri
         { _id: courseId as any, user_id: userId },
         { $unset: { source_coverage_preference: '' }, $set: { updated_at: now } },
       )
-    } else if (key === 'learner.persona') {
+    } else if (key === 'learner.audience') {
       await db.collection('courses').updateOne(
         { _id: courseId as any, user_id: userId },
-        { $unset: { learner_persona: '' }, $set: { updated_at: now } },
-      )
-    } else if (key.startsWith('teaching.directive.')) {
-      await db.collection('courses').updateOne(
-        { _id: courseId as any, user_id: userId },
-        { $pull: { style_directives: memory.value }, $set: { updated_at: now } },
+        { $unset: { learner_audience: '', learner_persona: '' }, $set: { updated_at: now } },
       )
     }
     await Promise.all([

@@ -16,7 +16,7 @@ import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfil
 // correctable mid-course through the in-app agent ("I'm actually a teacher
 // preparing lessons") — generators read it fresh on every call.
 
-export type LearnerPersona = {
+export type LearnerAudienceProfile = {
   /** Who this learner is, e.g. "working backend engineer moving into ML". */
   label: string
   /** Writer-ready guidance: framing, example worlds, stakes, what to avoid. */
@@ -30,7 +30,7 @@ export type LearnerPersona = {
  * fail-open: course generation proceeds without a persona on any failure,
  * and generators fall back to an assumption-free audience directive.
  */
-export async function deriveLearnerPersona({
+export async function deriveLearnerAudience({
   goals,
   knowledgeLevel,
   learningPurpose,
@@ -40,14 +40,14 @@ export async function deriveLearnerPersona({
   knowledgeLevel?: string | null
   learningPurpose?: string | null
   sourceProfile?: SourceTeachingProfile | null
-}): Promise<LearnerPersona | null> {
+}): Promise<LearnerAudienceProfile | null> {
   try {
     const sourceHint = sourceProfile
       ? `\nThey uploaded study material profiled as: ${sourceProfile.document_type}, educational level "${sourceProfile.educational_level}", subject "${sourceProfile.subject_domain}".`
       : ''
 
     const text = await generateAI({
-      feature: 'learner_persona',
+      feature: 'learner_audience',
       system: `You infer who a learner is from how they describe their learning goal, so an AI tutor can address them appropriately. People who use this app include working professionals, hobbyists, career switchers, school and university students, educators preparing to teach, researchers, parents, retirees — never assume any one of these by default. Return only valid JSON.`,
       user: `The learner wrote this goal:
 """${goals.slice(0, 1200)}"""
@@ -77,13 +77,13 @@ Rules:
 
     return { label: label.slice(0, 120), directive: directive.slice(0, 600), source: 'derived' }
   } catch (error) {
-    console.warn('[learnerPersona] Derivation failed — continuing without a persona.', error)
+    console.warn('[learnerAudience] Derivation failed - continuing without an audience profile.', error)
     return null
   }
 }
 
 /** Validate a persona-shaped value read back from the course document. */
-export function normalizePersona(raw: unknown): LearnerPersona | null {
+export function normalizeLearnerAudience(raw: unknown): LearnerAudienceProfile | null {
   if (!raw || typeof raw !== 'object') return null
   const value = raw as Record<string, unknown>
   const label = String(value.label ?? '').trim()
@@ -102,10 +102,10 @@ export function normalizePersona(raw: unknown): LearnerPersona | null {
  * to their historical school-student framing.
  */
 export function buildAudienceDirective(
-  persona: LearnerPersona | null | undefined,
+  audience: LearnerAudienceProfile | null | undefined,
   goals?: string | null,
 ): string {
-  const normalized = normalizePersona(persona)
+  const normalized = normalizeLearnerAudience(audience)
   if (normalized) {
     return [
       'AUDIENCE — WHO THIS LEARNER IS:',

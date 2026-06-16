@@ -19,6 +19,54 @@ function isBlankGeneratedPage(page: any) {
   return content.length < 60 && sectionContent.length < 60
 }
 
+function cleanConceptLabel(value: unknown) {
+  const label = String(value ?? '')
+    .replace(/[`*_~#[\]()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!label) return ''
+  if (/^(introduction|overview|core concepts|explanation|what comes next|summary)$/i.test(label)) return ''
+  return label.length > 72 ? `${label.slice(0, 69).trim()}...` : label
+}
+
+function addConcept(labels: string[], seen: Set<string>, value: unknown) {
+  const label = cleanConceptLabel(value)
+  if (!label) return
+  const key = label.toLowerCase()
+  if (seen.has(key)) return
+  seen.add(key)
+  labels.push(label)
+}
+
+function headingConcepts(markdown: unknown) {
+  const text = String(markdown ?? '')
+  const matches = Array.from(text.matchAll(/^#{2,3}\s+(.+)$/gm))
+  return matches.map((match) => match[1])
+}
+
+function collectPageConcepts(storedPage: any) {
+  const labels: string[] = []
+  const seen = new Set<string>()
+
+  for (const concept of Array.isArray(storedPage.key_concepts) ? storedPage.key_concepts : []) {
+    addConcept(labels, seen, concept)
+  }
+  for (const concept of Array.isArray(storedPage.covered_concepts) ? storedPage.covered_concepts : []) {
+    addConcept(labels, seen, concept)
+  }
+  const authorityConcepts = storedPage.generation_authority?.sequence?.concepts
+  for (const concept of Array.isArray(authorityConcepts) ? authorityConcepts : []) {
+    addConcept(labels, seen, concept)
+  }
+  for (const section of Array.isArray(storedPage.sections) ? storedPage.sections : []) {
+    for (const heading of headingConcepts(section?.content)) addConcept(labels, seen, heading)
+  }
+  for (const heading of headingConcepts(storedPage.content)) addConcept(labels, seen, heading)
+
+  if (!labels.length) addConcept(labels, seen, `Page ${storedPage.page_number}`)
+  return labels.slice(0, 6)
+}
+
 export default async function LearnTopicPage({
   params,
   searchParams,
@@ -26,33 +74,30 @@ export default async function LearnTopicPage({
   params: { courseId: string; topicId: string }
   searchParams?: { page?: string }
 }) {
-  const db = await getDb()
-  const userId = await getRequiredUserId()
+  const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
 
-  // 1. Fetch Course
-  const course = await db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId })
+  const topicId = decodeURIComponent(params.topicId)
+  const [course, topic] = await Promise.all([
+    db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId }),
+    db.collection('topics').findOne({
+      _id: topicId as any,
+      course_id: params.courseId,
+    }),
+  ])
   if (!course) {
     return <div style={{ padding: 40 }}>Course not found.</div>
   }
 
   // Decode the topicId — Next.js Link encodes colons (%3A) in path segments
-  const topicId = decodeURIComponent(params.topicId)
-
-  // 2. Fetch Topic
-  const topic = await db.collection('topics').findOne({
-    _id: topicId as any,
-    course_id: params.courseId,
-  })
   if (!topic) {
     return <div style={{ padding: 40 }}>Topic not found.</div>
   }
 
-  const branchTopics = await db.collection('topics')
-    .find({ course_id: params.courseId, branch_id: topic.branch_id })
-    .sort({ sequence_index: 1, position: 1 })
-    .toArray()
-
   if (isContainerTopic(topic)) {
+    const branchTopics = await db.collection('topics')
+      .find({ course_id: params.courseId, branch_id: topic.branch_id })
+      .sort({ sequence_index: 1, position: 1 })
+      .toArray()
     const descendant = firstTeachableDescendant(branchTopics as any, topicId)
     if (descendant) {
       // If the container is active but its first leaf is still locked, the map builder
@@ -75,147 +120,57 @@ export default async function LearnTopicPage({
   const estimatedPages = Math.max(1, plannedPages ?? Number(topic.estimated_pages ?? topic.total_pages_planned ?? 1))
 
   if (topic.state === 'locked') {
-    // Auto-repair: if any ancestor container is active, this leaf should also be active.
-    // This happens when the map builder designated a container as the active node at
-    // course creation — the container got activated but its leaf children didn't.
-    // Activate the leaf now and redirect to self so the lesson renders normally.
-    const ancestorIds: string[] = Array.isArray(topic.path_ids)
-      ? topic.path_ids.map(String).filter((id) => id !== topicId)
-      : []
-    if (ancestorIds.length > 0) {
-      const activeAncestor = await db.collection('topics').findOne({
-        _id: { $in: ancestorIds as any[] },
-        course_id: params.courseId,
-        state: 'active',
-      })
-      if (activeAncestor) {
-        await db.collection('topics').updateOne(
-          { _id: topicId as any, course_id: params.courseId },
-          { $set: { state: 'active', updated_at: new Date() } },
-        )
-        redirect(`/learn/${params.courseId}/${encodeURIComponent(topicId)}`)
-      }
-    }
-
-    // ── Guidance: resolve prerequisites and find the nearest topic to start with ──
-    // Fetch the whole course's topic graph (small) so we can name prerequisites and
-    // walk the prerequisite chain back to something the student can actually open.
-    const allTopics = await db.collection('topics')
-      .find({ course_id: params.courseId })
-      .project({ _id: 1, title: 1, state: 1, prerequisites: 1 })
-      .toArray()
-    const topicById = new Map(allTopics.map((t) => [String(t._id), t]))
-
-    // Direct prerequisites of this locked topic, with their titles + states.
-    const directPrereqs = (Array.isArray(topic.prerequisites) ? topic.prerequisites : [])
-      .map((id: string) => topicById.get(String(id)))
-      .filter(Boolean) as Array<{ _id: string; title: string; state: string }>
-
-    // Backward BFS through prerequisites to find the nearest OPENABLE topic
-    // (active, or any non-locked state). This is the concrete "do this first" target.
-    function findNearestOpenable(startId: string): { _id: string; title: string } | null {
-      const queue: string[] = [...((topicById.get(startId)?.prerequisites ?? []).map(String))]
-      const seen = new Set<string>([startId])
-      while (queue.length) {
-        const cur = queue.shift()!
-        if (seen.has(cur)) continue
-        seen.add(cur)
-        const node = topicById.get(cur)
-        if (!node) continue
-        if (String(node.state) !== 'locked') {
-          return { _id: String(node._id), title: String(node.title) }
-        }
-        for (const p of node.prerequisites ?? []) queue.push(String(p))
-      }
-      return null
-    }
-
-    // Best target: a non-locked direct prerequisite, else nearest openable up the chain,
-    // else the course's current active topic as a safe "continue here" fallback.
-    let startHere = directPrereqs.find((p) => String(p.state) !== 'locked') ?? null
-    let startHereResolved = startHere
-      ? { _id: String(startHere._id), title: String(startHere.title) }
-      : findNearestOpenable(topicId)
-    if (!startHereResolved) {
-      const activeTopic = allTopics.find((t) => String(t.state) === 'active')
-      if (activeTopic) startHereResolved = { _id: String(activeTopic._id), title: String(activeTopic.title) }
-    }
-
-    return (
-      <main className="missing-page-shell">
-        <section className="missing-page-panel">
-          <p className="eyebrow">Locked topic</p>
-          <h1 className="page-heading">{topic.title}</h1>
-          <p className="page-subtitle">
-            This topic builds on earlier material. Finish what it depends on first and it unlocks automatically.
-          </p>
-
-          {directPrereqs.length > 0 && (
-            <div className="locked-prereq-list">
-              <span className="locked-prereq-label">Depends on</span>
-              {directPrereqs.map((p) => (
-                <div key={String(p._id)} className={`locked-prereq-item ${String(p.state) !== 'locked' ? 'ready' : 'pending'}`}>
-                  <span className="locked-prereq-dot" />
-                  <span className="locked-prereq-title">{p.title}</span>
-                  <span className="locked-prereq-state">
-                    {String(p.state) === 'locked' ? 'Locked' : String(p.state) === 'active' ? 'In progress' : 'Done'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <div className="locked-actions">
-            {startHereResolved && (
-              <Link
-                className="button"
-                href={`/learn/${params.courseId}/${encodeURIComponent(startHereResolved._id)}`}
-              >
-                Start with: {startHereResolved.title} →
-              </Link>
-            )}
-            <Link className="button-subtle" href={`/course/${params.courseId}`}>
-              Back to Atlas
-            </Link>
-          </div>
-        </section>
-        <BottomNav courseId={params.courseId} />
-      </main>
+    // Topics are open for free navigation — the quiz system tracks mastery but never
+    // gates lesson access. Auto-activate and reload so the lesson renders normally.
+    await db.collection('topics').updateOne(
+      { _id: topicId as any, course_id: params.courseId },
+      { $set: { state: 'active', updated_at: new Date() } },
     )
+    redirect(`/learn/${params.courseId}/${encodeURIComponent(topicId)}`)
   }
 
-  const courseTopics = await db.collection('topics')
-    .find({ course_id: params.courseId })
-    .project({
-      title: 1,
-      state: 1,
-      branch_id: 1,
-      branch_position: 1,
-      position: 1,
-      planned_pages: 1,
-      estimated_pages: 1,
-      total_pages_planned: 1,
-      node_type: 1,
-      children_count: 1,
-      sequence_index: 1,
-      created_at: 1,
-    })
-    .sort({ branch_position: 1, branch_id: 1, sequence_index: 1, position: 1, created_at: 1 })
-    .toArray()
-  const courseBranches = await db.collection('branches')
-    .find({ course_id: params.courseId })
-    .project({ _id: 1, branch_key: 1, position: 1, created_at: 1 })
-    .sort({ created_at: 1 })
-    .toArray()
+  const [branchTopics, courseTopics, courseBranches, allRawPages, messages] = await Promise.all([
+    db.collection('topics')
+      .find({ course_id: params.courseId, branch_id: topic.branch_id })
+      .sort({ sequence_index: 1, position: 1 })
+      .toArray(),
+    db.collection('topics')
+      .find({ course_id: params.courseId })
+      .project({
+        title: 1,
+        state: 1,
+        branch_id: 1,
+        branch_position: 1,
+        position: 1,
+        planned_pages: 1,
+        estimated_pages: 1,
+        total_pages_planned: 1,
+        node_type: 1,
+        children_count: 1,
+        sequence_index: 1,
+        created_at: 1,
+      })
+      .sort({ branch_position: 1, branch_id: 1, sequence_index: 1, position: 1, created_at: 1 })
+      .toArray(),
+    db.collection('branches')
+      .find({ course_id: params.courseId })
+      .project({ _id: 1, branch_key: 1, position: 1, created_at: 1 })
+      .sort({ created_at: 1 })
+      .toArray(),
+    db.collection('pages')
+      .find({ course_id: params.courseId, topic_id: topicId })
+      .sort({ page_number: 1 })
+      .toArray(),
+    db.collection('doubtMessages')
+      .find({ course_id: params.courseId, user_id: userId })
+      .sort({ created_at: -1 })
+      .limit(50)
+      .toArray(),
+  ])
   const orderedCourseTopics = sortCourseTopics(courseTopics, courseBranches)
 
   // 4. Fetch Pages for this topic — deduplicate by page_number (keeps first stored copy
   //    per number to guard against any concurrent-generation duplicates in MongoDB).
-  const allRawPages = await db.collection('pages')
-    .find({ course_id: params.courseId, topic_id: topicId })
-    .sort({ page_number: 1 })
-    .toArray()
-
   const seenPageNumbers = new Set<number>()
   const pages = allRawPages.filter((p) => {
     if (seenPageNumbers.has(p.page_number)) return false
@@ -273,21 +228,8 @@ export default async function LearnTopicPage({
     )
   }
 
-  // 6. Fetch recent course-level Doubt Messages. Each message still stores
-  // topic/page context, but the chat should feel continuous across the course.
-  const messages = await db.collection('doubtMessages')
-    .find({ course_id: params.courseId, user_id: userId })
-    .sort({ created_at: -1 })
-    .limit(50)
-    .toArray()
-
-  const messageTopicIds = [...new Set(messages.map((m) => String(m.topic_id)))]
-  const messageTopics = await db.collection('topics')
-    .find({ course_id: params.courseId, _id: { $in: messageTopicIds as any[] } })
-    .project({ title: 1 })
-    .toArray()
   const messageTopicTitleById = new Map(
-    messageTopics.map((messageTopic) => [String(messageTopic._id), messageTopic.title]),
+    courseTopics.map((messageTopic) => [String(messageTopic._id), messageTopic.title]),
   )
 
   // 7. Format data for LearnExperience component
@@ -339,29 +281,36 @@ export default async function LearnTopicPage({
     covered_by_node_id: t.covered_by_node_id ? String(t.covered_by_node_id) : null,
   }))
 
-  const serializedPage = {
-    id: String(activePage._id),
-    topic_id: String(activePage.topic_id),
-    page_number: activePage.page_number,
-    content: activePage.content,
-    created_at: activePage.created_at.toISOString(),
-    key_concepts: Array.isArray(activePage.key_concepts) ? activePage.key_concepts.map(String) : undefined,
-    summary: activePage.summary ? String(activePage.summary) : null,
-    topic_depth: activePage.topic_depth ?? undefined,
-    concept_kind: activePage.concept_kind ?? undefined,
-    content_kind: activePage.content_kind ?? undefined,
-    should_generate_page: activePage.should_generate_page ?? undefined,
-    decision_reason: activePage.decision_reason ?? undefined,
-    estimated_length: activePage.estimated_length ?? undefined,
-    requires_quiz: activePage.requires_quiz ?? undefined,
-    covered_concepts: Array.isArray(activePage.covered_concepts) ? activePage.covered_concepts.map(String) : undefined,
-    reused_concepts: Array.isArray(activePage.reused_concepts) ? activePage.reused_concepts.map(String) : undefined,
-    reminder_concepts: Array.isArray(activePage.reminder_concepts) ? activePage.reminder_concepts.map(String) : undefined,
-    example_refs: Array.isArray(activePage.example_refs) ? activePage.example_refs : undefined,
-    sections: Array.isArray(activePage.sections) ? activePage.sections : undefined,
-    source_citations: Array.isArray(activePage.source_citations) ? activePage.source_citations : undefined,
-    grounding: activePage.grounding ?? null,
-  }
+  const serializePage = (storedPage: any) => ({
+    id: String(storedPage._id),
+    topic_id: String(storedPage.topic_id),
+    page_number: storedPage.page_number,
+    content: storedPage.content,
+    created_at: storedPage.created_at.toISOString(),
+    key_concepts: Array.isArray(storedPage.key_concepts) ? storedPage.key_concepts.map(String) : undefined,
+    summary: storedPage.summary ? String(storedPage.summary) : null,
+    topic_depth: storedPage.topic_depth ?? undefined,
+    concept_kind: storedPage.concept_kind ?? undefined,
+    content_kind: storedPage.content_kind ?? undefined,
+    should_generate_page: storedPage.should_generate_page ?? undefined,
+    decision_reason: storedPage.decision_reason ?? undefined,
+    estimated_length: storedPage.estimated_length ?? undefined,
+    requires_quiz: storedPage.requires_quiz ?? undefined,
+    covered_concepts: Array.isArray(storedPage.covered_concepts) ? storedPage.covered_concepts.map(String) : undefined,
+    reused_concepts: Array.isArray(storedPage.reused_concepts) ? storedPage.reused_concepts.map(String) : undefined,
+    reminder_concepts: Array.isArray(storedPage.reminder_concepts) ? storedPage.reminder_concepts.map(String) : undefined,
+    example_refs: Array.isArray(storedPage.example_refs) ? storedPage.example_refs : undefined,
+    sections: Array.isArray(storedPage.sections) ? storedPage.sections : undefined,
+    source_citations: Array.isArray(storedPage.source_citations) ? storedPage.source_citations : undefined,
+    grounding: storedPage.grounding ?? null,
+  })
+  const serializedPage = serializePage(activePage)
+  const serializedConceptPages = pages.map((storedPage) => ({
+    id: String(storedPage._id),
+    page_number: Number(storedPage.page_number),
+    concepts: collectPageConcepts(storedPage),
+    summary: storedPage.summary ? String(storedPage.summary) : null,
+  }))
 
   const serializedMessages = messages.reverse().map((m) => ({
     id: String(m._id),
@@ -384,7 +333,7 @@ export default async function LearnTopicPage({
     pageNumber: activePage.page_number,
   })
   const nextOpenTopic = currentTopicIndex >= 0
-    ? nextRecommendedTeachableTopic(orderedStudyTopics as any, topicId)
+    ? nextRecommendedTeachableTopic(orderedStudyTopics as any, topicId, { allowLocked: true })
     : null
   const serializedNextTopic = nextOpenTopic
     ? { id: String(nextOpenTopic._id), title: String(nextOpenTopic.title ?? 'Next topic') }
@@ -396,6 +345,7 @@ export default async function LearnTopicPage({
       topic={serializedTopic}
       topics={serializedTopics}
       page={serializedPage}
+      conceptPages={serializedConceptPages}
       totalPages={pages.length}
       estimatedPages={estimatedPages}
       globalPageNumber={globalPage.globalPageNumber}

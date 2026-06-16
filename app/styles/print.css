@@ -1,0 +1,320 @@
+.lesson-pdf-header {
+  display: none;
+}
+
+.lesson-pdf-document {
+  display: none;
+}
+
+.lesson-export-btn {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
+@page {
+  size: A4;
+  margin: 0;
+}
+
+@media print {
+  html {
+    background: #fdf7ed !important;
+  }
+
+  html[data-theme] {
+    color-scheme: light !important;
+    --color-bg-primary: #fdf7ed;
+    --color-bg-secondary: #f4e3b2;
+    --color-text-primary: #050517;
+    --color-accent: #d36d4a;
+    --color-border: #d3d5d7;
+    --color-text-secondary: #7a7a7a;
+    --color-text-tertiary: #9a948a;
+    --color-surface-elevated: #fffaf2;
+    --color-surface-soft: #f8ecc6;
+    --code-text: #050517;
+    --code-comment: #928e82;
+    --code-punctuation: #50505a;
+    --code-keyword: #c0552a;
+    --code-number: #6b4c92;
+    --code-deleted: #b91c1c;
+    --code-function: #3a5f8a;
+    --code-string: #7a5c3f;
+    --code-inserted: #3b6d11;
+  }
+
+  body.trulurn-pdf-export {
+    background: #fdf7ed !important;
+    color: #050517 !important;
+    margin: 0;
+    padding: 0;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.trulurn-pdf-export *,
+  body.trulurn-pdf-export *::before,
+  body.trulurn-pdf-export *::after {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.trulurn-pdf-export .roadmap-panel,
+  body.trulurn-pdf-export .chat-panel,
+  body.trulurn-pdf-export .lesson-concept-nav,
+  body.trulurn-pdf-export .lesson-toolbar,
+  body.trulurn-pdf-export .lesson-footer,
+  body.trulurn-pdf-export .bottom-nav,
+  body.trulurn-pdf-export .recall-banner,
+  body.trulurn-pdf-export .recall-overlay,
+  body.trulurn-pdf-export .recall-inline-error,
+  body.trulurn-pdf-export .selection-toolbar,
+  body.trulurn-pdf-export .lesson-feedback-slot,
+  body.trulurn-pdf-export .ls-override-bar {
+    display: none !important;
+  }
+
+  body.trulurn-pdf-export .study-shell {
+    display: none !important;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-document {
+    background: #fdf7ed !important;
+    display: block !important;
+  }
+
+  body.trulurn-pdf-export,
+  body.trulurn-pdf-export .study-shell,
+  body.trulurn-pdf-export .learn-shell,
+  body.trulurn-pdf-export .lesson-panel,
+  body.trulurn-pdf-export .lesson-content,
+  body.trulurn-pdf-export .lesson-inner {
+    background: #fdf7ed !important;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-sheet {
+    background: #fdf7ed !important;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    box-sizing: border-box;
+    break-after: page;
+    color: #050517;
+    min-height: 297mm;
+    padding: 14mm 15mm 18mm;
+    page-break-after: always;
+    width: 210mm;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-sheet:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-sheet .lesson-pdf-header {
+    display: grid;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-sources > strong {
+    color: #050517;
+    font-size: 0.84rem;
+    font-weight: 650;
+  }
+
+  body.trulurn-pdf-export .study-shell {
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.trulurn-pdf-export .learn-shell {
+    border: 0 !important;
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.trulurn-pdf-export .lesson-panel {
+    border: 0 !important;
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.trulurn-pdf-export .lesson-content {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    scrollbar-gutter: auto;
+  }
+
+  body.trulurn-pdf-export .lesson-inner {
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    box-sizing: border-box;
+    margin: 0 !important;
+    max-width: none !important;
+    min-height: 297mm;
+    padding: 14mm 15mm 18mm !important;
+    width: 210mm !important;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-header {
+    border-bottom: 1px solid #d3d5d7;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    margin: 0 0 10mm;
+    padding: 0 0 6mm;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-brand {
+    align-items: center;
+    display: flex;
+    gap: 9px;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-logo {
+    border-radius: 10px;
+    display: block;
+    height: 42px;
+    width: 42px;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-brand div {
+    display: grid;
+    gap: 1px;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-brand strong {
+    color: #050517;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-brand span {
+    color: #7a7a7a;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-page-meta {
+    align-content: center;
+    color: #7a7a7a;
+    display: grid;
+    font-size: 9px;
+    gap: 3px;
+    justify-items: end;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-title {
+    grid-column: 1 / -1;
+    margin-top: 7mm;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-title > span {
+    color: #d36d4a;
+    display: block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    margin-bottom: 2mm;
+    text-transform: uppercase;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-title h1 {
+    color: #050517;
+    font-size: 25px;
+    font-weight: 650;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+    margin: 0;
+  }
+
+  body.trulurn-pdf-export .lesson-pdf-title small {
+    color: #7a7a7a;
+    display: block;
+    font-size: 9px;
+    margin-top: 2mm;
+  }
+
+  body.trulurn-pdf-export .lesson-kicker {
+    display: none !important;
+  }
+
+  body.trulurn-pdf-export .lesson-page-label {
+    margin-top: 0;
+  }
+
+  body.trulurn-pdf-export .ls-prereq-body[hidden] {
+    display: block !important;
+  }
+
+  body.trulurn-pdf-export .ls-checkpoint-hint[hidden] {
+    display: block !important;
+  }
+
+  body.trulurn-pdf-export .ls-prereq-chevron,
+  body.trulurn-pdf-export .ls-hint-btn {
+    display: none !important;
+  }
+
+  body.trulurn-pdf-export .lesson-source-citations:not([open]) > :not(summary) {
+    display: block !important;
+  }
+
+  body.trulurn-pdf-export .lesson-source-citations summary {
+    list-style: none;
+  }
+
+  body.trulurn-pdf-export .lesson-source-citations summary::-webkit-details-marker {
+    display: none;
+  }
+
+  body.trulurn-pdf-export h1,
+  body.trulurn-pdf-export h2,
+  body.trulurn-pdf-export h3,
+  body.trulurn-pdf-export .md-h1,
+  body.trulurn-pdf-export .md-h2,
+  body.trulurn-pdf-export .md-h3,
+  body.trulurn-pdf-export .ls-section-header,
+  body.trulurn-pdf-export .lesson-source-citations summary {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  body.trulurn-pdf-export p,
+  body.trulurn-pdf-export li {
+    orphans: 3;
+    widows: 3;
+  }
+
+  body.trulurn-pdf-export pre,
+  body.trulurn-pdf-export table,
+  body.trulurn-pdf-export figure,
+  body.trulurn-pdf-export svg,
+  body.trulurn-pdf-export .md-callout,
+  body.trulurn-pdf-export .md-table-wrap,
+  body.trulurn-pdf-export .ls-prerequisites,
+  body.trulurn-pdf-export .ls-key-ideas,
+  body.trulurn-pdf-export .ls-misconceptions,
+  body.trulurn-pdf-export .ls-examples,
+  body.trulurn-pdf-export .ls-checkpoint-item,
+  body.trulurn-pdf-export .lesson-source-citations {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  body.trulurn-pdf-export .md-table-wrap {
+    overflow: visible !important;
+  }
+
+  body.trulurn-pdf-export a {
+    color: inherit;
+    text-decoration: none;
+  }
+}

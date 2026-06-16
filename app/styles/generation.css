@@ -513,6 +513,29 @@
   margin-top: 16px;
 }
 
+.quality-check-list {
+  color: var(--color-text-secondary);
+  display: grid;
+  font-size: var(--text-sm);
+  gap: 6px;
+  line-height: 1.5;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.quality-check-list li {
+  padding-left: 16px;
+  position: relative;
+}
+
+.quality-check-list li::before {
+  color: var(--color-accent);
+  content: '–';
+  left: 0;
+  position: absolute;
+}
+
 .unsuitable-banner {
   border-left-color: #d97706;
   margin-top: 16px;

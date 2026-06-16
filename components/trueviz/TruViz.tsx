@@ -3,6 +3,7 @@
 import { useMemo } from 'react'
 import { parseTruViz } from '@/lib/trueviz/parser'
 import { NeuralNet } from './NeuralNet'
+import { DataChart } from './DataChart'
 
 /**
  * Entry point for TruViz diagrams.
@@ -40,7 +41,10 @@ export function TruViz({ raw }: { raw: string }) {
     return <NeuralNet spec={spec} />
   }
 
-  // Future types route here
+  if (spec.type === 'data-chart') {
+    return <DataChart spec={spec} />
+  }
+
   return (
     <div className="trueviz-error">
       <span className="trueviz-error-label">TruViz</span>

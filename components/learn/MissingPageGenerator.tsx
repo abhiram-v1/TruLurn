@@ -24,6 +24,7 @@ export function MissingPageGenerator({
   const router = useRouter()
   const [status, setStatus] = useState<'idle' | 'generating' | 'failed'>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [failedChecks, setFailedChecks] = useState<string[]>([])
   const generationStartedRef = useRef(false)
 
   const generate = useCallback(async function generate() {
@@ -31,6 +32,7 @@ export function MissingPageGenerator({
     generationStartedRef.current = true
     setStatus('generating')
     setError(null)
+    setFailedChecks([])
 
     try {
       const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}/pages/generate`, {
@@ -44,9 +46,18 @@ export function MissingPageGenerator({
         skipped?: boolean
         topicComplete?: boolean
         plannedPages?: number
+        code?: string
+        lessonQuality?: { issues?: { message: string; severity: string }[] }
       }
 
       if (!response.ok) {
+        if (data.code === 'LESSON_QUALITY_REJECTED' && data.lessonQuality?.issues?.length) {
+          setFailedChecks(
+            data.lessonQuality.issues
+              .filter((issue) => issue.severity === 'critical')
+              .map((issue) => issue.message),
+          )
+        }
         throw new Error(data.error ?? 'Lesson generation failed.')
       }
 
@@ -93,6 +104,13 @@ export function MissingPageGenerator({
             : `Generating page ${pageNumber}. This takes a few seconds.`}
         </p>
         {error ? <div className="result-banner error-banner">{error}</div> : null}
+        {failedChecks.length ? (
+          <ul className="quality-check-list">
+            {failedChecks.map((check, index) => (
+              <li key={index}>{check}</li>
+            ))}
+          </ul>
+        ) : null}
         <button className="button" type="button" onClick={generate} disabled={status === 'generating'}>
           {status === 'generating' ? 'Generating…' : 'Retry generation'}
         </button>

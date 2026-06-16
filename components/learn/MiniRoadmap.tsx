@@ -86,7 +86,6 @@ export function MiniRoadmap({
   /** Planned page count of the current topic. */
   totalPlannedPages?: number
 }) {
-  const [lockedTopicId, setLockedTopicId] = useState<string | null>(null)
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(
     () => initialExpandedTopics(topics, currentTopicId),
   )
@@ -119,7 +118,6 @@ export function MiniRoadmap({
   const progressPct = teachable.length ? Math.round((completedCount / teachable.length) * 100) : 0
   const currentIndex = teachable.findIndex((topic) => topic.id === currentTopicId)
   const nextTopic = currentIndex >= 0 ? teachable[currentIndex + 1] ?? null : null
-  const nextIsLocked = nextTopic?.state === 'locked'
 
   const loadTaggedReminders = useCallback(async () => {
     setTagsLoading(true)
@@ -200,7 +198,6 @@ export function MiniRoadmap({
   }
 
   function renderTopicRow(topic: Topic, level = 0) {
-    const locked = topic.state === 'locked'
     const current = topic.id === currentTopicId
     const currentPath = topicIsCurrentPath(topic, currentTopicId)
     const container = isContainer(topic)
@@ -226,16 +223,6 @@ export function MiniRoadmap({
               {expanded ? <IconChevronDown size={14} stroke={1.8} /> : <IconChevronRight size={14} stroke={1.8} />}
             </span>
           </button>
-        ) : locked ? (
-          <button
-            className={`topic-locked ${current ? 'current' : ''}`}
-            type="button"
-            onClick={() => setLockedTopicId(lockedTopicId === topic.id ? null : topic.id)}
-          >
-            <span className={`state-dot ${dotState}`} />
-            <span className="topic-name">{topic.title}</span>
-            {rowAdornment(topic, current)}
-          </button>
         ) : (
           <Link
             className={`topic-link ${current ? 'current' : ''}`}
@@ -248,16 +235,6 @@ export function MiniRoadmap({
         )}
 
         {current && !container ? currentPageProgress() : null}
-
-        {lockedTopicId === topic.id ? (
-          <div className="locked-message">
-            Complete{' '}
-            <strong>
-              {topicById.get(topic.prerequisites[0])?.title ?? 'the prerequisite topic'}
-            </strong>{' '}
-            first.
-          </div>
-        ) : null}
 
         {container && expanded && children.length ? (
           <div className="topic-child-list">
@@ -393,21 +370,6 @@ export function MiniRoadmap({
             {visibleRailTopics.map((topic) => {
               const current = topic.id === currentTopicId
               const dotState = current ? 'active' : topic.state
-              const locked = topic.state === 'locked'
-
-              if (locked) {
-                return (
-                  <button
-                    className={`roadmap-rail-dot ${current ? 'current' : ''}`}
-                    key={topic.id}
-                    type="button"
-                    title={topic.title}
-                    onClick={() => setLockedTopicId(topic.id)}
-                  >
-                    <span className={`state-dot ${dotState}`} />
-                  </button>
-                )
-              }
 
               return (
                 <Link
@@ -421,11 +383,6 @@ export function MiniRoadmap({
               )
             })}
           </div>
-          {lockedTopicId ? (
-            <div className="roadmap-rail-hint" role="status">
-              Locked
-            </div>
-          ) : null}
         </>
       ) : panelView === 'tagged' ? (
         renderTaggedReminders()
@@ -466,21 +423,12 @@ export function MiniRoadmap({
           {/* Journey footer — what comes after this topic */}
           <div className="roadmap-footer-stack">
             {nextTopic ? (
-              nextIsLocked ? (
-                <div className="roadmap-next is-locked" title="Unlocks as you progress">
-                  <span className="roadmap-next-label">Up next</span>
-                  <span className="roadmap-next-title">
-                    <IconLock size={12} stroke={1.8} /> {nextTopic.title}
-                  </span>
-                </div>
-              ) : (
-                <Link className="roadmap-next" href={`/learn/${courseId}/${nextTopic.id}`}>
-                  <span className="roadmap-next-label">Up next</span>
-                  <span className="roadmap-next-title">
-                    {nextTopic.title} <IconArrowRight size={13} stroke={2} className="roadmap-next-arrow" />
-                  </span>
-                </Link>
-              )
+              <Link className="roadmap-next" href={`/learn/${courseId}/${nextTopic.id}`}>
+                <span className="roadmap-next-label">Up next</span>
+                <span className="roadmap-next-title">
+                  {nextTopic.title} <IconArrowRight size={13} stroke={2} className="roadmap-next-arrow" />
+                </span>
+              </Link>
             ) : currentIndex >= 0 ? (
               <div className="roadmap-next is-locked">
                 <span className="roadmap-next-label">Up next</span>

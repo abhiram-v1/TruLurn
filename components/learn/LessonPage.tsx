@@ -9,6 +9,8 @@ export function LessonPage({
   content,
   screenPage,
   screenPageCount,
+  globalPageNumber,
+  globalPageTotal,
   sectionOverrides,
   onRestoreSection,
   children,
@@ -18,6 +20,8 @@ export function LessonPage({
   content: string
   screenPage: number
   screenPageCount: number
+  globalPageNumber: number
+  globalPageTotal: number
   sectionOverrides?: Map<number, SectionOverride>
   onRestoreSection?: (idx: number) => void
   children?: React.ReactNode
@@ -64,6 +68,35 @@ export function LessonPage({
   return (
     <div className="lesson-content" ref={containerRef}>
       <article className="lesson-inner">
+        <header className="lesson-pdf-header">
+          <div className="lesson-pdf-brand">
+            {/* Native image loading is more reliable when the hidden print header becomes visible. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              className="lesson-pdf-logo"
+              src="/trulurn-icon.svg"
+              width={42}
+              height={42}
+              alt="TruLurn"
+            />
+            <div>
+              <strong>TruLurn</strong>
+              <span>AI-guided mastery</span>
+            </div>
+          </div>
+          <div className="lesson-pdf-page-meta">
+            <span>Lesson page {page.page_number}</span>
+            <span>Course page {globalPageNumber} of {globalPageTotal}</span>
+          </div>
+          <div className="lesson-pdf-title">
+            <span>Lesson</span>
+            <h1>{topicTitle}</h1>
+            {screenPageCount > 1 ? (
+              <small>Part {screenPage} of {screenPageCount}</small>
+            ) : null}
+          </div>
+        </header>
+
         {isStructured ? (
           <LessonSections
             sections={page.sections!}
@@ -105,6 +138,7 @@ export function LessonPage({
 
         {children && (
           <div
+            className="lesson-feedback-slot"
             style={{
               opacity: showFeedback ? 1 : 0,
               visibility: showFeedback ? 'visible' : 'hidden',

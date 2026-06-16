@@ -47,10 +47,42 @@ export async function ensureIndexes(db: Db): Promise<void> {
       { course_id: 1, state: 1 },
       { background: true, name: 'topics_course_state' },
     ),
+    db.collection('branches').createIndex(
+      { course_id: 1, created_at: 1 },
+      { background: true, name: 'branches_course_order' },
+    ),
+    db.collection('topics').createIndex(
+      { course_id: 1, branch_id: 1, sequence_index: 1, position: 1 },
+      { background: true, name: 'topics_branch_order' },
+    ),
+    db.collection('topics').createIndex(
+      { course_id: 1, branch_position: 1, branch_id: 1, sequence_index: 1, position: 1 },
+      { background: true, name: 'topics_course_order' },
+    ),
+    db.collection('curricula').createIndex(
+      { course_id: 1 },
+      { background: true, name: 'curricula_course' },
+    ),
     // Research evidence lookup by generated course
     db.collection('courseResearchReports').createIndex(
       { user_id: 1, course_id: 1, created_at: -1 },
       { background: true, name: 'course_research_user_course' },
+    ),
+    db.collection('lessonResearchCache').createIndex(
+      { expires_at: 1 },
+      { background: true, expireAfterSeconds: 0, name: 'lesson_research_cache_ttl' },
+    ),
+    db.collection('aiUsageEvents').createIndex(
+      { created_at: 1 },
+      { background: true, expireAfterSeconds: 60 * 60 * 24 * 90, name: 'ai_usage_events_ttl' },
+    ),
+    db.collection('aiUsageEvents').createIndex(
+      { feature: 1, provider: 1, model: 1, created_at: -1 },
+      { background: true, name: 'ai_usage_events_feature' },
+    ),
+    db.collection('lessonResearchCache').createIndex(
+      { user_id: 1, course_id: 1, topic_id: 1, page_number: 1, updated_at: -1 },
+      { background: true, name: 'lesson_research_cache_scope' },
     ),
     // Spaced repetition: due-review lookup (getDueReviews / countDueReviews)
     db.collection('reviewSchedule').createIndex(
@@ -113,6 +145,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
       { user_id: 1, course_id: 1, skill_key: 1 },
       { background: true, unique: true, name: 'learner_skill_states_unique' },
     ),
+    db.collection('learnerConceptStates').createIndex(
+      { user_id: 1, course_id: 1, concept_key: 1 },
+      { background: true, unique: true, name: 'learner_concept_states_unique' },
+    ),
+    db.collection('learnerConceptStates').createIndex(
+      { user_id: 1, course_id: 1, topic_id: 1, stage: 1, updated_at: -1 },
+      { background: true, name: 'learner_concept_states_topic' },
+    ),
     db.collection('learnerMisconceptionStates').createIndex(
       { user_id: 1, course_id: 1, misconception_key: 1 },
       { background: true, unique: true, name: 'learner_misconception_states_unique' },
@@ -130,6 +170,14 @@ export async function ensureIndexes(db: Db): Promise<void> {
     db.collection('doubtMessages').createIndex(
       { user_id: 1, course_id: 1, role: 1, embedding_version: 1, created_at: -1 },
       { background: true, name: 'doubt_messages_retrieval_eligible' },
+    ),
+    db.collection('doubtMessages').createIndex(
+      { user_id: 1, course_id: 1, created_at: -1 },
+      { background: true, name: 'doubt_messages_chat_history' },
+    ),
+    db.collection('doubtMessages').createIndex(
+      { user_id: 1, course_id: 1, role: 1, created_at: -1 },
+      { background: true, name: 'doubt_messages_latest_role' },
     ),
     // Retrieval traces support incident diagnosis, evaluation, and cost attribution.
     db.collection('retrievalTraces').createIndex(
@@ -189,6 +237,11 @@ export async function ensureIndexes(db: Db): Promise<void> {
     db.collection('sourcePassages').createIndex(
       { user_id: 1, course_id: 1, embedding_version: 1, embedding_status: 1 },
       { background: true, name: 'source_passages_embedding_readiness' },
+    ),
+    // App-owned subject guidance packs referenced by courses.
+    db.collection('courseSkillPacks').createIndex(
+      { key: 1 },
+      { background: true, unique: true, name: 'course_skill_packs_key' },
     ),
     // User-created knowledge connections (personal graph edges)
     db.collection('userConnections').createIndex(

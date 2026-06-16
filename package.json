@@ -13,9 +13,17 @@
     "verify:grounding": "node scripts/verify-source-grounding.mjs",
     "verify:memory": "node scripts/verify-memory-v2.mjs",
     "verify:cutover": "node scripts/verify-rag-cutover.mjs",
+    "verify:agent-chat": "node scripts/verify-agent-chat-contract.mjs",
+    "verify:app-knowledge": "node scripts/verify-app-knowledge.mjs",
+    "benchmark:latency": "node scripts/benchmark-runtime-latency.mjs",
+    "benchmark:lesson-quality": "node --experimental-strip-types scripts/benchmark-lesson-quality.mjs",
+    "benchmark:lesson-quality:baseline": "node --experimental-strip-types scripts/benchmark-lesson-quality.mjs --baseline",
+    "check:latency": "node scripts/check-latency-budgets.mjs",
     "eval:retrieval": "node scripts/evaluate-retrieval.mjs",
+    "verify:embedding-sync": "node scripts/verify-embedding-sync.mjs",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --experimental-strip-types --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",
@@ -37,6 +45,7 @@
     "react-dom": "^18.3.0",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
+    "recharts": "^3.8.1",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0"

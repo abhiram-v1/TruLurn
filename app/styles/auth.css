@@ -88,12 +88,14 @@
 }
 
 .signin-brand {
+  align-items: center;
   color: var(--color-text-primary);
-  display: block;
+  display: flex;
   font-size: var(--text-xl);
   font-weight: 500;
+  gap: 9px;
+  justify-content: center;
   margin-bottom: 6px;
-  text-align: center;
   text-decoration: none;
 }
 

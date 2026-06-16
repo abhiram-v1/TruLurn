@@ -3,6 +3,7 @@ import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfil
 import { extractSourceTextFromFormData, normalizeCurriculumMode } from '@/lib/ai/sources'
 import type { Db } from 'mongodb'
 import { ingestSourceFilesFromFormData } from '@/lib/sources/ingestion'
+import { normalizeTeachingPersona, type TeachingPersonaId } from '@/lib/personas'
 
 export type CourseGenerationInput = {
   topic: string          // derived from goals — kept for backward compat with persistence
@@ -12,13 +13,12 @@ export type CourseGenerationInput = {
   courseDepth: CourseDepth
   knowledgeLevel: KnowledgeLevel
   learningPurpose: LearningPurpose
-  // User-chosen teaching style; 'auto' lets the pedagogy classifier decide.
-  teachingStyle: string
+  teachingPersona: TeachingPersonaId
   previewCurriculum: boolean
   sourceText?: string
   sourceOrderAnalysis?: string
-  // Teaching-style + curriculum-reconstruction analysis of the uploaded sources.
-  // Sources act as behavioral training data, not as content boundaries.
+  // Teaching-style + scope-boundary analysis of the uploaded sources.
+  // In source-grounded mode the sources are the hard curriculum boundary.
   sourceProfile?: SourceTeachingProfile | null
   sourceLimitations: string[]
   sourceDocumentIds?: string[]
@@ -33,29 +33,13 @@ type RawCourseGenerationInput = {
   courseDepth?: CourseDepth
   knowledgeLevel?: KnowledgeLevel
   learningPurpose?: LearningPurpose
-  teachingStyle?: string
+  teachingPersona?: string
   previewCurriculum?: boolean
   sourceText?: string
   sourceOrderAnalysis?: string
   sourceDocumentIds?: string[]
   sourceVersionIds?: string[]
   sourceIngestionJobIds?: string[]
-}
-
-const TEACHING_STYLE_CHOICES = [
-  'auto',
-  'first_principles',
-  'visual_analogy',
-  'socratic',
-  'project_based',
-  'exam_oriented',
-  'concise_speed',
-  'deep_conceptual',
-]
-
-function normalizeTeachingStyle(value: unknown): string {
-  const style = String(value ?? 'auto')
-  return TEACHING_STYLE_CHOICES.includes(style) ? style : 'auto'
 }
 
 function normalizeLearningControlMode(value: unknown): LearningControlMode {
@@ -105,7 +89,7 @@ export async function readCourseGenerationInput(
       courseDepth: normalizeCourseDepth(formData.get('courseDepth')),
       knowledgeLevel: normalizeKnowledgeLevel(formData.get('knowledgeLevel')),
       learningPurpose: normalizeLearningPurpose(formData.get('learningPurpose')),
-      teachingStyle: normalizeTeachingStyle(formData.get('teachingStyle')),
+      teachingPersona: normalizeTeachingPersona(formData.get('teachingPersona')),
       previewCurriculum: formData.get('previewCurriculum') !== 'false',
       sourceText: extracted.sourceText,
       sourceLimitations: extracted.limitations,
@@ -124,7 +108,7 @@ export async function readCourseGenerationInput(
     courseDepth: normalizeCourseDepth(body.courseDepth),
     knowledgeLevel: normalizeKnowledgeLevel(body.knowledgeLevel),
     learningPurpose: normalizeLearningPurpose(body.learningPurpose),
-    teachingStyle: normalizeTeachingStyle(body.teachingStyle),
+    teachingPersona: normalizeTeachingPersona(body.teachingPersona),
     previewCurriculum: body.previewCurriculum !== false,
     sourceLimitations: [],
   })
@@ -137,7 +121,7 @@ function normalizeCourseGenerationInput(input: {
   courseDepth?: CourseDepth
   knowledgeLevel?: KnowledgeLevel
   learningPurpose?: LearningPurpose
-  teachingStyle?: string
+  teachingPersona?: string
   previewCurriculum?: boolean
   sourceText?: string
   sourceOrderAnalysis?: string
@@ -155,7 +139,7 @@ function normalizeCourseGenerationInput(input: {
     courseDepth: input.courseDepth ?? 'standard',
     knowledgeLevel: input.knowledgeLevel ?? 'intermediate',
     learningPurpose: input.learningPurpose ?? 'practitioner',
-    teachingStyle: normalizeTeachingStyle(input.teachingStyle),
+    teachingPersona: normalizeTeachingPersona(input.teachingPersona),
     previewCurriculum: input.previewCurriculum ?? true,
     sourceText: input.sourceText?.trim() || undefined,
     sourceOrderAnalysis: input.sourceOrderAnalysis?.trim() || undefined,

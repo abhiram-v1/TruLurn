@@ -37,6 +37,8 @@
   ],
   "exclude": [
     "node_modules",
-    "presentation-showcase"
+    "presentation-showcase",
+    "**/*.test.ts",
+    "**/__tests__/**"
   ]
 }

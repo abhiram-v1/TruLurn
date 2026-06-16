@@ -19,6 +19,24 @@
 
 ## Log
 
+### [2026-06-14] — Immersive Builder: define formal-first, once (fix double definition)
+**Files:** `lib/personas/immersiveBuilder.ts`
+**What:** Revised the `major_concept` lesson path so the definitional moment is precise-definition-first then plain-language unpacking, as a single pass. Previously step 3 ("build the concept from intuition into precise language") produced a casual definition early and step 4 ("Include the formal definition") restated it formally later — so the learner read the same definition twice in two registers, with a separate "Formal definition" section. New path: define each term once, precise first, then unpack key words; do not restate a separate "formal definition" later; the exam/interview-ready subsection must be a tight recall scaffold, not a re-explanation; each section must advance rather than repeat. Bumped persona version 1→2 (record-keeping; does not gate regeneration). Kept the intuitive problem-first opening, the worked example, and the exam-ready subsection intact.
+**Why:** Founder reported the formal definition appearing after an informal one ("learning the same thing twice in different languages") and asked to reverse the order without pruning; also reduces the repeated concept/exam framing. Takes effect on newly generated pages; existing pages are unchanged unless regenerated.
+**Status:** done
+
+### [2026-06-14] — DataChart: fix legend/axis-title overlap and small axis text
+**Files:** `components/trueviz/DataChart.tsx`
+**What:** Moved the legend to the top (`verticalAlign="top"`) on bar/line/area charts so it no longer collides with the x-axis title that sits in the bottom strip. Bumped axis tick text 11→13px and axis titles 11→14px/weight 500 for legibility. Added a `leftMargin()` helper that widens the left margin to 28px when a y-axis title is present, so the rotated title no longer clips (was truncating, e.g. "Illustrative amount of work" → "Illustrative amount of"). Factored `bottomMargin()`/`leftMargin()` helpers to replace the per-renderer inline values.
+**Why:** Reported overlap between the x-axis title and the legend, plus too-small axis/label text; verified the fix in a preview sandbox (legend now above the plot, full y-title, larger ticks).
+**Status:** done
+
+### [2026-06-14] — Lesson quality gate: clearer rejection + high-scorers no longer dead-end
+**Files:** `lib/topic-pages/lessonQuality.ts`, `lib/topic-pages/lessonQuality.test.ts`, `components/learn/MissingPageGenerator.tsx`, `docs/LESSON_QUALITY_REVIEW_SET.md`
+**What:** (1) Rejection message no longer shows the misleading "score 92/75" (a passing score beside the word "failed"); `lessonQualityRejectionReason()` now names the real cause — a hard-block check or a sub-threshold score. (2) Acceptance gate changed from "no critical issue allowed" to "clears threshold AND no hard-block issue" (`HARD_BLOCK_CODES` = missing core / placeholder / unverified source). Non-hard-block criticals (canned opening, missing example, etc.) still lower the score and are reported, but no longer hard-reject a page that clears 75. (3) The generation error screen now lists the specific failing checks instead of a bare number. Updated 2 unit tests to the new policy and added a hard-block test.
+**Why:** A page scoring 92/100 was being dead-ended by a single stylistic critical heuristic, and the "92/75 failed" message read like a math error; founder chose to let high-scoring pages through while keeping hard blocks for genuinely broken/unsafe pages.
+**Status:** done
+
 ### [2026-05-20] — BigRoadmap visual redesign
 **Files:** `components/navigation/BigRoadmap.tsx`, `app/globals.css`
 **What:** Polished roadmap UI — added horizontal SVG connectors from nodes to cards, moved step numbers inside node circles (removed label below), widened cards from 280→300px with better padding, added 2px top accent border per state (terracotta for in-progress, green for mastered), redesigned state badge with a colored dot indicator and removed uppercase transform, fixed font-weight violations (600→500 on title and badge), enlarged icon box to 38px with a subtle border, taller progress track (5→6px) with a lighter track color, stronger hover shadow and lift, smoothed milestone pills, and changed pulse animation to opacity-only for the in-progress node ring.

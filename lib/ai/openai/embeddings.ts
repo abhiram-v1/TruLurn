@@ -1,3 +1,5 @@
+import { aiFetch } from '@/lib/ai/http'
+
 type OpenAIEmbeddingResponse = {
   data?: Array<{
     embedding?: number[]
@@ -33,7 +35,7 @@ export async function embedTextWithOpenAI(
     throw new Error('Cannot embed empty text.')
   }
 
-  const response = await fetch(OPENAI_EMBEDDINGS_ENDPOINT, {
+  const response = await aiFetch(OPENAI_EMBEDDINGS_ENDPOINT, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -44,7 +46,7 @@ export async function embedTextWithOpenAI(
       input: cleanText.slice(0, 16000),
       dimensions,
     }),
-  })
+  }, { timeoutMs: Number(process.env.AI_EMBED_TIMEOUT_MS ?? 60_000) })
 
   const data = (await response.json()) as OpenAIEmbeddingResponse
 

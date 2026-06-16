@@ -58,6 +58,28 @@ export type LearnerSkillState = {
   last_assessed_at: Date | null
 }
 
+export type LearnerConceptState = {
+  course_id: string
+  concept_key: string
+  label: string
+  topic_id: string | null
+  stage:
+    | 'never_encountered'
+    | 'recognizes'
+    | 'understands'
+    | 'applies'
+    | 'transfers'
+    | 'forgetting'
+  confidence: number
+  freshness: 'fresh' | 'aging' | 'stale' | 'unknown'
+  source: 'observed' | 'validated_assessment' | 'explicit_user' | 'none'
+  evidence_count: number
+  evidence_summary: Record<string, number>
+  evidence_refs: string[]
+  last_evidence_at: Date | null
+  updated_at: Date
+}
+
 export type LearnerMisconceptionState = {
   course_id: string
   misconception_key: string

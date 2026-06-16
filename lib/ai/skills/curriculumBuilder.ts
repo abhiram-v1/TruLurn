@@ -3,12 +3,10 @@ import { buildCurriculumFidelityNote, resolveSourceFidelityPolicy } from '@/lib/
 import { formatSourceProfileForCurriculum } from '@/lib/course-generation/sourceProfile'
 
 export function curriculumBuilderSkill(input: CurriculumSkillInput): SkillPrompt {
-  // Pre-generation fidelity stance. With teachingStyle 'auto' the style is
-  // classified after the curriculum, so this resolves from depth/purpose and
-  // the source profile's own signals — the page-level policy sharpens later.
+  // Source fidelity is independent from teaching persona: persona controls
+  // delivery, while depth, purpose, and source signals control scope.
   const fidelityNote = buildCurriculumFidelityNote(resolveSourceFidelityPolicy({
     mode: input.mode,
-    teachingStyle: input.teachingStyle,
     courseDepth: input.courseDepth,
     learningPurpose: input.learningPurpose,
     sourceProfile: input.sourceProfile,
@@ -53,7 +51,7 @@ ${fidelityNote}
 
   const sourceProfileBlock =
     input.mode === 'source_grounded' ? formatSourceProfileForCurriculum(input.sourceProfile) : ''
-  const depthRule = {
+  const teacherDepthRule = {
     low: `Course depth: Low.
 - Optimize for overview-level understanding and fast completion.
 - Focus on core concepts and key intuitions only. Skip advanced nuances, edge cases, and supplementary content.
@@ -72,8 +70,15 @@ ${fidelityNote}
     light = 2–3 pages | medium = 3–5 pages | important = 5–7 pages | critical = 7–9 pages
 - Include subtopics for advanced nuances and worked examples only when they genuinely aid mastery — no padding.`,
   }[input.courseDepth]
+  const depthRule = input.mode === 'source_grounded'
+    ? `Course depth: ${input.courseDepth}.
+- Depth controls how deeply the uploaded material is explained, not which topics exist.
+- Do not add advanced nuances, prerequisites, projects, examples, or follow-up topics unless the sources actually teach them.
+- Keep all substantive source-covered concepts reachable, using richer pages instead of invented topic expansion.
+- estimated_pages remains a ceiling and must be proportional to the amount of source material available.`
+    : teacherDepthRule
 
-  const knowledgeLevelRule = {
+  const teacherKnowledgeLevelRule = {
     beginner: `Student knowledge level: Beginner.
 The student has no prior domain knowledge. The curriculum must be structured so that no topic assumes
 anything that hasn't already been taught in a prior topic.
@@ -110,8 +115,29 @@ Curriculum rules:
 - Include cross-domain transfer topics where relevant ("How does X connect to Y in a different field?").
 - Each topic should surface something an intermediate learner would not yet know to ask about.`,
   }[input.knowledgeLevel ?? 'intermediate']
+  const sourceKnowledgeLevelRule = {
+    beginner: `Student knowledge level: Beginner.
+- Organize only the concepts the sources teach.
+- Put source-covered foundations before later source-covered concepts.
+- Background the sources assume but do not teach belongs in out_of_scope.assumed_prerequisites, never in the roadmap.
+- Do not create motivational or "What is X?" topics unless the uploaded material itself teaches them.
+- Beginner support belongs inside lesson explanations and examples; it must not expand the syllabus.`,
+    intermediate: `Student knowledge level: Intermediate.
+- Organize only the concepts the sources teach.
+- Preserve the source's vocabulary and expected level.
+- Do not add comparison, project, edge-case, or foundation topics unless the uploaded material teaches them.
+- Use page depth and examples to make the covered material useful without widening its scope.`,
+    expert: `Student knowledge level: Expert.
+- Organize only the concepts the sources teach.
+- Preserve formalism, derivations, limitations, and advanced detail only where the material contains them.
+- Do not add research frontiers, open problems, proofs, or cross-domain topics from general knowledge.
+- Expertise changes treatment depth, never the source-defined syllabus.`,
+  }[input.knowledgeLevel ?? 'intermediate']
+  const knowledgeLevelRule = input.mode === 'source_grounded'
+    ? sourceKnowledgeLevelRule
+    : teacherKnowledgeLevelRule
 
-  const learningPurposeRule = {
+  const teacherLearningPurposeRule = {
     explorer: `Learner purpose: Explorer.
 The learner wants to understand how things work in principle — intuition, not implementation.
 
@@ -140,6 +166,20 @@ Curriculum rules:
 - Add "open problems", "current limitations", and "frontiers" topics where the field is unsettled.
 - Practical application is secondary — include it only to ground a theoretical point.`,
   }[input.learningPurpose ?? 'practitioner']
+  const sourceLearningPurposeRule = {
+    explorer: `Learner purpose: Explorer.
+- Emphasize intuition and connections inside the uploaded material.
+- Do not add broader conceptual survey topics that the sources do not teach.`,
+    practitioner: `Learner purpose: Practitioner.
+- Emphasize applications, workflows, and decisions that the uploaded material actually contains.
+- Do not invent tooling, projects, or implementation topics to make the source feel more practical.`,
+    researcher: `Learner purpose: Researcher.
+- Emphasize assumptions, derivations, limitations, and theoretical structure present in the uploaded material.
+- Do not add proofs, open problems, or research context absent from the sources.`,
+  }[input.learningPurpose ?? 'practitioner']
+  const learningPurposeRule = input.mode === 'source_grounded'
+    ? sourceLearningPurposeRule
+    : teacherLearningPurposeRule
 
   const controlRule = {
     guided: `Guidance mode: Guided.
@@ -197,9 +237,9 @@ ${input.sourceOrderAnalysis ? `Source order analysis:
 ---
 ${input.sourceOrderAnalysis}
 ---
-Use this analysis to sequence the source-covered span of the course. Topics you reconstruct around that span (prerequisites before, dependents after) come from general subject knowledge.` : ''}
+Use this analysis only to sequence concepts that the uploaded sources teach. Never reconstruct missing prerequisites or follow-up topics around the source span.` : ''}
 
-${input.mode === 'source_grounded' ? 'External web research is intentionally not used for source-grounded mode. The source teaching profile plus general model knowledge define the full subject.' : researchRule}
+${input.mode === 'source_grounded' ? 'External web research and general model knowledge must not widen the source-grounded curriculum. The uploaded material is the complete course scope.' : researchRule}
 
 Return this exact JSON shape:
 {
@@ -230,7 +270,7 @@ Return this exact JSON shape:
               "role": "foundation|mechanism|application|tool|theory",
               "spine_candidate": false,
               "spine_level": 0,
-              "source_coverage": "covered|inferred",
+              "source_coverage": "covered (source_grounded mode only; omit in ai_teacher mode)",
               "concept_group": "prequel|current|sequel",
               "source_anchor": "Source N — section name (source_grounded mode only)",
               "children": [
@@ -247,7 +287,7 @@ Return this exact JSON shape:
                   "role": "foundation|mechanism|application|tool|theory",
                   "spine_candidate": false,
                   "spine_level": 0,
-                  "source_coverage": "covered|inferred",
+                  "source_coverage": "covered (source_grounded mode only; omit in ai_teacher mode)",
                   "concept_group": "prequel|current|sequel",
                   "source_anchor": "Source N — section name (source_grounded mode only)",
                   "children": []

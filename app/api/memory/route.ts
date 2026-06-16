@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import {
+  correctLearnerConceptState,
   correctLearnerMemory,
   deleteLearnerMemory,
   getLearnerMemorySnapshot,
@@ -45,6 +46,26 @@ export async function PATCH(request: Request) {
   try {
     const userId = await getRequiredUserId()
     const body = await request.json()
+    const conceptKey = String(body.conceptKey ?? '').trim()
+    const courseId = String(body.courseId ?? '').trim()
+    const stage = String(body.stage ?? '').trim() as any
+    if (conceptKey || stage) {
+      if (!conceptKey || !courseId || !stage) {
+        return NextResponse.json({
+          error: 'conceptKey, courseId, and stage are required for concept corrections.',
+        }, { status: 400 })
+      }
+      const db = await getDb()
+      const result = await correctLearnerConceptState({
+        db,
+        userId,
+        courseId,
+        conceptKey,
+        stage,
+      })
+      if (!result) return NextResponse.json({ error: 'Concept state not found.' }, { status: 404 })
+      return NextResponse.json({ ok: true, ...result })
+    }
     const memoryId = String(body.memoryId ?? '').trim()
     const value = typeof body.value === 'string' ? body.value.trim() : body.value
     if (!memoryId || value == null || value === '') {

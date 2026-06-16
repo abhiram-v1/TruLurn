@@ -712,6 +712,7 @@
 .roadmap-scroll,
 .roadmap-rail,
 .messages,
+.lcn-list,
 .markdown-body pre {
   scrollbar-color: rgba(86, 82, 75, 0.38) transparent;
   scrollbar-width: thin;
@@ -721,6 +722,7 @@
 .roadmap-scroll::-webkit-scrollbar,
 .roadmap-rail::-webkit-scrollbar,
 .messages::-webkit-scrollbar,
+.lcn-list::-webkit-scrollbar,
 .markdown-body pre::-webkit-scrollbar {
   height: 8px;
   width: 8px;
@@ -730,6 +732,7 @@
 .roadmap-scroll::-webkit-scrollbar-track,
 .roadmap-rail::-webkit-scrollbar-track,
 .messages::-webkit-scrollbar-track,
+.lcn-list::-webkit-scrollbar-track,
 .markdown-body pre::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -738,6 +741,7 @@
 .roadmap-scroll::-webkit-scrollbar-thumb,
 .roadmap-rail::-webkit-scrollbar-thumb,
 .messages::-webkit-scrollbar-thumb,
+.lcn-list::-webkit-scrollbar-thumb,
 .markdown-body pre::-webkit-scrollbar-thumb {
   background: rgba(86, 82, 75, 0.28);
   border: 2px solid transparent;
@@ -749,6 +753,7 @@
 .roadmap-scroll::-webkit-scrollbar-thumb:hover,
 .roadmap-rail::-webkit-scrollbar-thumb:hover,
 .messages::-webkit-scrollbar-thumb:hover,
+.lcn-list::-webkit-scrollbar-thumb:hover,
 .markdown-body pre::-webkit-scrollbar-thumb:hover {
   background: rgba(86, 82, 75, 0.48);
   background-clip: padding-box;
@@ -758,6 +763,7 @@
 .roadmap-scroll::-webkit-scrollbar-button,
 .roadmap-rail::-webkit-scrollbar-button,
 .messages::-webkit-scrollbar-button,
+.lcn-list::-webkit-scrollbar-button,
 .markdown-body pre::-webkit-scrollbar-button {
   display: none;
   height: 0;

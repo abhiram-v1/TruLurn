@@ -5,8 +5,9 @@ import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQ
 import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
 import { buildDoubtPrompt, type TopicStateSnapshot } from '@/lib/doubts/context'
 import { extractForwardRef, storeForwardRef } from '@/lib/agent/forwardRefs'
-import { applyStyleAdjustment, detectStyleAdjustment } from '@/lib/agent/styleControl'
-import { buildAudienceDirective } from '@/lib/personalization/learnerPersona'
+import { applyTeachingAdjustment, detectTeachingAdjustment } from '@/lib/agent/teachingControl'
+import { buildAudienceDirective } from '@/lib/personalization/learnerAudience'
+import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
 import {
   computeGlobalPagePosition,
   findTopicPageByGlobalNumber,
@@ -35,6 +36,11 @@ import {
   formatLearnerMemoryContext,
   getLearnerMemorySnapshot,
 } from '@/lib/memory/service'
+import {
+  isOutOfScopeQuestion,
+  recordConceptDiscussion,
+} from '@/lib/agent/conceptMentionTracker'
+import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 
 type HandleDoubtInput = {
   db: Db
@@ -364,6 +370,17 @@ async function generateAnswer({
     })
   }
 
+  // Safety net: if the model still emits the retrieval sentinel on the
+  // course_specific pass (or any non-retryable type), never leak the raw
+  // "NEEDS_RETRIEVAL: ..." control token to the learner — strip it and fall back
+  // to the concept text it named.
+  if (answer.startsWith('NEEDS_RETRIEVAL:')) {
+    const concept = answer.replace('NEEDS_RETRIEVAL:', '').trim()
+    return concept
+      ? `Here's what I can tell you about ${concept} from this course so far. If you need more detail, ask about a specific part.`
+      : 'I could not pull up enough course context for that. Could you point me to the specific topic or page you mean?'
+  }
+
   return answer
 }
 
@@ -378,6 +395,7 @@ async function storeMessage({
   content,
   sourceCitations = [],
   grounding = null,
+  isExploratory = false,
 }: {
   db: Db
   courseId: string
@@ -389,6 +407,7 @@ async function storeMessage({
   content: string
   sourceCitations?: SourceCitation[]
   grounding?: GroundingReport | null
+  isExploratory?: boolean
 }) {
   const id = crypto.randomUUID()
 
@@ -403,13 +422,20 @@ async function storeMessage({
     content,
     source_citations: sourceCitations,
     grounding,
-    retrieval_eligible: role === 'user',
-    embedding_status: role === 'user' ? 'pending' : 'excluded',
+    // Out-of-scope (general_knowledge) discussions are tagged so they are not
+    // used as canonical learner-knowledge evidence for this course.
+    is_exploratory: isExploratory || undefined,
+    retrieval_eligible: role === 'user' && !isExploratory,
+    embedding_status: role === 'user' && !isExploratory ? 'pending' : 'excluded',
     created_at: new Date(),
   })
 
   if (role === 'user') {
-    await embedDoubtMessageById(db, id).catch((error) => {
+    void Promise.all([
+      db.collection('learnerMemorySyncStates').deleteOne({ user_id: userId, course_id: courseId }),
+      db.collection('learnerProfiles').deleteOne({ user_id: userId, course_id: courseId }),
+    ]).catch((error) => console.warn('Failed to invalidate learner concept cache.', error))
+    void embedDoubtMessageById(db, id).catch((error) => {
       console.warn('Failed to embed learner question.', error)
     })
   }
@@ -436,9 +462,9 @@ export async function handleDoubt(input: HandleDoubtInput) {
       ? getConceptMap(input.db, input.courseId)
       : Promise.resolve([] as string[]),
     fetchTopicState(input.db, input.courseId, input.topicId, input.userId),
-    getLearnerMemorySnapshot(input.db, input.userId, input.courseId).catch((error) => {
+    getLearnerMemorySnapshot(input.db, input.userId, input.courseId, { sync: false }).catch((error) => {
       console.warn('[doubts] Learner Memory V2 unavailable.', error)
-      return { memories: [], skills: [], misconceptions: [] }
+      return { memories: [], skills: [], concept_states: [], misconceptions: [] }
     }),
   ])
 
@@ -448,11 +474,9 @@ export async function handleDoubt(input: HandleDoubtInput) {
     ? Promise.resolve(input.preClassifiedType)
     : classifyQuestion(questionWithContext, position.page.content, conceptMap)
 
-  // Parallelize workspace context reads alongside question type resolution
-  // instead of running them sequentially after classification.
-  // Style detection rides the same parallel batch — it's keyword-gated, so the
-  // extra model call only happens when the message plausibly asks for a style change.
-  const [type, workspaceContext, explicitPageContext, styleAdjustment] = await Promise.all([
+  // Explicit difficulty, source-coverage, and audience corrections ride the
+  // same parallel batch. Teaching delivery itself stays persona-owned.
+  const [type, workspaceContext, explicitPageContext, teachingAdjustment, courseSkillContext] = await Promise.all([
     typePromise,
     buildAgentWorkspaceContext({
       db: input.db,
@@ -460,6 +484,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
       userId: input.userId,
       currentTopicId: input.topicId,
       plan: contextPlan,
+      query: questionWithContext,
     }),
     fetchExplicitPageReferences({
       db: input.db,
@@ -468,50 +493,62 @@ export async function handleDoubt(input: HandleDoubtInput) {
       orderedTopics: position.orderedTopics,
       branches: position.branches,
     }),
-    detectStyleAdjustment(question),
+    detectTeachingAdjustment(question),
+    retrieveCourseSkillContext({
+      db: input.db,
+      course: position.course,
+      query: questionWithContext,
+      surface: 'agent',
+    }).catch((error) => {
+      console.warn('[doubts] Course skill context unavailable.', error)
+      return null
+    }),
   ])
 
-  // The agent ACTS on style feedback, not just answers it: persist the change so
-  // every future page generation follows it, and tell the model to acknowledge.
-  let styleContext = ''
-  if (styleAdjustment) {
-    await applyStyleAdjustment({
+  let adjustmentContext = ''
+  if (teachingAdjustment) {
+    await applyTeachingAdjustment({
       db: input.db,
       courseId: input.courseId,
       userId: input.userId,
       topicId: input.topicId,
-      adjustment: styleAdjustment,
-    }).catch((err) => console.warn('Failed to apply style adjustment.', err))
-    styleContext = [
-      'STYLE ADJUSTMENT JUST APPLIED (you did this — own it):',
-      styleAdjustment.directive ? `- New persistent lesson directive: "${styleAdjustment.directive}"` : null,
-      styleAdjustment.knowledgeLevel ? `- Course knowledge level set to: ${styleAdjustment.knowledgeLevel}` : null,
-      styleAdjustment.sourceCoverage
-        ? `- Source coverage set to "${styleAdjustment.sourceCoverage}" (${{
+      adjustment: teachingAdjustment,
+    }).catch((err) => console.warn('Failed to apply teaching adjustment.', err))
+    adjustmentContext = [
+      'LEARNER SETTING JUST UPDATED:',
+      teachingAdjustment.knowledgeLevel ? `- Course knowledge level set to: ${teachingAdjustment.knowledgeLevel}` : null,
+      teachingAdjustment.sourceCoverage
+        ? `- Source coverage set to "${teachingAdjustment.sourceCoverage}" (${{
             complete: 'lessons will cover every point in the uploaded material, compactly',
             smart: 'lessons cover all substantive points; trivial asides get compressed',
             core: 'lessons focus deeply on the key concepts; peripheral detail is skipped',
-          }[styleAdjustment.sourceCoverage]})`
+          }[teachingAdjustment.sourceCoverage]})`
         : null,
-      styleAdjustment.personaLabel
-        ? `- Learner profile updated: lessons, quizzes, and examples will now be framed for "${styleAdjustment.personaLabel}".`
+      teachingAdjustment.audienceLabel
+        ? `- Learner audience updated: examples and stakes will now be framed for "${teachingAdjustment.audienceLabel}".`
         : null,
-      'Briefly confirm to the student that all lesson pages generated from now on will follow this.',
-      'Mention that already-generated pages stay as they are unless regenerated (the regenerate options on each page apply the new style).',
+      'Briefly confirm the setting that changed. Do not describe it as a new teaching style or persona.',
     ].filter(Boolean).join('\n')
   }
 
-  // Who the learner is — keeps answers framed for THIS person (professional,
-  // hobbyist, school student, educator...), never a default school student.
-  const audienceContext = buildAudienceDirective(position.course.learner_persona, position.course.goals)
+  const audienceContext = buildAudienceDirective(
+    position.course.learner_audience ?? position.course.learner_persona,
+    position.course.goals,
+  )
+  const personaContext = buildPersonaDirective({
+    persona: resolveCourseTeachingPersona(position.course),
+    surface: 'agent',
+  })
   const learnerMemoryContext = formatLearnerMemoryContext(learnerMemory)
 
   const combinedWorkspaceContext = [
+    personaContext,
     audienceContext,
     learnerMemoryContext,
+    courseSkillContext?.text,
     workspaceContext,
     explicitPageContext,
-    styleContext,
+    adjustmentContext,
   ]
     .filter((block) => block && block.trim())
     .join('\n\n')
@@ -519,8 +556,17 @@ export async function handleDoubt(input: HandleDoubtInput) {
   // general_knowledge: model answers from its own knowledge — no retrieval at all.
   // current_page: page content is already in the prompt — no cross-topic retrieval.
   // course_specific: full vector retrieval for cross-topic context.
-  const shouldRetrieveMemory = type === 'course_specific' || contextPlan.needsSemanticMemory
-    || (String(position.course.mode ?? '') === 'source_grounded' && type !== 'general_knowledge')
+  const shouldRetrieveMemory = contextPlan.needsSemanticMemory
+    || (
+      !contextPlan.needsAppKnowledge
+      && (
+        type === 'course_specific'
+        || (
+          String(position.course.mode ?? '') === 'source_grounded'
+          && type !== 'general_knowledge'
+        )
+      )
+    )
   const memory = shouldRetrieveMemory
     ? await retrieveCourseMemory({
         db: input.db,
@@ -539,6 +585,9 @@ export async function handleDoubt(input: HandleDoubtInput) {
   const sourceEvidence = buildSourceEvidencePackets(memory.sourceChunks)
   const requiresSourceGrounding = String(position.course.mode ?? '') === 'source_grounded'
     && type !== 'general_knowledge'
+    && !contextPlan.needsAppKnowledge
+
+  const exploratory = isOutOfScopeQuestion(type)
 
   // Fire-and-forget — don't block answer generation on the DB write.
   await storeMessage({
@@ -550,6 +599,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
     globalPageNumber: position.promptPage.globalPageNumber,
     role: 'user',
     content: question,
+    isExploratory: exploratory,
   }).catch((err) => console.warn('Failed to store user message.', err))
 
   let rawAnswer: string
@@ -621,7 +671,27 @@ export async function handleDoubt(input: HandleDoubtInput) {
     content: cleanResponse,
     sourceCitations,
     grounding,
+    isExploratory: exploratory,
   })
+
+  // Record provisional concept-discussion evidence for in-scope questions only.
+  // Uses key_concepts from the current page as the discussed concepts — these are the
+  // concepts the learner is actively engaging with. Out-of-scope (general_knowledge)
+  // discussions are excluded to keep the canonical course knowledge graph clean.
+  if (!exploratory) {
+    const pageConcepts = Array.isArray(position.page.key_concepts)
+      ? position.page.key_concepts.map(String).filter(Boolean)
+      : []
+    if (pageConcepts.length) {
+      void recordConceptDiscussion(
+        input.db,
+        input.userId,
+        input.courseId,
+        input.topicId,
+        pageConcepts,
+      ).catch((err) => console.warn('[doubts] Concept discussion record failed.', err))
+    }
+  }
 
   return {
     id: assistantId,

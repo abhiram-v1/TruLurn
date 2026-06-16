@@ -42,7 +42,7 @@ export interface Course {
   mode: CourseMode
   learning_control?: LearningControlMode
   course_depth?: CourseDepth
-  lesson_style?: string | null
+  teaching_persona?: import('@/lib/personas').TeachingPersonaId
   code_language?: string | null   // e.g. 'python' — inject contextual code examples when set
   knowledge_level?: KnowledgeLevel | null
   learning_purpose?: LearningPurpose | null

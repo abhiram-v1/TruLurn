@@ -45,6 +45,12 @@ export async function POST(request: Request) {
       trackStudyActivity({ db, userId, courseId, event }),
       getRecallBreakMode(db, userId),
     ])
+    if (type === 'page_view') {
+      await Promise.all([
+        db.collection('learnerMemorySyncStates').deleteOne({ user_id: userId, course_id: courseId }),
+        db.collection('learnerProfiles').deleteOne({ user_id: userId, course_id: courseId }),
+      ])
+    }
 
     const decision = evaluateBreakDue(session, mode)
 

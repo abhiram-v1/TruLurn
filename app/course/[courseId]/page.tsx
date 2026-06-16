@@ -10,9 +10,20 @@ import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 
 export default async function CourseRoadmapPage({ params }: { params: { courseId: string } }) {
-  const db = await getDb()
-  const userId = await getRequiredUserId()
-  const course = await db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId })
+  const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
+  const [course, branches, curriculumDoc, teachableTopics] = await Promise.all([
+    db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId }),
+    db.collection('branches').find({ course_id: params.courseId }).toArray(),
+    db.collection('curricula').findOne(
+      { course_id: params.courseId },
+      { projection: { 'curriculum.branches.id': 1 } },
+    ),
+    db.collection('topics')
+      .find({ course_id: params.courseId })
+      .sort({ sequence_index: 1, position: 1 })
+      .project({ _id: 1, branch_id: 1, node_type: 1, children_count: 1, title: 1, sequence_index: 1 })
+      .toArray(),
+  ])
 
   if (!course) {
     return (
@@ -28,26 +39,13 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
     )
   }
 
-  const branches = await db.collection('branches').find({ course_id: params.courseId }).toArray()
-
   // Canonical branch order = the curriculum's branch array (what the learner saw
   // and approved in the preview). DB insertion order is not guaranteed, and topic
   // sequence_index values are AI output that may not be globally consistent
   // across branches — neither is a safe sort key on its own.
-  const curriculumDoc = await db.collection('curricula').findOne(
-    { course_id: params.courseId },
-    { projection: { 'curriculum.branches.id': 1 } },
-  )
-
   // Fetch ALL topics (including locked) so we can resolve active_topic_id for each branch.
   // On a freshly created course every non-first-branch topic starts locked, so filtering
   // by state would find nothing. We want the first topic in each branch regardless of state.
-  const teachableTopics = await db.collection('topics')
-    .find({ course_id: params.courseId })
-    .sort({ sequence_index: 1, position: 1 })
-    .project({ _id: 1, branch_id: 1, node_type: 1, children_count: 1, title: 1, sequence_index: 1 })
-    .toArray()
-
   function isContainer(t: any) {
     return String(t.node_type ?? '') === 'container' || Number(t.children_count ?? 0) > 0
   }

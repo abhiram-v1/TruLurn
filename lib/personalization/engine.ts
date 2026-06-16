@@ -3,14 +3,15 @@ import {
   getLearnerMemorySnapshot,
   syncLearnerMemoryV2,
 } from '@/lib/memory/service'
+import type { LearnerConceptState } from '@/lib/memory/types'
+import { conceptTeachingGuidance } from '@/lib/personalization/conceptKnowledge'
 
 // ── Personalization engine ────────────────────────────────────────────────────
 // Builds a per-(user, course) learner profile from observed behavior — lesson
 // feedback, exam results, recall-break ratings, doubt activity, and study pace —
-// and turns it into a prompt directive that adjusts how new lesson pages teach:
-// explanation depth, example count, analogy usage, practice frequency, and
-// concept sequencing. The profile is cached and refreshed lazily, so page
-// generation pays a few indexed reads at most.
+// and turns it into learner-state evidence for the active teaching persona.
+// It does not choose page structure, analogy count, examples, or interaction
+// style. The profile is cached and refreshed lazily.
 
 const PROFILE_TTL_MS = 10 * 60 * 1000
 // Below this many total signals the profile is noise — inject nothing.
@@ -41,6 +42,8 @@ export type LearnerProfile = {
   durable_preferences: string[]
   /** Assessment-backed misconceptions not yet corrected by later evidence. */
   active_misconceptions: string[]
+  /** Evidence-backed concept state, separate from the learner's declared level. */
+  concept_states: LearnerConceptState[]
   updated_at: Date
 }
 
@@ -61,7 +64,6 @@ function durablePreferenceText(memory: {
       ? 'Repeated feedback suggests more scaffolding may help'
       : 'Repeated feedback suggests the learner may be ready for more depth'
   }
-  if (memory.key.startsWith('teaching.directive.')) return value
   return `${memory.key.replace(/[._-]+/g, ' ')}: ${value}`
 }
 
@@ -234,6 +236,7 @@ async function computeLearnerProfile(db: Db, userId: string, courseId: string): 
     doubt_hotspots: doubtHotspots,
     durable_preferences: durablePreferences,
     active_misconceptions: activeMisconceptions,
+    concept_states: memorySnapshot.concept_states,
     updated_at: new Date(),
   }
 }
@@ -267,54 +270,74 @@ export async function getLearnerProfile(db: Db, userId: string, courseId: string
  * Turn the profile into a prompt block for the lesson writer. Returns '' when
  * there isn't enough observed behavior to personalize honestly.
  */
-export function buildPersonalizationDirective(profile: LearnerProfile | null | undefined): string {
+function conceptRelevant(label: string, relevantConcepts: string[]) {
+  const normalized = label.toLowerCase()
+  return relevantConcepts.some((concept) => {
+    const candidate = concept.toLowerCase()
+    return normalized.includes(candidate) || candidate.includes(normalized)
+  })
+}
+
+export function buildLearnerStateContext(
+  profile: LearnerProfile | null | undefined,
+  relevantConcepts: string[] = [],
+): string {
   if (!profile) return ''
   const totalSignals =
     profile.signals.feedback + profile.signals.exams + profile.signals.recalls +
     (profile.signals.doubts > 0 ? 1 : 0)
-  if (totalSignals < MIN_SIGNALS) return ''
+  if (totalSignals < MIN_SIGNALS && !(profile.concept_states?.length)) return ''
 
   const lines: string[] = [
-    'LEARNER PROFILE (observed from this student\'s actual behavior in this course — adapt the page to it):',
+    'LEARNER STATE EVIDENCE (use within the active teaching persona; this does not override persona structure):',
   ]
 
   if (profile.comprehension === 'struggling') {
-    lines.push('- Comprehension: the student is finding the current level HARD (frequent "lost me" signals / failed quizzes).')
-    lines.push('  → Increase explanation depth: smaller steps, one idea at a time, define terms on contact.')
-    lines.push('  → Add one more concrete example than you normally would, and prefer everyday analogies before formalism.')
+    lines.push('- Current comprehension evidence is weak. Treat prerequisite links as uncertain, expose hidden steps, and verify the missing link before building on it.')
   } else if (profile.comprehension === 'cruising') {
-    lines.push('- Comprehension: the current level is too EASY for this student ("too basic" signals / consistently strong quizzes).')
-    lines.push('  → Reduce hand-holding: compress basics, skip re-motivation, go further into nuance and edge cases.')
-    lines.push('  → Fewer introductory examples; one sharp example beats three gentle ones.')
+    lines.push('- Current comprehension evidence is strong. Compress already-demonstrated basics and spend attention on the assigned new mechanism, boundary, or transfer.')
   }
 
   if (profile.retention === 'weak') {
-    lines.push('- Retention: recall checks show material is NOT sticking.')
-    lines.push('  → Raise practice frequency: include a checkpoints section or end-of-page retrieval prompt where the concept allows it.')
-    lines.push('  → Weave brief callbacks to earlier concepts into the prose (spaced reinforcement), and keep new-concept count per page low.')
+    lines.push('- Recall evidence is weak. A brief callback or retrieval cue may help when it fits the persona path and page contract.')
   } else if (profile.retention === 'strong') {
-    lines.push('- Retention: recall checks are consistently strong — material sticks on first pass.')
-    lines.push('  → Standard practice frequency is enough; do not pad pages with extra self-checks.')
+    lines.push('- Recall evidence is strong. Do not add reinforcement that the page objective does not need.')
   }
 
-  if (profile.pace === 'fast') {
-    lines.push('- Pace: the student moves FAST through pages. Keep prose tight; cut transitions and recap padding.')
-  } else if (profile.pace === 'deliberate') {
-    lines.push('- Pace: the student studies slowly and carefully. Full explanations are welcome; do not artificially compress.')
+  const relevantWeak = relevantConcepts.length
+    ? profile.struggle_concepts.filter((concept) => conceptRelevant(concept, relevantConcepts))
+    : []
+  const relevantStrong = relevantConcepts.length
+    ? profile.strong_concepts.filter((concept) => conceptRelevant(concept, relevantConcepts))
+    : []
+  const relevantStates = relevantConcepts.length
+    ? (profile.concept_states ?? []).filter((state) => conceptRelevant(state.label, relevantConcepts))
+    : []
+  const absentRelevantConcepts = relevantConcepts.filter((concept) =>
+    !relevantStates.some((state) => conceptRelevant(state.label, [concept])))
+
+  if (relevantWeak.length) {
+    lines.push(`- Relevant weak spots: ${relevantWeak.join('; ')}.`)
+    lines.push('  Treat these as not yet solid. Re-anchor only the dependency this page actually needs.')
   }
 
-  if (profile.struggle_concepts.length) {
-    lines.push(`- Known weak spots: ${profile.struggle_concepts.join('; ')}.`)
-    lines.push('  → When this page touches one of these, treat it as NOT yet solid: re-anchor it in one sentence before building on it, and prefer it as the subject of examples.')
-    lines.push('  → If this page formally depends on one of these, sequence the page to repair that foundation first.')
+  if (relevantStrong.length) {
+    lines.push(`- Relevant demonstrated strengths: ${relevantStrong.join('; ')}. These are safe to build on without re-explanation.`)
   }
 
-  if (profile.strong_concepts.length) {
-    lines.push(`- Demonstrated strengths: ${profile.strong_concepts.join('; ')}. Use these as anchors for analogies and bridges — they are safe to build on without re-explanation.`)
+  for (const state of relevantStates.slice(0, 8)) {
+    lines.push(`- ${conceptTeachingGuidance(state.label, state)}`)
   }
 
-  if (profile.doubt_hotspots.length) {
-    lines.push(`- The student asked many questions about: ${profile.doubt_hotspots.join('; ')}. When relevant, address the confusion class directly instead of restating the original explanation.`)
+  for (const concept of absentRelevantConcepts.slice(0, 5)) {
+    lines.push(`- ${concept}: no encounter or assessment evidence is recorded. Introduce or briefly verify it before depending on it.`)
+  }
+
+  const relevantHotspots = relevantConcepts.length
+    ? profile.doubt_hotspots.filter((concept) => conceptRelevant(concept, relevantConcepts))
+    : []
+  if (relevantHotspots.length) {
+    lines.push(`- The student asked many questions about: ${relevantHotspots.join('; ')}. Address the confusion class directly instead of restating the original explanation.`)
   }
 
   if (profile.durable_preferences?.length) {
@@ -322,8 +345,11 @@ export function buildPersonalizationDirective(profile: LearnerProfile | null | u
     lines.push('  â†’ Follow explicit preferences first. Treat behavior-derived observations as suggestions, not facts about the learner.')
   }
 
-  if (profile.active_misconceptions?.length) {
-    lines.push(`- Assessment-backed misconceptions still active: ${profile.active_misconceptions.join('; ')}.`)
+  const relevantMisconceptions = relevantConcepts.length
+    ? (profile.active_misconceptions ?? []).filter((item) => conceptRelevant(item, relevantConcepts))
+    : []
+  if (relevantMisconceptions.length) {
+    lines.push(`- Relevant assessment-backed misconceptions still active: ${relevantMisconceptions.join('; ')}.`)
     lines.push('  â†’ Address these carefully when relevant. Do not claim they are corrected until later assessment evidence says so.')
   }
 

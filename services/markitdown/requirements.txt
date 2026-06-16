@@ -2,3 +2,7 @@ markitdown[pdf,docx,pptx,xlsx]
 fastapi
 uvicorn[standard]
 python-multipart
+# Image captioning: extract embedded PDF images (pymupdf) + normalize/downscale (pillow).
+pymupdf
+pillow
+python-dotenv
