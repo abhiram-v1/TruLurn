@@ -1,6 +1,7 @@
 ﻿import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { invalidateCourse } from '@/lib/cache/courseData'
 import type { GraphNodeUpdate } from '@/lib/graph/types'
 
 export async function POST(
@@ -58,6 +59,9 @@ export async function POST(
         { $set: { state: 'active', updated_at: new Date() } },
       )
     }
+
+    // Topic states changed — drop cached course structure + graph payload.
+    invalidateCourse(courseId)
 
     return NextResponse.json({ ok: true })
   } catch (error) {

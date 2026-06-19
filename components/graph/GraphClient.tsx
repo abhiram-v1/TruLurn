@@ -8,7 +8,7 @@ import { KnowledgeGraph } from './KnowledgeGraph'
 import { GraphDetailPanel } from './GraphDetailPanel'
 import { GraphSidebar } from './GraphSidebar'
 import { GraphMinimap } from './GraphMinimap'
-import { AppIcon } from '@/components/branding/AppIcon'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 
 // ── Filter state ─────────────────────────────────────────────────────────────
 
@@ -308,8 +308,10 @@ export function GraphClient({ courseId }: { courseId: string }) {
       <header className="kg-topbar">
         <div className="kg-topbar-brand">
           <BackButton fallbackHref={`/course/${courseId}`} />
-          <AppIcon className="kg-brand-mark" size={22} />
-          <span className="kg-brand-name">TruLurn</span>
+          <Link className="brand" href="/" style={{ display: 'flex', alignItems: 'center', gap: '7px', textDecoration: 'none' }}>
+            <TruLurnLogo size={22} />
+            <span className="kg-brand-name">TruLurn</span>
+          </Link>
         </div>
 
         <div className="kg-topbar-center">

@@ -60,7 +60,7 @@ graph_recommendation
 lesson_research
 lesson_style_analysis
 lesson_style_selection
-map_generation
+graph_generation
 page_analysis
 prerequisite_gap_analysis
 quiz_generation

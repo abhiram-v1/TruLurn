@@ -23,6 +23,7 @@ import type {
 import { formatSourceEvidencePackets } from '@/lib/grounding/sourceGrounding'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import type { LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
+import type { SourceImageAsset } from '@/lib/sources/images'
 import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
 
 type GenerateTopicPageInput = {
@@ -45,6 +46,8 @@ type GenerateTopicPageInput = {
   authority: GenerationAuthorityContract
   /** Stable source packets used for inline citations and post-generation verification. */
   sourceEvidence?: SourceEvidencePacket[]
+  /** Images extracted from the uploaded sources the lesson may embed and reference. */
+  availableFigures?: SourceImageAsset[]
   /** Failed quality checks and the rejected draft; triggers one focused rewrite. */
   qualityRepair?: {
     report: LessonQualityReport
@@ -80,6 +83,8 @@ export type GeneratedTopicPage = {
   lesson_quality?: LessonQualityReport | null
   quality_repair_history?: LessonQualityRepairRecord[]
   generation_authority?: GenerationAuthorityContract | null
+  /** Source figures attached to this page (for inline embeds + the figure rail). */
+  figures?: SourceImageAsset[]
   // Realization-first planning fields (from PDF lesson template)
   page_mode?: 'micro' | 'short' | 'full' | 'critical'
   topic_type?: 'conceptual' | 'technical' | 'mathematical' | 'programming' | 'overview' | 'bridge'
@@ -607,12 +612,12 @@ const CONCEPT_HEADING_DIRECTIVE = `CONCEPT HEADINGS:
 const SIGNAL_DENSITY_DIRECTIVE = `SIGNAL DENSITY CONTRACT:
 - Optimize for Signal > Support > Noise. Signal is the key insight, rule, decision, mechanism, formula, contrast, or action. Support is the minimum context or example needed to understand it. Noise is repetition, throat-clearing, decorative story, generic motivation, and extra wording.
 - Persona-led openings are not noise when they create genuine learning value. A concrete question, tension, story, analogy, or challenge counts as signal/support when it exposes the problem, motivates the mechanism, or gives the learner a usable mental handle.
-- Treat target_words as an upper planning budget, not a goal. Prefer the shortest page that fully teaches the assigned target understanding.
-- Lead with the useful point quickly, which may be a persona-appropriate question or story hook. Do not spend multiple paragraphs warming up unless each paragraph advances the concept.
-- Prefer compact structures: short paragraphs, bullets for parallel facts, numbered lists for steps, tables for comparisons, and callouts for definitions or non-obvious takeaways.
-- Paragraphs should usually be 1-3 sentences and under 60 words. Avoid more than two prose paragraphs in a row when the material can be scanned as bullets, steps, or a table.
-- Keep examples tight: one example, only the steps that reveal the mechanism, then stop.
-- Delete any sentence that merely rephrases an adjacent sentence, praises the learner, announces the lesson, or explains why the explanation exists. Preserve persona voice when it teaches, motivates, or guides attention.`
+- Treat target_words as an upper planning budget, not a goal, but do not confuse density with haste. Give difficult ideas enough explanatory space for motivation, precision, mechanism, and interpretation.
+- Lead with intellectual substance quickly. A persona-appropriate question, consequence, tension, or story may take several paragraphs when each paragraph moves the learner toward the concept.
+- Use prose for unfolding reasoning and human teaching presence. Use bullets for genuinely parallel facts, numbered lists for procedures, tables for compact comparisons, and callouts for definitions or non-obvious takeaways.
+- Vary paragraph length and rhythm according to the idea. Do not mechanically convert a connected explanation into fragments merely to make it scannable.
+- Develop one strong example far enough to expose the mechanism. Brevity is not a virtue when it removes the mapping, reasoning, or interpretation that makes the example teach.
+- Delete sentences that merely rephrase adjacent sentences, praise the learner, announce the lesson, or explain why the explanation exists. Preserve curiosity, anticipation, emphasis, and voice when they guide attention or deepen understanding.`
 
 const SYSTEM = `You are TruLurn's lesson writer.
 The active teaching persona supplied in the user prompt is the single authority for lesson delivery, explanation shape, pacing, and interaction style.
@@ -625,6 +630,12 @@ INVARIANTS:
 - The generation authority contract owns scope, page existence, sequence, content kind, focus, and length class. Never override it.
 - The learning architecture owns target understanding, success criteria, representation needs, and cross-page connection.
 - Teach directly and synthesize evidence into a coherent explanation. Never write as a commentator on sources or pages.
+- Sound like an intellectually alive professor, not a compressed reference sheet. Reveal why the idea matters, where the crucial move occurs, and what the learner should notice, while avoiding hype or manufactured enthusiasm.
+- For every substantive named concept, preserve its canonical term, precise definition, and field-appropriate language. Unpack formal language; never replace it with analogy alone.
+- Unpack definitions in one or two connected paragraphs. Never create a glossary-style bullet for each word in the definition. Bullets are for real enumerations of distinct categories, stages, conditions, or components.
+- When the page contract permits a concept or topic to close, important concepts must end with one compact blockquote callout labelled "Remember" or "TL;DR", containing the canonical definition and the few load-bearing points worth retaining. If the explanation continues, defer it. Never label content as exam-ready or interview-ready.
+- Protect the first impression: after the first concept heading, use at most two short opening paragraphs and reach the governing insight or formal definition within roughly 150 words. Do not begin with a list, taxonomy, or wall of setup.
+- Use progressive depth: question or tension first, then a visible definition callout, then connected mechanism and example, then boundaries or optional detail.
 - Be accurate, focused, and complete. Stop when the assigned understanding is fully taught.
 - Preserve continuity: do not re-teach prior material. Use a brief callback, then advance the new idea.
 - Treat planned pages as consecutive physical spans of one textbook manuscript. A page boundary does not create a new lesson, hook, recap, or conclusion.
@@ -1234,10 +1245,13 @@ Use it as a factual anchor without copying its prose.
 Return exactly these tags. <assessment> and <core> are required; optional tags are included only when earned.
 
 SIGNAL-DENSE PAGE RULES:
-- Build for fast extraction: concise headings, short paragraphs, bullets for parallel information, and compact callouts.
-- Preserve critical context, but remove setup sentences once the key idea is clear.
-- A shorter complete page is better than a longer page with repeated support.
-- Avoid paragraph runs. If the reader would scan for the answer, make the answer visually scannable.
+- Build for understanding first and retrieval second: clear concept headings, connected explanatory prose, bullets for truly parallel information, and compact callouts for definitions or durable formulations.
+- Preserve the motivation, formal definition, mechanism, and interpretation that make the idea understandable. Remove only setup that performs no teaching work.
+- A focused page is better than a repetitive page, but a short page is not automatically better than a vivid, complete explanation.
+- Keep canonical definitions easy to find, and end important concepts with a brief memory-retention block without flattening the surrounding lesson into notes.
+- FIRST VIEWPORT: after the first ## concept heading, write no more than two short paragraphs before the central insight or a > **Definition:** callout. Do not put a long list above the definition.
+- PROGRESSIVE DEPTH: establish the governing idea before details. After a definition callout, use one or two connected paragraphs—not a term-by-term list. Put material in bullets only when the subject itself contains a meaningful enumeration; keep supporting taxonomy, exceptions, and edge cases below the main explanation.
+- MEMORY CLOSE: only when this span closes the concept, use one short blockquote callout: > **Remember:** ... or > **TL;DR:** ... Never create a large summary section.
 
 PHYSICAL PAGE CONTRACT:
 - This span begins at: ${authority.sequence.start_boundary}
@@ -1639,6 +1653,7 @@ export async function generateTopicPage({
   learnerStateContext,
   authority,
   sourceEvidence = [],
+  availableFigures = [],
   qualityRepair,
   nextTopicTitle,
   priorExample,
@@ -1714,6 +1729,37 @@ ${fidelityPolicy ? buildLessonFidelityDirective(fidelityPolicy) : ''}`
   const sourceMaterial = isSourceCourse
     ? formatSourceMaterial(sourceEvidence)
     : ''
+  // Figures extracted from the uploaded sources. The lesson may embed the most
+  // relevant ones inline and reference them in prose by their figure label.
+  const figuresBlock = (isSourceCourse && availableFigures.length)
+    ? `\nSOURCE FIGURES AVAILABLE — embed only those that directly clarify this page's focus:
+${availableFigures.map((fig, i) => {
+        const label = fig.figureLabel || `Figure ${i + 1}`
+        const kind = [fig.classification, fig.chartType].filter(Boolean).join('/')
+        return `- ${label}${kind ? ` (${kind})` : ''} — ${clip(fig.caption, 240)}\n  Embed with EXACTLY: ![${label}: ${clip(fig.caption, 80)}](${fig.url})`
+      }).join('\n')}
+RULES FOR FIGURES:
+- The supplied figures already passed the relevance gate; choose the most useful one for the explanation.
+- Use the EXACT markdown image syntax shown above with the given URL — do not invent URLs or alter them.
+- After embedding, reference it in prose ("As ${availableFigures[0]?.figureLabel || 'the figure above'} shows, ...") and explain what the learner should notice in it.
+- Place the image immediately before or after the paragraph that discusses it.\n`
+    : ''
+  const figureTeachingContract = (isSourceCourse && availableFigures.length)
+    ? `
+FIGURE TEACHING CONTRACT:
+${availableFigures.map((figure, index) => {
+        const label = figure.figureLabel || `Figure ${index + 1}`
+        const evidence = [figure.caption, figure.ocrText].filter(Boolean).join(' | ')
+        return `- ${label} visual evidence: ${clip(evidence, 420)}`
+      }).join('\n')}
+- The figures above already passed a strict relevance check for this exact page.
+- Use the single most useful figure; use a second only when it teaches a distinct point.
+- Embed it inside the relevant core explanation, immediately beside the paragraph that interprets it. Never collect figures at the end.
+- Tell the learner which visual element to inspect, what it means, and how it supports the concept.
+- Do not merely repeat the caption. Interpret the visual evidence and connect it to the surrounding reasoning.
+- The lesson is incomplete if it omits every selected figure.
+`
+    : ''
   const approachBlock = approach ? `\n${APPROACH_INSTRUCTIONS[approach] ?? ''}\n` : ''
   const customBlock = customInstruction
     ? `\nCUSTOM TEACHING REQUEST: "${customInstruction}"\nApply this request within the locked page focus, objective, shape, and course boundary. It may change explanation strategy, not curriculum scope or page structure.\n`
@@ -1727,7 +1773,7 @@ ${fidelityPolicy ? buildLessonFidelityDirective(fidelityPolicy) : ''}`
   // it upward — this is what keeps small topics small.
   const authorityBlock = `\n${formatGenerationAuthority(authority)}\n`
 
-  const user = [authorityBlock, personaBlock, courseSkillBlock, audienceBlock, depthBlock, codeBlock, knowledgeBlock, purposeBlock, instructorBlock, learnerStateBlock, approachBlock, customBlock, USER_TEMPLATE({
+  const user = [authorityBlock, personaBlock, courseSkillBlock, audienceBlock, depthBlock, codeBlock, knowledgeBlock, purposeBlock, instructorBlock, learnerStateBlock, approachBlock, customBlock, figuresBlock, figureTeachingContract, USER_TEMPLATE({
     courseTitle: course.title ?? course.topic,
     courseGoal: course.goals ?? 'Master the subject clearly enough to explain and apply it.',
     topicTitle: topic.title,
@@ -1748,19 +1794,45 @@ ${fidelityPolicy ? buildLessonFidelityDirective(fidelityPolicy) : ''}`
     authority,
   }), qualityRepairBlock].filter(Boolean).join('')
 
-  const text = await generateAI({
+  let text = await generateAI({
     feature: 'topic_page_generation',
     system: SYSTEM,
     user,
     responseMimeType: 'text/plain',
   })
 
+  if (
+    availableFigures.length
+    && !availableFigures.some((figure) => text.includes(figure.url))
+  ) {
+    text = await generateAI({
+      feature: 'topic_page_generation',
+      system: SYSTEM,
+      user: `${user}
+
+REVISION REQUIRED:
+The previous draft omitted every selected source figure. Rewrite the complete response in the same required format. Embed the single most useful selected figure inside the exact explanation it supports, then tell the learner what to inspect and why that visual evidence matters. Do not place it in an end gallery.
+
+PREVIOUS DRAFT:
+${clip(text, 14_000)}`,
+      responseMimeType: 'text/plain',
+    })
+  }
+
+  // Attach the figures offered to the writer so downstream rendering always has
+  // their metadata — even if the model embedded none inline.
+  const withFigures = (page: GeneratedTopicPage): GeneratedTopicPage => {
+    const markdown = [page.content, ...page.sections.map((section) => section.content)].join('\n')
+    const usedFigures = availableFigures.filter((figure) => markdown.includes(figure.url))
+    return usedFigures.length ? { ...page, figures: usedFigures } : page
+  }
+
   const structured = parseStructuredResponse(text, focus, pageNumber)
   if (structured) {
-    return enforceGenerationAuthority(
+    return withFigures(enforceGenerationAuthority(
       { ...structured, learning_architecture: learningArchitecture ?? null },
       authority,
-    )
+    ))
   }
 
   const parsed = parseOldFormat(text, focus, pageNumber)
@@ -1771,10 +1843,10 @@ ${fidelityPolicy ? buildLessonFidelityDirective(fidelityPolicy) : ''}`
     throw new Error('Generated lesson page was empty.')
   }
 
-  return enforceGenerationAuthority(
+  return withFigures(enforceGenerationAuthority(
     { ...parsed, learning_architecture: learningArchitecture ?? null },
     authority,
-  )
+  ))
 }
 
 // ── Document builder ──────────────────────────────────────────────────────────
@@ -1818,6 +1890,7 @@ export function buildPageDocument(input: {
     page_sequence_role: input.page.learning_architecture?.page_sequence_role ?? null,
     sections: input.page.sections,
     source_citations: input.page.source_citations ?? [],
+    figures: input.page.figures ?? [],
     grounding: input.page.grounding ?? null,
     lesson_quality: input.page.lesson_quality ?? null,
     quality_repair_history: input.page.quality_repair_history ?? [],

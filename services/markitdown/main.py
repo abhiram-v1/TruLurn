@@ -62,6 +62,11 @@ CAPTION_MODEL = os.getenv("IMAGE_CAPTION_MODEL", "").strip() or (
 MAX_IMAGES = int(os.getenv("IMAGE_CAPTION_MAX_IMAGES", "20"))
 MIN_AREA = int(os.getenv("IMAGE_CAPTION_MIN_DIM", "128")) ** 2  # skip icons/bullets/logos
 MAX_DIM = int(os.getenv("IMAGE_CAPTION_MAX_DIM", "1024"))       # downscale to bound vision cost
+# Display copy is preserved at higher resolution for clean, zoomable rendering.
+DISPLAY_MAX_DIM = int(os.getenv("IMAGE_DISPLAY_MAX_DIM", "1600"))
+DISPLAY_JPEG_QUALITY = int(os.getenv("IMAGE_DISPLAY_JPEG_QUALITY", "82"))
+# When 0, images are kept as first-class assets (bytes returned). Captions still flow into text.
+RETURN_IMAGE_BYTES = os.getenv("IMAGE_RETURN_BYTES", "1") != "0"
 CAPTION_TIMEOUT = int(os.getenv("IMAGE_CAPTION_TIMEOUT_MS", "30000")) / 1000
 CAPTION_CACHE_MAX = int(os.getenv("IMAGE_CAPTION_CACHE_MAX", "512"))
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
@@ -77,7 +82,28 @@ CAPTION_PROMPT = (
     "learning content, reply with exactly: DECORATIVE"
 )
 
+# Structured understanding: one vision call returns caption + classification + OCR + relevance.
+STRUCTURED_PROMPT = (
+    "You are analyzing an image extracted from a learning document so it can be taught and "
+    "searched. Return ONLY a JSON object (no markdown fences) with these fields:\n"
+    '{\n'
+    '  "caption": "2-5 factual sentences describing what the image conveys for a learner — '
+    'components, axes, relationships, and the key takeaway. Empty string if decorative.",\n'
+    '  "classification": one of "chart","diagram","graph","table","screenshot","equation",'
+    '"flowchart","illustration","photo","map","other",\n'
+    '  "chart_type": "specific chart kind if classification is chart/graph (bar, line, scatter, '
+    'pie, area, histogram, ...) else empty string",\n'
+    '  "ocr_text": "all legible text visible in the image, including labels, axis titles, and '
+    'annotations; empty string if none",\n'
+    '  "relevance": integer 0-100 for how educationally informative this image is,\n'
+    '  "decorative": true if the image is a logo/divider/icon/background with no learning value '
+    'else false\n'
+    "}\n"
+    "Be factual; never speculate beyond what is visible."
+)
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+FIGURE_LABEL_RE = None  # compiled lazily in _figure_label
 _caption_cache: OrderedDict[str, str] = OrderedDict()
 
 app = FastAPI(
@@ -102,11 +128,11 @@ SUPPORTED_EXTENSIONS = {
 
 
 # ── Vision calls (stdlib only) ────────────────────────────────────────────────
-def _caption_gemini(image_b64: str, mime: str) -> str | None:
+def _caption_gemini(image_b64: str, mime: str, prompt: str = CAPTION_PROMPT) -> str | None:
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{CAPTION_MODEL}:generateContent"
     body = {
         "contents": [{"role": "user", "parts": [
-            {"text": CAPTION_PROMPT},
+            {"text": prompt},
             {"inline_data": {"mime_type": mime, "data": image_b64}},
         ]}],
         "generationConfig": {"temperature": 0.2},
@@ -125,12 +151,12 @@ def _caption_gemini(image_b64: str, mime: str) -> str | None:
     return "".join(p.get("text", "") for p in parts).strip() or None
 
 
-def _caption_openai(image_b64: str, mime: str) -> str | None:
+def _caption_openai(image_b64: str, mime: str, prompt: str = CAPTION_PROMPT) -> str | None:
     url = "https://api.openai.com/v1/responses"
     body = {
         "model": CAPTION_MODEL,
         "input": [{"role": "user", "content": [
-            {"type": "input_text", "text": CAPTION_PROMPT},
+            {"type": "input_text", "text": prompt},
             {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
         ]}],
     }
@@ -151,6 +177,32 @@ def _caption_openai(image_b64: str, mime: str) -> str | None:
     return "\n".join(out).strip() or None
 
 
+def _vision_text(image_b64: str, mime: str, prompt: str) -> str | None:
+    """Run a vision call with the configured provider, returning raw text."""
+    if CAPTION_PROVIDER == "openai":
+        return _caption_openai(image_b64, mime, prompt) if OPENAI_KEY else None
+    return _caption_gemini(image_b64, mime, prompt) if GEMINI_KEY else None
+
+
+def _parse_json_loose(text: str) -> dict | None:
+    """Parse a JSON object that may be wrapped in ```json fences or have prose around it."""
+    if not text:
+        return None
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("```", 2)[1] if "```" in cleaned[3:] else cleaned[3:]
+        if cleaned.lstrip().startswith("json"):
+            cleaned = cleaned.lstrip()[4:]
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(cleaned[start:end + 1])
+    except Exception:
+        return None
+
+
 def normalize_image(raw: bytes):
     """Re-encode any embedded image to a bounded JPEG the vision APIs accept.
     Returns (jpeg_bytes, area) or (None, 0) if it can't be read."""
@@ -167,6 +219,174 @@ def normalize_image(raw: bytes):
         return buf.getvalue(), area
     except Exception:
         return None, 0
+
+
+def normalize_image_display(raw: bytes):
+    """Re-encode an embedded image to a clean, high-resolution JPEG for display.
+    Bounded to DISPLAY_MAX_DIM so rendering stays crisp and zoomable without
+    shipping multi-megabyte originals. Returns (jpeg_bytes, width, height) or
+    (None, 0, 0)."""
+    if not _HAS_PIL:
+        return None, 0, 0
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im = im.convert("RGB")
+        if max(im.size) > DISPLAY_MAX_DIM:
+            im.thumbnail((DISPLAY_MAX_DIM, DISPLAY_MAX_DIM))
+        w, h = im.size
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=DISPLAY_JPEG_QUALITY, optimize=True)
+        return buf.getvalue(), w, h
+    except Exception:
+        return None, 0, 0
+
+
+def _figure_label(nearby_text: str) -> str:
+    """Detect a figure/table reference label (e.g. 'Figure 3', 'Table 2') in nearby text."""
+    import re
+    global FIGURE_LABEL_RE
+    if FIGURE_LABEL_RE is None:
+        FIGURE_LABEL_RE = re.compile(
+            r"\b(figure|fig\.?|table|chart|diagram|exhibit|plate|scheme)\s*\.?\s*(\d+(?:\.\d+)?)",
+            re.IGNORECASE,
+        )
+    m = FIGURE_LABEL_RE.search(nearby_text or "")
+    if not m:
+        return ""
+    kind = m.group(1).rstrip(".").title()
+    if kind.lower() == "fig":
+        kind = "Figure"
+    return f"{kind} {m.group(2)}"
+
+
+def analyze_image(raw: bytes) -> dict | None:
+    """Structured understanding of one image: caption, classification, OCR, relevance.
+    Returns None for failures or images too small to matter. Returns a dict with
+    decorative=True when the image carries no learning value."""
+    if not CAPTION_ENABLED:
+        return None
+    jpeg, area = normalize_image(raw)
+    if not jpeg or area < MIN_AREA:
+        return None
+    cache_key = "struct:" + hashlib.sha256(
+        raw + b"\0" + CAPTION_PROVIDER.encode() + b"\0" + CAPTION_MODEL.encode()
+    ).hexdigest()
+    if cache_key in _caption_cache:
+        cached = _caption_cache.pop(cache_key)
+        _caption_cache[cache_key] = cached
+        return json.loads(cached) if cached else None
+    try:
+        b64 = base64.b64encode(jpeg).decode()
+        text = _vision_text(b64, "image/jpeg", STRUCTURED_PROMPT)
+        parsed = _parse_json_loose(text or "")
+        if not parsed:
+            # Fall back to a plain caption so we still get something usable.
+            caption = (text or "").strip()
+            if not caption or caption.upper().startswith("DECORATIVE"):
+                result = None
+            else:
+                result = {"caption": caption, "classification": "other", "chart_type": "",
+                          "ocr_text": "", "relevance": 50, "decorative": False}
+        else:
+            decorative = bool(parsed.get("decorative")) or not str(parsed.get("caption", "")).strip()
+            result = {
+                "caption": str(parsed.get("caption", "")).strip(),
+                "classification": str(parsed.get("classification", "other")).strip().lower() or "other",
+                "chart_type": str(parsed.get("chart_type", "")).strip().lower(),
+                "ocr_text": str(parsed.get("ocr_text", "")).strip(),
+                "relevance": max(0, min(100, int(parsed.get("relevance", 50) or 50))),
+                "decorative": decorative,
+            }
+            if decorative:
+                result = None
+        _caption_cache[cache_key] = json.dumps(result) if result else ""
+        while len(_caption_cache) > CAPTION_CACHE_MAX:
+            _caption_cache.popitem(last=False)
+        return result
+    except Exception as exc:  # noqa: BLE001 — one bad image must not fail the doc
+        print(f"[analyze] failed: {exc}")
+        return None
+
+
+def extract_pdf_images(pdf_path: str):
+    """Extract every substantive embedded image from a PDF as a first-class asset
+    with metadata. Returns a list of dicts:
+      { page, order, caption, classification, chart_type, ocr_text, relevance,
+        figure_label, nearby_text, width, height, mime, data (base64) }
+    Images are deduped by content hash, ordered by page then vertical position,
+    and capped at MAX_IMAGES. Decorative images are skipped."""
+    if not (_HAS_FITZ and CAPTION_ENABLED):
+        return []
+    images = []
+    seen_hashes = set()
+    try:
+        doc = fitz.open(pdf_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[images] cannot open PDF: {exc}")
+        return []
+    try:
+        for page_index in range(len(doc)):
+            if len(images) >= MAX_IMAGES:
+                break
+            page = doc[page_index]
+            page_text = page.get_text("text") or ""
+            for order_on_page, img in enumerate(page.get_images(full=True)):
+                if len(images) >= MAX_IMAGES:
+                    break
+                xref = img[0]
+                try:
+                    info = doc.extract_image(xref)
+                except Exception:
+                    continue
+                raw = info.get("image")
+                if not raw:
+                    continue
+                digest = hashlib.md5(raw).hexdigest()
+                if digest in seen_hashes:  # repeated header/footer logo
+                    continue
+                seen_hashes.add(digest)
+
+                # Nearby text: capture the region just below the image rect (captions
+                # usually sit beneath figures); fall back to the whole page text.
+                nearby = ""
+                try:
+                    rects = page.get_image_rects(xref)
+                    if rects:
+                        r = rects[0]
+                        caption_band = fitz.Rect(r.x0 - 10, r.y0 - 4, r.x1 + 10, r.y1 + 64)
+                        nearby = (page.get_textbox(caption_band) or "").strip()
+                except Exception:
+                    pass
+                if not nearby:
+                    nearby = page_text[:400].strip()
+
+                analysis = analyze_image(raw)
+                if not analysis:  # failed or decorative
+                    continue
+
+                entry = {
+                    "page": page_index + 1,
+                    "order": order_on_page,
+                    "caption": analysis["caption"],
+                    "classification": analysis["classification"],
+                    "chart_type": analysis["chart_type"],
+                    "ocr_text": analysis["ocr_text"],
+                    "relevance": analysis["relevance"],
+                    "figure_label": _figure_label(nearby),
+                    "nearby_text": nearby[:600],
+                    "content_hash": digest,
+                }
+                if RETURN_IMAGE_BYTES:
+                    disp, w, h = normalize_image_display(raw)
+                    if disp:
+                        entry["width"] = w
+                        entry["height"] = h
+                        entry["mime"] = "image/jpeg"
+                        entry["data"] = base64.b64encode(disp).decode()
+                images.append(entry)
+    finally:
+        doc.close()
+    return images
 
 
 def caption_image(raw: bytes) -> str | None:
@@ -294,27 +514,62 @@ async def convert(file: UploadFile):
         tmp_path = tmp.name
 
     try:
-        result = md.convert(tmp_path)
-        markdown = result.text_content or ""
+        try:
+            result = md.convert(tmp_path)
+            markdown = result.text_content or ""
+        except Exception as convert_exc:
+            print(f"[MarkItDown] convert failed for {filename}, trying PyMuPDF fallback: {convert_exc}")
+            markdown = ""
+            if ext == ".pdf" and _HAS_FITZ:
+                try:
+                    doc = fitz.open(tmp_path)
+                    text_parts = []
+                    for page in doc:
+                        text_parts.append(page.get_text("text") or "")
+                    markdown = "\n\n".join(text_parts).strip()
+                    doc.close()
+                except Exception as fitz_exc:
+                    print(f"[MarkItDown] fitz fallback failed: {fitz_exc}")
+            if not markdown:
+                raise convert_exc
 
-        # Enrich with image descriptions (best-effort; never fails the request).
-        captions = []
+        # Extract images as first-class assets WITH metadata (best-effort).
+        images = []
         try:
             if ext == ".pdf":
-                captions = extract_pdf_image_captions(tmp_path)
+                images = extract_pdf_images(tmp_path)
             elif ext in IMAGE_EXTENSIONS:
-                caption = caption_image(content)
-                if caption:
-                    captions = [(1, caption)]
+                analysis = analyze_image(content)
+                if analysis:
+                    entry = {
+                        "page": 1, "order": 0,
+                        "caption": analysis["caption"],
+                        "classification": analysis["classification"],
+                        "chart_type": analysis["chart_type"],
+                        "ocr_text": analysis["ocr_text"],
+                        "relevance": analysis["relevance"],
+                        "figure_label": "",
+                        "nearby_text": "",
+                        "content_hash": hashlib.md5(content).hexdigest(),
+                    }
+                    if RETURN_IMAGE_BYTES:
+                        disp, w, h = normalize_image_display(content)
+                        if disp:
+                            entry.update({"width": w, "height": h, "mime": "image/jpeg",
+                                          "data": base64.b64encode(disp).decode()})
+                    images = [entry]
         except Exception as exc:  # noqa: BLE001
-            print(f"[caption] enrichment skipped: {exc}")
+            print(f"[images] extraction skipped: {exc}")
 
+        # Backward-compatible text enrichment: fold captions into the markdown so
+        # they still flow into chunking/embeddings even when bytes aren't stored.
+        captions = [(img["page"], img["caption"]) for img in images if img.get("caption")]
         if captions:
             markdown = (markdown.rstrip() + "\n" + format_captions_section(captions)).strip()
 
         # Only now decide "no content" — an image-only PDF may have produced no
         # text but still yields describable figures.
-        if not markdown.strip():
+        if not markdown.strip() and not images:
             raise HTTPException(
                 status_code=422,
                 detail=f"No text or describable images could be extracted from {filename}. "
@@ -326,6 +581,7 @@ async def convert(file: UploadFile):
             "filename": filename,
             "chars": len(markdown),
             "images_described": len(captions),
+            "images": images,
         }
 
     except HTTPException:

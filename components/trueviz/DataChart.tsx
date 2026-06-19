@@ -1,306 +1,261 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import {
-  ResponsiveContainer,
-  BarChart, Bar,
-  LineChart, Line,
-  AreaChart, Area,
-  ScatterChart, Scatter,
-  PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-} from 'recharts'
+import * as Plot from '@observablehq/plot'
+import { useEffect, useRef, useState } from 'react'
 import type { DataChartSpec } from '@/lib/trueviz/chartSpec'
+import { chartSeriesColors } from '@/lib/trueviz/palette'
 
-// ── Color palette ─────────────────────────────────────────────────────────────
-// Chosen to be vibrant on both the warm light and dark themes.
-
-const PALETTE = [
-  '#4F7DF5',  // blue
-  '#E07B56',  // coral (app accent)
-  '#10B981',  // emerald
-  '#8B5CF6',  // violet
-  '#F59E0B',  // amber
-  '#EC4899',  // pink
-  '#06B6D4',  // cyan
-  '#6B7280',  // neutral gray
-]
-
-function color(series: { color?: string } | undefined, index: number): string {
-  return series?.color ?? PALETTE[index % PALETTE.length]
+type LongDatum = {
+  x: unknown
+  value: number
+  series: string
 }
 
-// ── Shared axis / grid style ──────────────────────────────────────────────────
-
-const TICK = { fill: 'currentColor', fontSize: 13, opacity: 0.7 } as const
-const AXIS_LINE = { stroke: 'currentColor', opacity: 0.12 } as const
-
-function xLabel(label: string | undefined) {
-  if (!label) return undefined
-  return { value: label, position: 'insideBottom' as const, offset: -8, fill: 'currentColor', opacity: 0.85, fontSize: 14, fontWeight: 500 }
+function seriesLabel(spec: DataChartSpec, index: number) {
+  const series = spec.series?.[index]
+  return series?.label ?? series?.key ?? `Series ${index + 1}`
 }
 
-function yLabel(label: string | undefined) {
-  if (!label) return undefined
-  return { value: label, angle: -90, position: 'insideLeft' as const, dx: 4, style: { textAnchor: 'middle' as const }, fill: 'currentColor', opacity: 0.85, fontSize: 14, fontWeight: 500 }
+function toLongData(spec: DataChartSpec): LongDatum[] {
+  const xKey = spec.xAxis?.key ?? 'x'
+  return (spec.series ?? []).flatMap((series, seriesIndex) =>
+    spec.data
+      .map((row) => ({
+        x: row[xKey],
+        value: Number(row[series.key]),
+        series: seriesLabel(spec, seriesIndex),
+      }))
+      .filter((datum) => Number.isFinite(datum.value)),
+  )
 }
 
-// When a y-axis title is present, the rotated label needs room to the left of
-// the tick numbers — otherwise it clips against the chart edge.
-function leftMargin(spec: DataChartSpec) {
-  return spec.yAxis?.label ? 28 : 8
+function lastDatumPerSeries(data: LongDatum[]) {
+  const last = new Map<string, LongDatum>()
+  data.forEach((datum) => last.set(datum.series, datum))
+  return [...last.values()]
 }
 
-// Bottom room for x-axis ticks plus an optional axis title. The legend is moved
-// to the top (see renderers), so it no longer competes for this space.
-function bottomMargin(spec: DataChartSpec) {
-  return spec.xAxis?.label ? 40 : 20
-}
-
-function tooltipStyle() {
+function chartMargins(spec: DataChartSpec, showDirectLabels: boolean) {
   return {
-    contentStyle: {
-      background: 'var(--color-surface-elevated)',
-      border: '1px solid var(--color-border)',
-      borderRadius: '8px',
-      fontSize: '12px',
-      color: 'var(--color-text-primary)',
-      boxShadow: '0 4px 12px var(--shadow-color)',
-    },
-    labelStyle: { color: 'var(--color-text-secondary)', fontWeight: 500, marginBottom: 2 },
+    marginTop: 18,
+    marginRight: showDirectLabels ? 118 : 28,
+    marginBottom: spec.xAxis?.label ? 58 : 42,
+    marginLeft: spec.yAxis?.label ? 76 : 56,
   }
 }
 
-const LEGEND_STYLE = { color: 'currentColor', opacity: 0.85, fontSize: 13, paddingBottom: 10 }
-
-// ── Per-chart-type renderers ──────────────────────────────────────────────────
-
-function BarRenderer({ spec, height, showGrid, showLegend }: RendererProps) {
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={spec.data} margin={{ top: 8, right: 20, left: leftMargin(spec), bottom: bottomMargin(spec) }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.07} vertical={false} />}
-        <XAxis
-          dataKey={spec.xAxis?.key}
-          tick={TICK}
-          axisLine={AXIS_LINE}
-          tickLine={{ stroke: 'none' }}
-          label={xLabel(spec.xAxis?.label)}
-        />
-        <YAxis
-          tick={TICK}
-          axisLine={{ stroke: 'none' }}
-          tickLine={{ stroke: 'none' }}
-          label={yLabel(spec.yAxis?.label)}
-          domain={spec.yAxis?.domain}
-        />
-        <Tooltip {...tooltipStyle()} />
-        {showLegend && <Legend verticalAlign="top" wrapperStyle={LEGEND_STYLE} />}
-        {spec.series?.map((s, i) => (
-          <Bar
-            key={s.key}
-            dataKey={s.key}
-            name={s.label ?? s.key}
-            fill={color(s, i)}
-            stackId={s.stackId}
-            radius={[2, 2, 0, 0]}
-            maxBarSize={64}
-          />
-        ))}
-      </BarChart>
-    </ResponsiveContainer>
-  )
+function resolvedYDomain(spec: DataChartSpec, data: LongDatum[]) {
+  const requested = spec.yAxis?.domain
+  if (!requested) return undefined
+  const values = data.map((datum) => datum.value).filter(Number.isFinite)
+  const dataMin = values.length ? Math.min(...values) : 0
+  const dataMax = values.length ? Math.max(...values) : 1
+  const lower = requested[0] === 'auto' ? Math.min(0, dataMin) : requested[0]
+  const upper = requested[1] === 'auto'
+    ? dataMax + Math.max(Math.abs(dataMax - Number(lower)), 1) * 0.06
+    : requested[1]
+  return [lower, upper] as [number, number]
 }
 
-function LineRenderer({ spec, height, showGrid, showLegend }: RendererProps) {
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <LineChart data={spec.data} margin={{ top: 8, right: 20, left: leftMargin(spec), bottom: bottomMargin(spec) }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.07} />}
-        <XAxis
-          dataKey={spec.xAxis?.key}
-          tick={TICK}
-          axisLine={AXIS_LINE}
-          tickLine={{ stroke: 'none' }}
-          label={xLabel(spec.xAxis?.label)}
-        />
-        <YAxis
-          tick={TICK}
-          axisLine={{ stroke: 'none' }}
-          tickLine={{ stroke: 'none' }}
-          label={yLabel(spec.yAxis?.label)}
-          domain={spec.yAxis?.domain}
-        />
-        <Tooltip {...tooltipStyle()} />
-        {showLegend && <Legend verticalAlign="top" wrapperStyle={LEGEND_STYLE} />}
-        {spec.series?.map((s, i) => (
-          <Line
-            key={s.key}
-            dataKey={s.key}
-            name={s.label ?? s.key}
-            stroke={color(s, i)}
-            strokeWidth={2}
-            dot={false}
-            activeDot={{ r: 4, strokeWidth: 0 }}
-          />
-        ))}
-      </LineChart>
-    </ResponsiveContainer>
-  )
-}
+function buildPlot(spec: DataChartSpec, width: number, height: number, showGrid: boolean) {
+  const labels = (spec.series ?? []).map((_, index) => seriesLabel(spec, index))
+  const colors = chartSeriesColors(Math.max(labels.length, spec.data.length))
+  const longData = toLongData(spec)
+  const showDirectLabels = width >= 620 && labels.length > 0 && labels.length <= 4
+  const marks: Plot.Markish[] = []
 
-function AreaRenderer({ spec, height, showGrid, showLegend }: RendererProps) {
-  const fillOpacity = spec.config?.fillOpacity ?? 0.25
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <AreaChart data={spec.data} margin={{ top: 8, right: 20, left: leftMargin(spec), bottom: bottomMargin(spec) }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.07} />}
-        <XAxis
-          dataKey={spec.xAxis?.key}
-          tick={TICK}
-          axisLine={AXIS_LINE}
-          tickLine={{ stroke: 'none' }}
-          label={xLabel(spec.xAxis?.label)}
-        />
-        <YAxis
-          tick={TICK}
-          axisLine={{ stroke: 'none' }}
-          tickLine={{ stroke: 'none' }}
-          label={yLabel(spec.yAxis?.label)}
-          domain={spec.yAxis?.domain}
-        />
-        <Tooltip {...tooltipStyle()} />
-        {showLegend && <Legend verticalAlign="top" wrapperStyle={LEGEND_STYLE} />}
-        {spec.series?.map((s, i) => {
-          const c = color(s, i)
-          return (
-            <Area
-              key={s.key}
-              dataKey={s.key}
-              name={s.label ?? s.key}
-              stroke={c}
-              fill={c}
-              fillOpacity={fillOpacity}
-              strokeWidth={2}
-              stackId={s.stackId}
-              dot={false}
-              activeDot={{ r: 4, strokeWidth: 0 }}
-            />
-          )
-        })}
-      </AreaChart>
-    </ResponsiveContainer>
-  )
-}
+  if (showGrid && spec.chartType !== 'pie') {
+    marks.push(Plot.gridY({ stroke: 'currentColor', strokeOpacity: 0.1 }))
+  }
 
-function ScatterRenderer({ spec, height, showGrid }: RendererProps) {
-  const xKey = spec.xAxis?.key ?? 'x'
-  const yKey = spec.series?.[0]?.key ?? 'y'
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <ScatterChart margin={{ top: 8, right: 20, left: leftMargin(spec), bottom: bottomMargin(spec) }}>
-        {showGrid && <CartesianGrid strokeDasharray="3 3" stroke="currentColor" strokeOpacity={0.07} />}
-        <XAxis
-          type="number"
-          dataKey={xKey}
-          name={spec.xAxis?.label ?? xKey}
-          tick={TICK}
-          axisLine={AXIS_LINE}
-          tickLine={{ stroke: 'none' }}
-          label={xLabel(spec.xAxis?.label)}
-        />
-        <YAxis
-          type="number"
-          dataKey={yKey}
-          name={spec.yAxis?.label ?? (spec.series?.[0]?.label ?? yKey)}
-          tick={TICK}
-          axisLine={{ stroke: 'none' }}
-          tickLine={{ stroke: 'none' }}
-          label={yLabel(spec.yAxis?.label)}
-          domain={spec.yAxis?.domain}
-        />
-        <Tooltip
-          {...tooltipStyle()}
-          cursor={{ strokeDasharray: '3 3', stroke: 'currentColor', strokeOpacity: 0.3 }}
-        />
-        <Scatter
-          name={spec.series?.[0]?.label ?? yKey}
-          data={spec.data}
-          fill={color(spec.series?.[0], 0)}
-          opacity={0.72}
-        />
-      </ScatterChart>
-    </ResponsiveContainer>
-  )
-}
+  if (spec.chartType !== 'pie') {
+    marks.push(Plot.ruleY([0], { stroke: 'currentColor', strokeOpacity: 0.28 }))
+  }
 
-function PieRenderer({ spec, height, showLegend }: RendererProps) {
-  const data = spec.data as Array<Record<string, unknown>>
-  const total = data.reduce((sum, d) => sum + (Number(d.value) || 0), 0)
-  return (
-    <ResponsiveContainer width="100%" height={height}>
-      <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
-        <Pie
-          data={data}
-          cx="50%"
-          cy="50%"
-          dataKey="value"
-          nameKey="name"
-          outerRadius="70%"
-          paddingAngle={2}
-          label={({ value }) => total > 0 ? `${((Number(value) / total) * 100).toFixed(0)}%` : ''}
-          labelLine={false}
-        >
-          {data.map((entry, i) => (
-            <Cell key={i} fill={(entry.color as string | undefined) ?? PALETTE[i % PALETTE.length]} />
-          ))}
-        </Pie>
-        <Tooltip {...tooltipStyle()} />
-        {(showLegend ?? true) && <Legend wrapperStyle={LEGEND_STYLE} />}
-      </PieChart>
-    </ResponsiveContainer>
-  )
-}
+  if (spec.chartType === 'line') {
+    marks.push(
+      Plot.lineY(longData, {
+        x: 'x',
+        y: 'value',
+        stroke: 'series',
+        strokeWidth: 2.25,
+        marker: true,
+        tip: true,
+      }),
+    )
+    if (showDirectLabels) {
+      marks.push(
+        Plot.text(lastDatumPerSeries(longData), {
+          x: 'x',
+          y: 'value',
+          text: 'series',
+          fill: 'series',
+          dx: 9,
+          textAnchor: 'start',
+          fontWeight: 650,
+        }),
+      )
+    }
+  } else if (spec.chartType === 'area') {
+    marks.push(
+      Plot.areaY(longData, {
+        x: 'x',
+        y: 'value',
+        fill: 'series',
+        fillOpacity: spec.config?.fillOpacity ?? 0.18,
+        curve: 'monotone-x',
+        tip: true,
+      }),
+      Plot.lineY(longData, {
+        x: 'x',
+        y: 'value',
+        stroke: 'series',
+        strokeWidth: 2,
+      }),
+    )
+  } else if (spec.chartType === 'scatter' || spec.chartType === 'bubble') {
+    const xKey = spec.xAxis?.key ?? 'x'
+    const yKey = spec.series?.[0]?.key ?? 'y'
+    const sizeKey = spec.config?.bubbleSizeKey ?? 'z'
+    marks.push(
+      Plot.dot(spec.data, {
+        x: xKey,
+        y: yKey,
+        r: spec.chartType === 'bubble' ? sizeKey : 4.5,
+        fill: colors[0],
+        fillOpacity: 0.72,
+        stroke: 'var(--color-bg-primary)',
+        strokeWidth: 1,
+        tip: true,
+      }),
+    )
+  } else if (spec.chartType === 'pie') {
+    marks.push(
+      Plot.waffleY(spec.data, {
+        y: 'value',
+        fill: 'name',
+        tip: true,
+        rx: 1.5,
+      }),
+    )
+  } else {
+    marks.push(
+      Plot.barY(longData, {
+        x: 'x',
+        y: 'value',
+        fill: 'series',
+        inset: 1.5,
+        rx: 2,
+        tip: true,
+      }),
+    )
+  }
 
-// ── Main component ────────────────────────────────────────────────────────────
-
-type RendererProps = {
-  spec: DataChartSpec
-  height: number
-  showGrid: boolean
-  showLegend: boolean
+  const { marginTop, marginRight, marginBottom, marginLeft } = chartMargins(spec, showDirectLabels)
+  return Plot.plot({
+    width,
+    height,
+    marginTop,
+    marginRight,
+    marginBottom,
+    marginLeft,
+    style: {
+      background: 'transparent',
+      color: 'var(--color-text-secondary)',
+      fontFamily: 'inherit',
+      fontSize: '12px',
+      overflow: 'visible',
+    },
+    x: spec.chartType === 'pie'
+      ? undefined
+      : {
+          label: spec.xAxis?.label,
+          labelAnchor: 'center',
+          labelArrow: 'none',
+          tickSize: 0,
+          nice: true,
+        },
+    y: spec.chartType === 'pie'
+      ? undefined
+      : {
+          label: spec.yAxis?.label,
+          labelAnchor: 'center',
+          labelArrow: 'none',
+          domain: resolvedYDomain(spec, longData),
+          tickSize: 0,
+          nice: spec.yAxis?.domain ? false : true,
+        },
+    color: labels.length || spec.chartType === 'pie'
+      ? {
+          domain: spec.chartType === 'pie'
+            ? spec.data.map((datum) => String(datum.name))
+            : labels,
+          range: colors,
+          legend: false,
+        }
+      : undefined,
+    marks,
+  })
 }
 
 export function DataChart({ spec }: { spec: DataChartSpec }) {
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
-
-  const height = Math.min(Math.max(spec.config?.height ?? 300, 80), 500)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const [ready, setReady] = useState(false)
+  const height = Math.min(Math.max(spec.config?.height ?? 320, 180), 500)
   const showGrid = spec.config?.showGrid ?? true
   const showLegend = spec.config?.showLegend ?? ((spec.series?.length ?? 0) > 1)
+  const legendLabels = spec.chartType === 'pie'
+    ? spec.data.map((datum) => String(datum.name))
+    : (spec.series ?? []).map((_, index) => seriesLabel(spec, index))
+  const legendColors = chartSeriesColors(legendLabels.length)
 
-  const rProps: RendererProps = { spec, height, showGrid, showLegend }
+  useEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+
+    let chart: HTMLElement | SVGSVGElement | null = null
+    const render = () => {
+      const width = Math.max(320, Math.floor(host.clientWidth))
+      if (chart?.parentNode === host) chart.remove()
+      chart = buildPlot(spec, width, height, showGrid)
+      chart.classList.add('trulurn-plot')
+      host.replaceChildren(chart)
+      setReady(true)
+    }
+
+    render()
+    const observer = new ResizeObserver(render)
+    observer.observe(host)
+    return () => {
+      observer.disconnect()
+      if (chart?.parentNode === host) chart.remove()
+    }
+  }, [spec, height, showGrid])
 
   return (
-    <div className="chart-wrap">
-      {spec.title && <div className="chart-title">{spec.title}</div>}
-      {spec.description && <div className="chart-description">{spec.description}</div>}
+    <figure className="chart-wrap">
+      <figcaption className="chart-heading">
+        {spec.title ? <strong className="chart-title">{spec.title}</strong> : null}
+        {spec.description ? <span className="chart-description">{spec.description}</span> : null}
+      </figcaption>
+      {showLegend && legendLabels.length > 1 ? (
+        <div className="chart-legend" aria-label="Chart legend">
+          {legendLabels.map((label, index) => (
+            <span key={`${label}-${index}`}>
+              <i style={{ background: legendColors[index] }} />
+              {label}
+            </span>
+          ))}
+        </div>
+      ) : null}
       <div className="chart-body">
-        {!mounted
-          ? <div className="chart-skeleton" style={{ height }} aria-hidden="true" />
-          : spec.chartType === 'bar' || spec.chartType === 'histogram'
-            ? <BarRenderer {...rProps} />
-            : spec.chartType === 'line'
-              ? <LineRenderer {...rProps} />
-              : spec.chartType === 'area'
-                ? <AreaRenderer {...rProps} />
-                : spec.chartType === 'scatter'
-                  ? <ScatterRenderer {...rProps} />
-                  : spec.chartType === 'pie'
-                    ? <PieRenderer {...rProps} />
-                    : <div className="trueviz-error">Unsupported chartType: {spec.chartType}</div>
-        }
+        <div className="chart-plot-host" ref={hostRef} />
+        {!ready ? <div className="chart-skeleton" style={{ height }} aria-hidden="true" /> : null}
       </div>
-    </div>
+      <div className="chart-figure-note">
+        <span>TruLurn figure</span>
+        <span>{spec.chartType === 'pie' ? 'proportion study' : `${spec.chartType} study`}</span>
+      </div>
+    </figure>
   )
 }

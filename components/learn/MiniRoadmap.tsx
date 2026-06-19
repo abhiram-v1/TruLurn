@@ -15,6 +15,7 @@ import {
 } from '@tabler/icons-react'
 import Link from 'next/link'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import type { Topic } from '@/types'
 
 type TaggedReminder = {
@@ -94,6 +95,7 @@ export function MiniRoadmap({
   const [tagsLoading, setTagsLoading] = useState(true)
   const [tagsError, setTagsError] = useState<string | null>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
+  const router = useRouter()
   const sections = Array.from(new Set(topics.map((topic) => topic.section)))
   const visibleRailTopics = topics.slice(0, 12)
   const hasRecursiveTraccia = topics.some((topic) =>
@@ -163,6 +165,18 @@ export function MiniRoadmap({
     currentRowRef.current?.scrollIntoView({ block: 'center' })
   }, [currentTopicId, collapsed])
 
+  // Prefetch the next and previous adjacent topics so clicking them is instant.
+  useEffect(() => {
+    if (!nextTopic) return
+    const prefetchHref = `/learn/${courseId}/${encodeURIComponent(nextTopic.id)}`
+    const run = () => { router.prefetch(prefetchHref) }
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(run, { timeout: 3000 })
+    } else {
+      setTimeout(run, 500)
+    }
+  }, [nextTopic, courseId, router])
+
   function toggleTopic(topicId: string) {
     setExpandedTopicIds((current) => {
       const next = new Set(current)
@@ -207,7 +221,7 @@ export function MiniRoadmap({
 
     return (
       <div
-        className={`topic-tree-row level-${Math.min(level, 2)}`}
+        className={`topic-tree-row level-${Math.min(level, 2)} ${current ? 'is-current' : ''}`}
         key={topic.id}
         ref={current ? currentRowRef : undefined}
       >

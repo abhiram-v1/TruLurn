@@ -1,4 +1,5 @@
 import { getDb } from '@/lib/db'
+import { invalidateCourse } from '@/lib/cache/courseData'
 import {
   mockBranches,
   mockCourse,
@@ -166,4 +167,7 @@ export async function unlockNextTopics(courseId: string, completedTopicId: strin
       }
     )
   }
+
+  // Topic/branch states changed — drop cached course structure + graph payload.
+  invalidateCourse(courseId)
 }

@@ -1,6 +1,8 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { IconChevronUp, IconChevronDown, IconTrash } from '@tabler/icons-react'
+
 
 // ── Curriculum preview & editor ────────────────────────────────────────────────
 // Shown after the AI builds the curriculum but before atlas/page generation. The
@@ -216,9 +218,33 @@ export function CurriculumPreview({
                 />
               </div>
               <div className="curriculum-row-actions">
-                <button type="button" onClick={() => moveBranch(bi, -1)} disabled={bi === 0} title="Move up">↑</button>
-                <button type="button" onClick={() => moveBranch(bi, 1)} disabled={bi === branchCount - 1} title="Move down">↓</button>
-                <button type="button" className="curriculum-delete" onClick={() => deleteBranch(bi)} title="Delete branch">✕</button>
+                <button
+                  type="button"
+                  onClick={() => moveBranch(bi, -1)}
+                  disabled={bi === 0}
+                  title="Move up"
+                  aria-label="Move branch up"
+                >
+                  <IconChevronUp size={16} stroke={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveBranch(bi, 1)}
+                  disabled={bi === branchCount - 1}
+                  title="Move down"
+                  aria-label="Move branch down"
+                >
+                  <IconChevronDown size={16} stroke={2} />
+                </button>
+                <button
+                  type="button"
+                  className="curriculum-delete"
+                  onClick={() => deleteBranch(bi)}
+                  title="Delete branch"
+                  aria-label="Delete branch"
+                >
+                  <IconTrash size={16} stroke={1.8} />
+                </button>
               </div>
             </div>
 
@@ -256,9 +282,33 @@ export function CurriculumPreview({
                               ) : null}
                             </div>
                             <div className="curriculum-row-actions">
-                              <button type="button" onClick={() => moveTopic(bi, si, ti, -1)} disabled={ti === 0} title="Move up">↑</button>
-                              <button type="button" onClick={() => moveTopic(bi, si, ti, 1)} disabled={ti === topics.length - 1} title="Move down">↓</button>
-                              <button type="button" className="curriculum-delete" onClick={() => deleteTopic(bi, si, ti)} title="Delete topic">✕</button>
+                              <button
+                                type="button"
+                                onClick={() => moveTopic(bi, si, ti, -1)}
+                                disabled={ti === 0}
+                                title="Move up"
+                                aria-label="Move topic up"
+                              >
+                                <IconChevronUp size={14} stroke={2} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => moveTopic(bi, si, ti, 1)}
+                                disabled={ti === topics.length - 1}
+                                title="Move down"
+                                aria-label="Move topic down"
+                              >
+                                <IconChevronDown size={14} stroke={2} />
+                              </button>
+                              <button
+                                type="button"
+                                className="curriculum-delete"
+                                onClick={() => deleteTopic(bi, si, ti)}
+                                title="Delete topic"
+                                aria-label="Delete topic"
+                              >
+                                <IconTrash size={14} stroke={1.8} />
+                              </button>
                             </div>
                           </li>
                         )

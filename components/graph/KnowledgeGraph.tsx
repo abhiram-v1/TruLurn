@@ -8,6 +8,8 @@ import {
   rampColor,
   cardEdgePath,
   crossBranchArc,
+  confidenceToColor,
+  reviewStateClass,
   type Rect,
 } from './graphUtils'
 
@@ -351,11 +353,23 @@ export function KnowledgeGraph({
               const isFaded = egoSet && !(egoSet.has(e.from) && egoSet.has(e.to))
               const isCritical = showCritical && e.critical
               const isOnPath = criticalPathEdges.has(`${e.from}::${e.to}`)
+              // Score-based visual encoding: edge thickness from importance, opacity from confidence
+              const scores = e.scores
+              const scoreClass = scores
+                ? scores.importance >= 70 ? 'score-strong'
+                : scores.importance >= 40 ? 'score-medium'
+                : 'score-weak'
+                : ''
+              const edgeOpacity = scores && !isLit && !isOnPath && !isMutedBySelection && !isFaded
+                ? Math.max(0.15, scores.confidence / 100 * 0.9)
+                : undefined
+
               const cls = [
                 'kg-link',
                 e.kind,
                 `et-${e.edgeType}`,
                 e.strength,
+                scoreClass,
                 isCritical ? 'critical' : '',
                 isLit ? 'lit' : '',
                 isMutedBySelection ? 'muted-by-selection' : '',
@@ -369,12 +383,12 @@ export function KnowledgeGraph({
               // User connections are undirected associations — no arrowhead.
               if (e.kind === 'user') {
                 return (
-                  <path key={i} className={cls} d={e.path}>
+                  <path key={i} className={cls} d={e.path} style={edgeOpacity !== undefined ? { opacity: edgeOpacity } : undefined}>
                     {e.note ? <title>{e.note}</title> : null}
                   </path>
                 )
               }
-              return <path key={i} className={cls} d={e.path} markerEnd={marker} />
+              return <path key={i} className={cls} d={e.path} markerEnd={marker} style={edgeOpacity !== undefined ? { opacity: edgeOpacity } : undefined} />
             })}
           </g>
 
@@ -396,6 +410,12 @@ export function KnowledgeGraph({
               // Earned-strength tier — visual weight in the personal knowledge view.
               const ks = n.knowledgeStrength ?? 0
               const ksTier = ks >= 70 ? 'ks-solid' : ks >= 40 ? 'ks-growing' : 'ks-budding'
+              // Graph-manager visual encodings
+              const hasConf = n.confidenceScore !== undefined
+              const confColor = hasConf ? confidenceToColor(n.confidenceScore!) : undefined
+              // Glow for high recency (decayScore > 85 means knowledge is very fresh)
+              const isRecentlyActive = n.decayScore >= 85 && n.state !== 'locked'
+
               const cls = [
                 'kg-node-card',
                 `state-${n.state}`,
@@ -414,7 +434,19 @@ export function KnowledgeGraph({
                 isAtRisk && !isOnPath ? 'at-risk' : '',
                 isDecaying ? 'decaying' : '',
                 n.falseConfidence ? 'false-confidence' : '',
+                reviewStateClass(n.reviewState),
+                hasConf ? 'has-confidence-score' : '',
+                isRecentlyActive && !isDecaying ? 'recently-active' : '',
               ].filter(Boolean).join(' ')
+
+              // Build inline style: confidence-tinted left border + glow color
+              const nodeStyle: React.CSSProperties & Record<string, string> = {}
+              if (hasConf && confColor) {
+                nodeStyle.borderLeftColor = confColor
+              }
+              if ((isRecentlyActive || hasConf) && confColor) {
+                nodeStyle['--kg-glow-color'] = `${confColor}4D`
+              }
 
               return (
                 <g key={n.id}>
@@ -429,6 +461,7 @@ export function KnowledgeGraph({
                   <foreignObject x={n.x} y={n.y} width={n.w} height={n.h} style={{ overflow: 'visible' }}>
                     <div
                       className={cls}
+                      style={Object.keys(nodeStyle).length ? nodeStyle : undefined}
                       onClick={(e) => { e.stopPropagation(); onSelect(n.id) }}
                       onMouseEnter={() => setHoverId(n.id)}
                       onMouseLeave={() => setHoverId(null)}

@@ -1,28 +1,28 @@
 export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
-import { BigRoadmap } from '@/components/navigation/BigRoadmap'
+import { BigRoadmap, type AtlasBranch } from '@/components/navigation/BigRoadmap'
 import { AppFrame } from '@/components/navigation/AppFrame'
 import { CourseCodeToggle } from '@/components/course/CourseCodeToggle'
 import { SourceScopePanel } from '@/components/course/SourceScopePanel'
 import { ReviewsDuePanel } from '@/components/review/ReviewsDuePanel'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import {
+  getCachedCourse,
+  getCachedCourseTopics,
+  getCachedCourseBranches,
+  getCachedCourseCurriculum,
+} from '@/lib/cache/courseData'
+import type { BranchState, TopicState } from '@/types'
 
 export default async function CourseRoadmapPage({ params }: { params: { courseId: string } }) {
   const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
   const [course, branches, curriculumDoc, teachableTopics] = await Promise.all([
-    db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId }),
-    db.collection('branches').find({ course_id: params.courseId }).toArray(),
-    db.collection('curricula').findOne(
-      { course_id: params.courseId },
-      { projection: { 'curriculum.branches.id': 1 } },
-    ),
-    db.collection('topics')
-      .find({ course_id: params.courseId })
-      .sort({ sequence_index: 1, position: 1 })
-      .project({ _id: 1, branch_id: 1, node_type: 1, children_count: 1, title: 1, sequence_index: 1 })
-      .toArray(),
+    getCachedCourse(db, params.courseId, userId),
+    getCachedCourseBranches(db, params.courseId),
+    getCachedCourseCurriculum(db, params.courseId),
+    getCachedCourseTopics(db, params.courseId),
   ])
 
   if (!course) {
@@ -97,7 +97,7 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
     return fuzzy >= 0 ? fuzzy : null
   }
 
-  const serializedBranches = branches.map((b) => {
+  const serializedBranches: AtlasBranch[] = branches.map((b) => {
     const branchKey = String(b.branch_key ?? b._id)
     const storedTopicId = b.active_topic_id ? String(b.active_topic_id) : null
     // If the stored topic is a container node, clicking it in the learn page would redirect
@@ -115,12 +115,17 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
       course_id: String(b.course_id),
       title: b.title,
       description: b.description,
-      state: b.state as any,
+      state: b.state as BranchState,
       active_topic_id: resolvedTopicId,
       topic_count: b.topic_count,
       mastered_count: b.mastered_count,
       // First sub-topics of the branch, shown as milestone pills on the Atlas card.
       milestones: leaves.slice(0, 3).map((t) => String(t.title ?? '')).filter(Boolean),
+      topics: leaves.map((t) => ({
+        id: String(t._id),
+        title: String(t.title ?? 'Untitled topic'),
+        state: String(t.state ?? 'locked') as TopicState,
+      })),
       // Sort key: curriculum array position; branches the curriculum doesn't know
       // (legacy courses without a curricula doc) keep relative study order via
       // their first leaf's sequence_index, placed after all known branches.
@@ -137,6 +142,7 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
       courseId={params.courseId}
       title="Atlas"
       backFallback="/"
+      contentClassName="atlas-product-content"
       action={
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <CourseCodeToggle
@@ -148,19 +154,14 @@ export default async function CourseRoadmapPage({ params }: { params: { courseId
         </div>
       }
     >
-      <main className="roadmap-page">
-        <div className="page-header" style={{ textAlign: 'center', maxWidth: 600, margin: '0 auto 10px' }}>
-          <p className="eyebrow">{course.title}</p>
-          <h1 className="page-heading">Atlas</h1>
-          <p className="page-subtitle">
-            Follow the course structure through each milestone. Master one branch to unlock deeper connections.
-          </p>
+      <main className="atlas-page">
+        <BigRoadmap branches={serializedBranches} courseId={params.courseId} courseTitle={course.title} />
+        <div className="atlas-floats">
+          <ReviewsDuePanel courseId={params.courseId} />
+          {String(course.mode ?? '') === 'source_grounded' ? (
+            <SourceScopePanel outOfScope={(course.out_of_scope as any) ?? null} />
+          ) : null}
         </div>
-        <ReviewsDuePanel courseId={params.courseId} />
-        {String(course.mode ?? '') === 'source_grounded' ? (
-          <SourceScopePanel outOfScope={(course.out_of_scope as any) ?? null} />
-        ) : null}
-        <BigRoadmap branches={serializedBranches} courseId={params.courseId} />
       </main>
     </AppFrame>
   )

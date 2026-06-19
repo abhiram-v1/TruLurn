@@ -46,6 +46,8 @@ import {
   CourseScopeError,
 } from '@/lib/topic-pages/generationAuthority'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { findRelevantSourceImages } from '@/lib/sources/images'
+import { invalidateCourse, getCachedCourse, getCachedTopic, getCachedTopicPages, getCachedCourseTopics } from '@/lib/cache/courseData'
 
 type GeneratePageBody = {
   courseId?: string
@@ -87,16 +89,13 @@ export async function POST(
 
     const db = await getDb()
     const userId = await getRequiredUserId()
-    const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
+    const course = await getCachedCourse(db, courseId, userId)
 
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
 
-    const topic = await db.collection('topics').findOne({
-      _id: params.topicId as any,
-      course_id: courseId,
-    })
+    const topic = await getCachedTopic(db, courseId, params.topicId)
 
     if (!topic) {
       return NextResponse.json({ error: 'Topic not found.' }, { status: 404 })
@@ -111,10 +110,15 @@ export async function POST(
     })
     if (!scopePreflight.scope.allowed) throw new CourseScopeError(scopePreflight)
 
-    const branchTopics = await db.collection('topics')
-      .find({ course_id: courseId, branch_id: topic.branch_id })
-      .sort({ sequence_index: 1, position: 1 })
-      .toArray()
+    const allTopics = await getCachedCourseTopics(db, courseId)
+    const branchTopics = allTopics
+      .filter((t) => String(t.branch_id) === String(topic.branch_id))
+      .sort((a, b) => {
+        const aSeq = Number(a.sequence_index ?? 0)
+        const bSeq = Number(b.sequence_index ?? 0)
+        if (aSeq !== bSeq) return aSeq - bSeq
+        return Number(a.position ?? 0) - Number(b.position ?? 0)
+      })
 
     if (isContainerTopic(topic)) {
       const descendant = firstTeachableDescendant(branchTopics as any, String(topic._id))
@@ -128,11 +132,8 @@ export async function POST(
       return NextResponse.json({ error: 'This Traccia node is structural and has no teachable child yet.' }, { status: 400 })
     }
 
-    const existing = await db.collection('pages').findOne({
-      course_id: courseId,
-      topic_id: params.topicId,
-      page_number: pageNumber,
-    })
+    const topicPages = await getCachedTopicPages(db, courseId, params.topicId)
+    const existing = topicPages.find((p: any) => p.page_number === pageNumber) ?? null
 
     const existingIsBlank = existing ? isBlankGeneratedPage(existing) : false
 
@@ -144,6 +145,32 @@ export async function POST(
     }
 
     if (String(course.mode ?? '') === 'source_grounded') {
+      // 1. Wait briefly for style job to finish (up to 4000ms)
+      if (course.source_profile && 'schema_version' in course.source_profile) {
+        const envelope = course.source_profile as any
+        if (envelope.style_status === 'pending' || envelope.style_status === 'processing') {
+          const start = Date.now()
+          while (Date.now() - start < 4000) {
+            const job = await db.collection('sourceStyleJobs').findOne({ source_fingerprint: envelope.source_fingerprint })
+            if (job && job.status === 'completed') {
+              envelope.style = job.style
+              envelope.style_status = 'ready'
+              envelope.style_generated_at = new Date().toISOString()
+              await db.collection('courses').updateOne(
+                { _id: course._id },
+                { $set: { source_profile: envelope } }
+              )
+              break
+            }
+            if (job && job.status === 'failed') {
+              break
+            }
+            await new Promise(resolve => setTimeout(resolve, 500))
+          }
+        }
+      }
+
+      // 2. Wait briefly for retrieval index & vector embeddings (up to 4000ms)
       let sourceReadiness = await getSourceIndexReadiness(db, courseId, userId)
       if (!sourceReadiness.indexReady) {
         await Promise.all([
@@ -152,13 +179,21 @@ export async function POST(
         ])
         sourceReadiness = await getSourceIndexReadiness(db, courseId, userId)
       }
-      if (sourceReadiness.indexReady && sourceReadiness.readyCount < sourceReadiness.total) {
-        await backfillCourseSourceEmbeddings(db, userId, courseId)
+
+      const start = Date.now()
+      while (Date.now() - start < 4000) {
         sourceReadiness = await getSourceIndexReadiness(db, courseId, userId)
+        if (sourceReadiness.ready) break
+        // Trigger backfill if needed
+        if (sourceReadiness.indexReady && sourceReadiness.readyCount < sourceReadiness.total) {
+          await backfillCourseSourceEmbeddings(db, userId, courseId)
+        }
+        await new Promise(resolve => setTimeout(resolve, 500))
       }
-      if (!sourceReadiness.ready) {
+
+      if (!sourceReadiness.indexReady) {
         return NextResponse.json({
-          error: 'The uploaded sources are still being indexed. Source-grounded generation will start when every source passage is ready.',
+          error: 'The search indexes are still being created. Please wait a moment and try again.',
           code: 'SOURCE_INDEX_NOT_READY',
           sourceIndex: sourceReadiness,
         }, { status: 409 })
@@ -184,15 +219,19 @@ export async function POST(
       courseSkillPlanningContext,
       courseSkillLessonContext,
     ] = await Promise.all([
-      db.collection('pages')
-        .find({
-          course_id: courseId,
-          topic_id: params.topicId,
-          page_number: { $lt: pageNumber },
-        })
-        .sort({ page_number: 1 })
-        .project({ page_number: 1, focus: 1, summary: 1, key_concepts: 1, content: 1 })
-        .toArray(),
+      Promise.resolve(
+        topicPages
+          .filter((p: any) => p.page_number < pageNumber)
+          .map((p: any) => ({
+            page_number: p.page_number,
+            focus: p.focus,
+            summary: p.summary,
+            key_concepts: p.key_concepts,
+            content: p.content,
+            example_to_use: p.example_to_use,
+          }))
+          .sort((a: any, b: any) => a.page_number - b.page_number)
+      ),
       retrieveCourseMemory({
         db,
         query: memoryQuery,
@@ -419,6 +458,21 @@ export async function POST(
     ].filter((value): value is string => Boolean(value))
     if (!relevantLearnerConcepts.length) relevantLearnerConcepts.push(focus)
 
+    // Source figures: for source-grounded courses, surface the images extracted
+    // from the uploaded material that best match this page's focus, so the lesson
+    // can teach directly from the original diagrams/charts. Best-effort.
+    const availableFigures = String(course.mode ?? '') === 'source_grounded'
+      ? await findRelevantSourceImages(db, {
+          courseId,
+          userId,
+          queryText: [focus, topic.title].filter(Boolean).join(' | '),
+          limit: 2,
+        }).catch((error) => {
+          console.warn('[pageGen] Source figure retrieval unavailable.', error)
+          return []
+        })
+      : []
+
     const generationInput = {
       course,
       topic,
@@ -438,6 +492,7 @@ export async function POST(
       ),
       authority,
       sourceEvidence,
+      availableFigures,
       nextTopicTitle: nextTopicForPage ? String(nextTopicForPage.title) : undefined,
       priorExample,
     }
@@ -508,6 +563,7 @@ export async function POST(
         },
       )
 
+      invalidateCourse(courseId)
       return NextResponse.json({
         skipped: true,
         reason: generated.decision_reason,
@@ -753,6 +809,9 @@ export async function POST(
     await embedPageById(db, String(pageDocument._id)).catch((error) => {
       console.warn('Failed to embed generated page.', error)
     })
+
+    // Topic key_concepts / planned_pages / state changed — refresh cached structure.
+    invalidateCourse(courseId)
 
     return NextResponse.json({
       pageId: String(pageDocument._id),

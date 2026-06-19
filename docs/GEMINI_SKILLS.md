@@ -7,7 +7,6 @@ TruLurn treats skills as local product capabilities, not provider features. Gemi
 | Skill | File | Purpose |
 | --- | --- | --- |
 | `curriculum_builder` | `lib/ai/skills/curriculumBuilder.ts` | Builds the first course draft from either AI teacher mode or source-grounded mode. |
-| `map_builder` | `lib/ai/skills/mapBuilder.ts` | Converts the course draft into a stable branch/topic roadmap and dependency edges. |
 | `flow_tracker` | `lib/ai/skills/flowTracker.ts` | Recommends conservative progress changes from demonstrated evidence only. |
 | `scoped_chat` | `lib/ai/skills/scopedChat.ts` | Answers doubts inside the current page/topic boundary. |
 | `source_learning_page` | `lib/ai/skills/sourceLearningPage.ts` | Writes one lesson page from supplied source text only. |

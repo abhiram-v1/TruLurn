@@ -47,6 +47,8 @@ export type RecallBreakState = {
   startBreak: (manual?: boolean) => void
   snoozeBreak: (minutes: number) => void
   skipBreak: () => void
+  /** End the countdown early and jump straight to the review questions. */
+  skipRestToReview: () => void
   completeBreak: (reviewedItemIds: string[]) => Promise<{ reviewed: number } | null>
   tagReminder: (itemId: string) => Promise<boolean>
   dismissOverlay: () => void
@@ -473,6 +475,7 @@ export function useRecallBreak({
     startBreak,
     snoozeBreak,
     skipBreak,
+    skipRestToReview: revealPreparedRecall,
     completeBreak,
     tagReminder,
     dismissOverlay,

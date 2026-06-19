@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { IconFileTypePdf } from '@tabler/icons-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { flushSync } from 'react-dom'
 import { DoubtChat } from '@/components/learn/DoubtChat'
@@ -22,8 +22,45 @@ import {
   RecallBreakOverlay,
 } from '@/components/recall/RecallBreakOverlay'
 import { useRecallBreak } from '@/components/recall/useRecallBreak'
+import { QuizInviteBanner } from '@/components/quiz/QuizInviteBanner'
 import { paginateLessonMarkdown } from '@/lib/lesson-pagination'
 import type { DoubtMessage, Page, Topic } from '@/types'
+
+// ── Module-level page cache ───────────────────────────────────────────────────
+// Lives outside React so it survives re-renders and soft navigations within the
+// same browser session. Key: "topicId::pageNumber". Value: fetched Page object.
+// The cache is unbounded — a 15-page topic at ~3KB/page is only ~45KB total.
+const _pageCache = new Map<string, Page>()
+const _pageCacheInflight = new Set<string>()
+
+function pageCacheKey(topicId: string, pageNumber: number) {
+  return `${topicId}::${pageNumber}`
+}
+
+async function fetchAndCachePage(
+  topicId: string,
+  pageNumber: number,
+): Promise<{ page: Page; totalPages: number; estimatedPages: number } | null> {
+  const key = pageCacheKey(topicId, pageNumber)
+  const cached = _pageCache.get(key)
+  if (cached) return { page: cached, totalPages: 0, estimatedPages: 0 }
+  if (_pageCacheInflight.has(key)) return null
+  _pageCacheInflight.add(key)
+  try {
+    const res = await fetch(
+      `/api/topics/${encodeURIComponent(topicId)}/pages/${pageNumber}`,
+      { cache: 'no-store' },
+    )
+    if (!res.ok) return null
+    const data = await res.json() as { page: Page; totalPages: number; estimatedPages: number }
+    _pageCache.set(key, data.page)
+    return data
+  } catch {
+    return null
+  } finally {
+    _pageCacheInflight.delete(key)
+  }
+}
 
 // ── Inline text replacement ───────────────────────────────────────────────────
 // DOM-selected text and stored markdown diverge in whitespace: the DOM collapses
@@ -70,6 +107,7 @@ export function LearnExperience({
   globalPageTotal,
   initialMessages,
   nextTopic,
+  reviewGaps = [],
 }: {
   courseId: string
   topic: Topic
@@ -82,11 +120,15 @@ export function LearnExperience({
   globalPageTotal: number
   initialMessages: DoubtMessage[]
   nextTopic?: Pick<Topic, 'id' | 'title'> | null
+  reviewGaps?: string[]
 }) {
   const router = useRouter()
   const [roadmapCollapsed, setRoadmapCollapsed] = useState(false)
   const [doubtsExpanded, setDoubtsExpanded] = useState(false)
+  const [quizBannerDismissed, setQuizBannerDismissed] = useState(false)
   const [lessonPageIndex, setLessonPageIndex] = useState(0)
+  const [isPageChanging, setIsPageChanging] = useState(false)
+  const [pageChangeError, setPageChangeError] = useState<string | null>(null)
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isExportingPdf, setIsExportingPdf] = useState(false)
   const [pdfEntries, setPdfEntries] = useState<LessonPdfEntry[]>([])
@@ -95,19 +137,162 @@ export function LearnExperience({
   const [selectedChatContext, setSelectedChatContext] = useState<{ id: number; text: string } | null>(null)
   const [sectionOverrides, setSectionOverrides] = useState<Map<number, SectionOverride>>(new Map())
 
+  // ── Client-side page cache state ────────────────────────────────────────────
+  // activePage starts as the SSR-provided page; cache-first navigation swaps it
+  // instantly without a server round-trip.
+  const [activePage, setActivePage] = useState<Page>(page)
+  const [activeTotalPages, setActiveTotalPages] = useState(totalPages)
+  const [activeEstimatedPages, setActiveEstimatedPages] = useState(estimatedPages)
+  const activeGlobalPageNumber = Math.max(
+    1,
+    globalPageNumber + activePage.page_number - page.page_number,
+  )
+  // Scroll position memory: save scroll offset per page_number so going back
+  // restores context.
+  const scrollPositionsRef = useRef<Map<number, number>>(new Map())
+  const lessonPanelRef = useRef<HTMLElement | null>(null)
+
+  // Seed the cache with the SSR page so the first prev/next hit is already warm.
+  useEffect(() => {
+    _pageCache.set(pageCacheKey(topic.id, page.page_number), page)
+  }, [page, topic.id])
+
+  // Sync activePage when SSR sends a new page (e.g. after router.refresh() from regen)
+  useEffect(() => {
+    setActivePage(page)
+    setActiveTotalPages(totalPages)
+    setActiveEstimatedPages(estimatedPages)
+    // Re-seed cache with fresh server data
+    _pageCache.set(pageCacheKey(topic.id, page.page_number), page)
+    setIsPageChanging(false)
+  }, [page, totalPages, estimatedPages, topic.id])
+
+  // Prefetch adjacent pages into the cache during browser idle time
+  const prefetchPageToCache = useCallback((pageNum: number) => {
+    const key = pageCacheKey(topic.id, pageNum)
+    if (_pageCache.has(key) || _pageCacheInflight.has(key)) return
+    const run = () => { fetchAndCachePage(topic.id, pageNum) }
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(run, { timeout: 2000 })
+    } else {
+      setTimeout(run, 300)
+    }
+  }, [topic.id])
+
+  // Prefetch N-1 and N+1 whenever the active page changes
+  useEffect(() => {
+    const cur = activePage.page_number
+    if (cur > 1) prefetchPageToCache(cur - 1)
+    if (cur < Math.min(activeTotalPages, activeEstimatedPages, 15)) {
+      prefetchPageToCache(cur + 1)
+    }
+  }, [activePage.page_number, activeTotalPages, activeEstimatedPages, prefetchPageToCache])
+
+  // Cache-first navigation: instantly show cached page, sync URL without SSR
+  const handleNavToPage = useCallback(async (targetPageNumber: number) => {
+    if (isPageChanging || targetPageNumber === activePage.page_number) return
+    setPageChangeError(null)
+    setIsPageChanging(true)
+
+    // Save current scroll position
+    const panel = lessonPanelRef.current ?? document.querySelector<HTMLElement>('.lesson-content')
+    if (panel) {
+      scrollPositionsRef.current.set(activePage.page_number, panel.scrollTop)
+    }
+
+    const key = pageCacheKey(topic.id, targetPageNumber)
+    let targetPage = _pageCache.get(key)
+    let freshMeta: { totalPages: number; estimatedPages: number } | null = null
+
+    if (!targetPage) {
+      const fresh = await fetchAndCachePage(topic.id, targetPageNumber)
+      if (fresh) {
+        targetPage = fresh.page
+        freshMeta = {
+          totalPages: fresh.totalPages,
+          estimatedPages: fresh.estimatedPages,
+        }
+      }
+    }
+
+    if (!targetPage) {
+      try {
+        const generated = await fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ courseId, pageNumber: targetPageNumber }),
+        })
+        if (generated.ok) {
+          const fresh = await fetchAndCachePage(topic.id, targetPageNumber)
+          if (fresh) {
+            targetPage = fresh.page
+            freshMeta = {
+              totalPages: fresh.totalPages,
+              estimatedPages: fresh.estimatedPages,
+            }
+          }
+        }
+      } catch {
+        // The route fallback below will render the existing generation/error UI.
+      }
+    }
+
+    if (targetPage) {
+      const nextPage = targetPage
+      window.setTimeout(() => {
+        setActivePage(nextPage)
+        setLessonPageIndex(0)
+        if (freshMeta?.totalPages) setActiveTotalPages(freshMeta.totalPages)
+        if (freshMeta?.estimatedPages) setActiveEstimatedPages(freshMeta.estimatedPages)
+        window.history.pushState(
+          null,
+          '',
+          `/learn/${courseId}/${encodeURIComponent(topic.id)}?page=${targetPageNumber}`,
+        )
+        requestAnimationFrame(() => {
+          const p = lessonPanelRef.current ?? document.querySelector<HTMLElement>('.lesson-content')
+          if (p) {
+            const saved = scrollPositionsRef.current.get(targetPageNumber)
+            p.scrollTop = saved ?? 0
+          }
+          window.setTimeout(() => setIsPageChanging(false), 180)
+        })
+      }, 110)
+      // Background: fetch fresh data in case the cache is stale (fire-and-forget)
+      fetchAndCachePage(topic.id, targetPageNumber).then((fresh) => {
+        if (fresh && fresh.totalPages > 0) {
+          _pageCache.set(pageCacheKey(topic.id, targetPageNumber), fresh.page)
+          // Only update state if totalPages changed (avoids unnecessary re-render)
+          if (fresh.totalPages !== activeTotalPages) setActiveTotalPages(fresh.totalPages)
+          if (fresh.estimatedPages !== activeEstimatedPages) setActiveEstimatedPages(fresh.estimatedPages)
+        }
+      })
+    } else {
+      setIsPageChanging(false)
+      setPageChangeError('That page could not be opened. Please try again.')
+      window.setTimeout(() => setPageChangeError(null), 3500)
+    }
+  }, [topic.id, courseId, activePage.page_number, activeTotalPages, activeEstimatedPages, router, isPageChanging])
+
   const recall = useRecallBreak({
     courseId,
     topicId: topic.id,
     topicTitle: topic.title,
-    pageNumber: page.page_number,
-    keyConcepts: page.key_concepts,
-    pageSummary: page.summary ?? null,
+    pageNumber: activePage.page_number,
+    keyConcepts: activePage.key_concepts,
+    pageSummary: activePage.summary ?? null,
   })
 
   // Clear overrides whenever the page changes
   useEffect(() => {
     setSectionOverrides(new Map())
-  }, [page.id])
+    setSelectedChatContext(null)
+  }, [activePage.id])
+
+  // Reset quiz banner when we navigate to a different topic
+  useEffect(() => {
+    setQuizBannerDismissed(false)
+  }, [topic.id])
 
   function applyInlineTransform(
     sectionIdx: number,
@@ -115,11 +300,11 @@ export function LearnExperience({
     result: string,
     action: TransformAction,
   ) {
-    if (!page.sections || sectionIdx < 0 || sectionIdx >= page.sections.length) return
+    if (!activePage.sections || sectionIdx < 0 || sectionIdx >= activePage.sections.length) return
 
     setSectionOverrides((prev) => {
-      const currentContent = prev.get(sectionIdx)?.modified ?? page.sections![sectionIdx].content
-      const original = prev.get(sectionIdx)?.original ?? page.sections![sectionIdx].content
+      const currentContent = prev.get(sectionIdx)?.modified ?? activePage.sections![sectionIdx].content
+      const original = prev.get(sectionIdx)?.original ?? activePage.sections![sectionIdx].content
 
       const modified = action === 'example'
         ? spliceIntoMarkdown(currentContent, selectedText, `${selectedText}\n\n${result}`)
@@ -232,59 +417,67 @@ export function LearnExperience({
 
   // Structured pages (new format) render all sections at once — no sub-pagination.
   // Legacy flat-markdown pages (old format) are split into screen-sized chunks.
-  const isStructured = Boolean(page.sections && page.sections.length > 0)
+  const isStructured = Boolean(activePage.sections && activePage.sections.length > 0)
   const lessonPages = useMemo(
-    () => isStructured ? [page.content] : paginateLessonMarkdown(page.content),
-    [page.content, isStructured],
+    () => isStructured ? [activePage.content] : paginateLessonMarkdown(activePage.content),
+    [activePage.content, isStructured],
   )
-  const currentLessonContent = lessonPages[lessonPageIndex] ?? lessonPages[0] ?? page.content
+  const currentLessonContent = lessonPages[lessonPageIndex] ?? lessonPages[0] ?? activePage.content
 
   // estimatedPages is plan-aware (topic.planned_pages once the lesson plan
   // exists) — trust it. No phantom "+1" page: a finished topic ends at its
   // last planned page and offers the quiz, instead of inviting the student
   // to mint extra pages for thin topics.
-  const totalPlanned  = Math.max(totalPages, estimatedPages)
-  const prev          = Math.max(1, page.page_number - 1)
-  const next          = Math.min(totalPlanned, page.page_number + 1)
-  const isFirst       = page.page_number === 1
-  const isLast        = totalPages >= totalPlanned && page.page_number >= totalPlanned
+  const totalPlanned  = Math.max(activeTotalPages, activeEstimatedPages)
+  const prev          = Math.max(1, activePage.page_number - 1)
+  const next          = Math.min(totalPlanned, activePage.page_number + 1)
+  const isFirst       = activePage.page_number === 1
+  const isLast        = activeTotalPages >= totalPlanned && activePage.page_number >= totalPlanned
   const isFirstScreen = lessonPageIndex === 0
   const isLastScreen  = lessonPageIndex === lessonPages.length - 1
-  const pageMarkers = Array.from({ length: Math.min(totalPlanned, 15) }, (_, index) => index + 1)
+  const pageMarkers = useMemo(
+    () => Array.from({ length: Math.min(totalPlanned, 15) }, (_, index) => index + 1),
+    [totalPlanned],
+  )
   const hasScreenParts = lessonPages.length > 1
 
   useEffect(() => {
     setLessonPageIndex(0)
-  }, [page.id])
+  }, [activePage.id])
 
-  // One-ahead prefetch: while the student reads page N, silently generate page
-  // N+1 so "Next" never waits — and never more than one unread page exists.
-  // Reading a page takes far longer than generating one, so this stays seamless
-  // while capping wasted generations (student leaves mid-topic) at a single page.
-  // The server additionally hard-caps generation at the topic plan's page count.
+  // Two-ahead generation prefetch: while the student reads page N, silently
+  // generate N+1 and N+2 so rapid "Next → Next" never stalls on generation.
+  // Reading takes far longer than generating, so two-ahead stays seamless while
+  // keeping wasted generation low. The server hard-caps at the planned page count.
   const prefetchedPagesRef = useRef<Set<number>>(new Set())
   useEffect(() => {
-    const nextPage = page.page_number + 1
-    if (nextPage > Math.min(estimatedPages, 15)) return
-    if (nextPage <= totalPages) return // already stored
-    if (prefetchedPagesRef.current.has(nextPage)) return
-    prefetchedPagesRef.current.add(nextPage)
+    const candidates = [activePage.page_number + 1, activePage.page_number + 2]
+    for (const nextPage of candidates) {
+      if (nextPage > Math.min(activeEstimatedPages, 15)) continue
+      if (nextPage <= activeTotalPages) continue // already stored
+      if (prefetchedPagesRef.current.has(nextPage)) continue
+      prefetchedPagesRef.current.add(nextPage)
 
-    fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ courseId, pageNumber: nextPage }),
-    }).catch(() => {
-      // Allow a retry on the next page change if the prefetch failed.
-      prefetchedPagesRef.current.delete(nextPage)
-    })
-  }, [page.page_number, topic.id, courseId, estimatedPages, totalPages])
+      fetch(`/api/topics/${encodeURIComponent(topic.id)}/pages/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ courseId, pageNumber: nextPage }),
+      }).then(() => {
+        // After generation completes, prefetch the new page into our cache so the
+        // client gets it instantly without a second round-trip.
+        prefetchPageToCache(nextPage)
+      }).catch(() => {
+        prefetchedPagesRef.current.delete(nextPage)
+      })
+    }
+  }, [activePage.page_number, topic.id, courseId, activeEstimatedPages, activeTotalPages, prefetchPageToCache])
 
   return (
     <div className="study-shell">
       <ThreePanelLayout
         roadmapCollapsed={roadmapCollapsed}
         doubtsExpanded={doubtsExpanded}
+        lessonPanelRef={lessonPanelRef}
         left={
           <MiniRoadmap
             topics={topics}
@@ -292,7 +485,7 @@ export function LearnExperience({
             courseId={courseId}
             collapsed={roadmapCollapsed}
             onToggle={() => setRoadmapCollapsed((collapsed) => !collapsed)}
-            currentPageNumber={page.page_number}
+            currentPageNumber={activePage.page_number}
             totalPlannedPages={totalPlanned}
           />
         }
@@ -346,13 +539,20 @@ export function LearnExperience({
               <div className="recall-inline-error">{recall.error}</div>
             ) : null}
 
+            {reviewGaps.length > 0 && activePage.page_number === 1 && lessonPageIndex === 0 ? (
+              <div className="lesson-review-reminder" role="note">
+                <strong>Reviewing this topic</strong>
+                <p>Your last quiz flagged gaps in: {reviewGaps.join(', ')}. Keep those in mind as you read.</p>
+              </div>
+            ) : null}
+
             <LessonPage
-              page={page}
+              page={activePage}
               topicTitle={topic.title}
               content={currentLessonContent}
               screenPage={lessonPageIndex + 1}
               screenPageCount={lessonPages.length}
-              globalPageNumber={globalPageNumber}
+              globalPageNumber={activeGlobalPageNumber}
               globalPageTotal={globalPageTotal}
               sectionOverrides={sectionOverrides}
               onRestoreSection={restoreSection}
@@ -360,15 +560,33 @@ export function LearnExperience({
               <LessonFeedback
                 courseId={courseId}
                 topicId={topic.id}
-                pageNumber={page.page_number}
+                pageNumber={activePage.page_number}
                 onReexplain={regeneratePage}
                 isRegenerating={isRegenerating}
               />
+              {isLast && isLastScreen && !quizBannerDismissed ? (
+                <QuizInviteBanner
+                  topicTitle={topic.title}
+                  quizHref={`/quiz/${encodeURIComponent(topic.id)}?mode=checkpoint`}
+                  onDismiss={() => setQuizBannerDismissed(true)}
+                />
+              ) : null}
             </LessonPage>
+            {isPageChanging ? (
+              <div className="lesson-page-transition" role="status" aria-live="polite">
+                <span className="loading-wheel" aria-hidden="true" />
+                <span>Turning the page…</span>
+              </div>
+            ) : null}
+            {pageChangeError ? (
+              <div className="lesson-page-transition is-error" role="alert">
+                <span>{pageChangeError}</span>
+              </div>
+            ) : null}
             <LessonConceptNavigator
               courseId={courseId}
               topicId={topic.id}
-              currentPageNumber={page.page_number}
+              currentPageNumber={activePage.page_number}
               pages={conceptPages}
             />
             <LessonSelectionToolbar
@@ -388,12 +606,14 @@ export function LearnExperience({
                   Prev
                 </button>
               ) : isFirstScreen ? (
-                <Link
+                <button
                   className="lesson-nav-btn"
-                  href={`/learn/${courseId}/${topic.id}?page=${prev}`}
+                  type="button"
+                  onClick={() => handleNavToPage(prev)}
+                  disabled={isPageChanging}
                 >
                   Prev
-                </Link>
+                </button>
               ) : (
                 <button
                   className="lesson-nav-btn"
@@ -406,14 +626,14 @@ export function LearnExperience({
 
               <div className="lesson-page-meter" aria-label="Lesson pages">
                 <span className="lesson-page-pos">
-                  Page {page.page_number} of {totalPlanned}
+                  Page {activePage.page_number} of {totalPlanned}
                 </span>
                 <div className="lesson-page-dots" aria-hidden="true">
                   {pageMarkers.map((pageNumber) => (
                     <span
                       className={[
-                        pageNumber === page.page_number ? 'active' : '',
-                        pageNumber <= totalPages ? 'generated' : 'planned',
+                        pageNumber === activePage.page_number ? 'active' : '',
+                        pageNumber <= activeTotalPages ? 'generated' : 'planned',
                       ].filter(Boolean).join(' ')}
                       key={`${topic.id}-page-${pageNumber}`}
                     />
@@ -421,11 +641,11 @@ export function LearnExperience({
                 </div>
                 {hasScreenParts ? (
                   <span className="lesson-page-context">
-                    Course page {globalPageNumber} of {globalPageTotal} - Part {lessonPageIndex + 1} of {lessonPages.length}
+                    Course page {activeGlobalPageNumber} of {globalPageTotal} - Part {lessonPageIndex + 1} of {lessonPages.length}
                   </span>
                 ) : (
                   <span className="lesson-page-context">
-                    Course page {globalPageNumber} of {globalPageTotal}
+                    Course page {activeGlobalPageNumber} of {globalPageTotal}
                   </span>
                 )}
               </div>
@@ -440,28 +660,23 @@ export function LearnExperience({
                     Next
                   </button>
                 ) : isLast ? (
-                  <>
-                    <Link
-                      className="lesson-nav-btn lesson-nav-quiz"
-                      href={`/quiz/${encodeURIComponent(topic.id)}`}
-                    >
-                      Take quiz
-                    </Link>
-                    <Link
-                      className="lesson-nav-btn lesson-nav-next"
-                      href={nextTopic ? `/learn/${courseId}/${encodeURIComponent(nextTopic.id)}` : `/course/${courseId}`}
-                      title={nextTopic ? `Skip quiz and continue to ${nextTopic.title}` : 'Return to Atlas'}
-                    >
-                      {nextTopic ? 'Next topic' : 'Atlas'}
-                    </Link>
-                  </>
-                ) : (
                   <Link
                     className="lesson-nav-btn lesson-nav-next"
-                    href={`/learn/${courseId}/${topic.id}?page=${next}`}
+                    href={nextTopic ? `/learn/${courseId}/${encodeURIComponent(nextTopic.id)}` : `/course/${courseId}`}
+                    title={nextTopic ? `Go to ${nextTopic.title}` : 'Return to Atlas'}
+                    prefetch={false}
+                  >
+                    {nextTopic ? 'Next topic' : 'Atlas'}
+                  </Link>
+                ) : (
+                  <button
+                    className="lesson-nav-btn lesson-nav-next"
+                    type="button"
+                    onClick={() => handleNavToPage(next)}
+                    disabled={isPageChanging}
                   >
                     Next
-                  </Link>
+                  </button>
                 )}
               </div>
             </div>
@@ -472,8 +687,8 @@ export function LearnExperience({
             courseId={courseId}
             topicId={topic.id}
             topicTitle={topic.title}
-            pageNumber={page.page_number}
-            globalPageNumber={globalPageNumber}
+            pageNumber={activePage.page_number}
+            globalPageNumber={activeGlobalPageNumber}
             initialMessages={initialMessages}
             expanded={doubtsExpanded}
             onExpandedChange={setDoubtsExpanded}
@@ -485,7 +700,7 @@ export function LearnExperience({
           />
         }
       />
-      {recall.rest ? <RecallBreakCountdown rest={recall.rest} /> : null}
+      {recall.rest ? <RecallBreakCountdown rest={recall.rest} onSkipRest={recall.skipRestToReview} /> : null}
       {recall.overlay ? (
         <RecallBreakOverlay
           content={recall.overlay}
@@ -496,7 +711,7 @@ export function LearnExperience({
       ) : null}
       <LessonPdfDocument
         entries={pdfEntries}
-        currentPageId={page.id}
+        currentPageId={activePage.id}
         currentPageOverrides={sectionOverrides}
         globalPageTotal={pdfGlobalPageTotal}
       />

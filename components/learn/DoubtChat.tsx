@@ -50,7 +50,8 @@ export function DoubtChat({
   onGenerateCustomPage?: (instruction: string, targetPageNumber: number) => void
 }) {
   const router = useRouter()
-  const [messages, setMessages] = useState(initialMessages)
+  const [messages, setMessages] = useState<DoubtMessage[]>(initialMessages || [])
+  const [loadingHistory, setLoadingHistory] = useState(false)
   const [draft, setDraft] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [localContextByMessageId, setLocalContextByMessageId] = useState<Record<string, string>>({})
@@ -63,6 +64,38 @@ export function DoubtChat({
   }, [messages, isSending])
 
   useEffect(() => {
+    let active = true
+    async function loadHistory() {
+      if (initialMessages && initialMessages.length > 0) {
+        setMessages(initialMessages)
+        return
+      }
+      setLoadingHistory(true)
+      try {
+        const res = await fetch(`/api/agent/message?courseId=${encodeURIComponent(courseId)}`)
+        if (!res.ok) throw new Error('Failed to load chat history')
+        const data = await res.json()
+        if (active && data.messages) {
+          setMessages(data.messages)
+        }
+      } catch (err) {
+        console.error('[DoubtChat] Failed to load chat history:', err)
+      } finally {
+        if (active) setLoadingHistory(false)
+      }
+    }
+    loadHistory()
+
+    return () => {
+      active = false
+    }
+    // Chat history belongs to the course conversation, not the current lesson
+    // page. Page context updates must not reload or reset the conversation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId])
+
+  useEffect(() => {
+    if (!initialMessages || initialMessages.length === 0) return
     setMessages((current) => {
       // Merge server messages with any client-only messages not yet in the DB.
       // This prevents messages from being wiped on router.refresh() — action
@@ -252,6 +285,11 @@ export function DoubtChat({
         <div className="message system">
           Ask anything, request a quiz, or say &quot;give me another page on examples&quot; or &quot;go deeper&quot;.
         </div>
+        {loadingHistory && messages.length === 0 ? (
+          <div className="message assistant typing" style={{ opacity: 0.6 }}>
+            Loading history...
+          </div>
+        ) : null}
         {messages.map((msg) => (
           <div className={`message ${msg.role}`} key={msg.id}>
             {msg.topic_title && msg.topic_id !== topicId ? (

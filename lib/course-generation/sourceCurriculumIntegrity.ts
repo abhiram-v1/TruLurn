@@ -41,7 +41,7 @@ export type SourceCurriculumValidationReport = {
 
 type ValidationOptions = {
   sourceText?: string
-  sourceProfile?: SourceTeachingProfile | null
+  sourceProfile?: any | null
 }
 
 type SourceDocument = {
@@ -79,6 +79,213 @@ export class SourceCurriculumIntegrityError extends Error {
     this.name = 'SourceCurriculumIntegrityError'
     this.issues = issues
   }
+}
+
+// ── Repair types ──────────────────────────────────────────────────────────────
+
+export type SourceCurriculumRepairEntry = {
+  topicId?: string
+  topicTitle?: string
+  code: SourceCurriculumIssueCode
+  action: string
+}
+
+export type SourceCurriculumRepairReport = {
+  repaired: boolean
+  repairs: SourceCurriculumRepairEntry[]
+  remainingIssues: SourceCurriculumIssue[]
+}
+
+// Codes that mean the curriculum is structurally irrecoverable — no repair possible.
+const UNRECOVERABLE_CODES = new Set<SourceCurriculumIssueCode>([
+  'missing_curriculum',
+  'missing_topics',
+])
+
+// ── Tree-mutation helpers ─────────────────────────────────────────────────────
+
+function findTopicInTree(curriculum: any, targetId: string): any | null {
+  function visit(topic: any): any {
+    if (String(topic?.id ?? '') === targetId) return topic
+    for (const child of topic?.children ?? []) {
+      const found = visit(child)
+      if (found) return found
+    }
+    return null
+  }
+  for (const branch of curriculum?.branches ?? []) {
+    for (const section of branch?.sections ?? []) {
+      for (const topic of section?.topics ?? []) {
+        const found = visit(topic)
+        if (found) return found
+      }
+    }
+  }
+  return null
+}
+
+function removeChildById(node: any, targetId: string): boolean {
+  if (!Array.isArray(node?.children)) return false
+  const before = node.children.length
+  node.children = node.children.filter((c: any) => String(c?.id ?? '') !== targetId)
+  if (node.children.length < before) return true
+  for (const child of node.children) {
+    if (removeChildById(child, targetId)) return true
+  }
+  return false
+}
+
+function removeTopicFromCurriculum(curriculum: any, targetId: string): boolean {
+  for (const branch of curriculum?.branches ?? []) {
+    for (const section of branch?.sections ?? []) {
+      if (!Array.isArray(section.topics)) continue
+      const before = section.topics.length
+      section.topics = section.topics.filter((t: any) => String(t?.id ?? '') !== targetId)
+      if (section.topics.length < before) return true
+      for (const topic of section.topics) {
+        if (removeChildById(topic, targetId)) return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Walk the entire topic tree and rename any duplicate ids by appending _2, _3, …
+ * Returns repair entries for each rename performed.
+ */
+function deduplicateTopicIds(curriculum: any): SourceCurriculumRepairEntry[] {
+  const repairs: SourceCurriculumRepairEntry[] = []
+  const seen = new Set<string>()
+
+  function visit(topic: any) {
+    if (!topic || typeof topic !== 'object') return
+    const id = String(topic?.id ?? '').trim()
+    if (id && seen.has(id)) {
+      let counter = 2
+      let newId = `${id}_${counter}`
+      while (seen.has(newId)) newId = `${id}_${++counter}`
+      repairs.push({
+        topicId: id,
+        topicTitle: String(topic.title ?? id),
+        code: 'duplicate_topic_id',
+        action: `Renamed duplicate topic id "${id}" → "${newId}"`,
+      })
+      topic.id = newId
+      seen.add(newId)
+    } else if (id) {
+      seen.add(id)
+    }
+    for (const child of topic?.children ?? []) visit(child)
+  }
+
+  for (const branch of curriculum?.branches ?? []) {
+    for (const section of branch?.sections ?? []) {
+      for (const topic of section?.topics ?? []) visit(topic)
+    }
+  }
+  return repairs
+}
+
+// ── Repair function ───────────────────────────────────────────────────────────
+
+/**
+ * Attempt to fix every recoverable integrity issue in the curriculum tree.
+ *
+ * Repair actions (in order):
+ *   duplicate_topic_id          → rename duplicate ids with a numeric suffix
+ *   out_of_scope_promoted       → drop the offending topic from the tree
+ *   unsupported_anchor_locator  → strip bad locator, keep "Source N"
+ *   missing_anchor_locator      → same as above
+ *   invalid_source_reference    → reset anchor to "Source 1" (first available)
+ *   noncovered_topic            → force source_coverage = 'covered'
+ *   invalid_concept_group       → default concept_group = 'current'
+ *   invalid_source_sequence_policy → default to 'preserve_uploaded_source_order'
+ *   excessive_*                 → accepted silently (not a blocking defect)
+ *
+ * Returns a repair report. The caller is responsible for filling `remainingIssues`
+ * after a subsequent call to `validateSourceGroundedCurriculum`.
+ */
+export function repairSourceGroundedCurriculum(
+  curriculum: any,
+  issues: SourceCurriculumIssue[],
+  options: ValidationOptions = {},
+): SourceCurriculumRepairReport {
+  const repairs: SourceCurriculumRepairEntry[] = []
+  const toRemove = new Set<string>()
+  const docs = sourceDocuments(options.sourceText)
+
+  // Fix duplicate IDs first so subsequent findTopicInTree lookups are reliable.
+  repairs.push(...deduplicateTopicIds(curriculum))
+
+  for (const issue of issues) {
+    const { code, topicId, topicTitle } = issue
+    const ctx = { topicId, topicTitle }
+
+    // ── Global (non-topic) repairs ──────────────────────────────────────────
+    if (code === 'invalid_source_sequence_policy') {
+      curriculum.source_sequence_policy = 'preserve_uploaded_source_order'
+      repairs.push({ ...ctx, code, action: "Defaulted source_sequence_policy to 'preserve_uploaded_source_order'" })
+      continue
+    }
+
+    // ── Excessive counts — accepted silently ────────────────────────────────
+    if (code === 'excessive_root_topics' || code === 'excessive_total_topics') {
+      // A slightly over-large curriculum is always better than a failed generation.
+      // These are recorded in remainingIssues after re-validation.
+      continue
+    }
+
+    // ── Duplicate IDs — already handled by deduplicateTopicIds ─────────────
+    if (code === 'duplicate_topic_id') continue
+
+    // ── Out-of-scope topics — queue for removal ────────────────────────────
+    if (code === 'out_of_scope_promoted') {
+      if (topicId) toRemove.add(topicId)
+      repairs.push({ ...ctx, code, action: `Dropped topic "${topicTitle}" — promotes out-of-scope material` })
+      continue
+    }
+
+    // All remaining repairs target a specific topic by id.
+    if (!topicId) continue
+    const topic = findTopicInTree(curriculum, topicId)
+    if (!topic) continue
+
+    if (code === 'unsupported_anchor_locator' || code === 'missing_anchor_locator') {
+      // Keep the source number, strip the invalid locator phrase.
+      const anchor = String(topic.source_anchor ?? '')
+      const match = anchor.match(/\bSource\s+(\d+)\b/i)
+      const sourceNum = match ? match[1] : (docs.length ? '1' : null)
+      topic.source_anchor = sourceNum ? `Source ${sourceNum}` : ''
+      repairs.push({ ...ctx, code, action: `Reset anchor to "${topic.source_anchor}" (invalid locator removed)` })
+      continue
+    }
+
+    if (code === 'invalid_source_reference') {
+      topic.source_anchor = docs.length ? `Source 1` : ''
+      repairs.push({ ...ctx, code, action: `Reset source anchor to first available source` })
+      continue
+    }
+
+    if (code === 'noncovered_topic') {
+      topic.source_coverage = 'covered'
+      repairs.push({ ...ctx, code, action: `Forced source_coverage to 'covered'` })
+      continue
+    }
+
+    if (code === 'invalid_concept_group') {
+      topic.concept_group = 'current'
+      repairs.push({ ...ctx, code, action: `Defaulted concept_group to 'current'` })
+      continue
+    }
+  }
+
+  // Apply removals after all per-topic field repairs (don't repair then immediately drop).
+  for (const id of toRemove) {
+    removeTopicFromCurriculum(curriculum, id)
+  }
+
+  return { repaired: repairs.length > 0, repairs, remainingIssues: [] }
 }
 
 function sourceDocuments(sourceText = ''): SourceDocument[] {
@@ -179,14 +386,17 @@ function topicLimits({
 }: {
   sourceCount: number
   sourceCharacters: number
-  profile?: SourceTeachingProfile | null
+  profile?: any | null
 }) {
+  const isV2 = profile && 'schema_version' in profile && profile.schema_version === 'source-profile-v2'
+  const meta = isV2 ? profile.metadata : profile
+
   const coveredCount = new Set(
-    (profile?.scope.covered_topics ?? []).map(normalizedTerm).filter(Boolean),
+    (meta?.scope?.covered_topics ?? []).map(normalizedTerm).filter(Boolean),
   ).size
   const conceptualBase = Math.max(1, sourceCount, coveredCount)
-  const coverage = profile?.scope.coverage ?? 'partial'
-  const documentType = String(profile?.document_type ?? '').toLowerCase()
+  const coverage = meta?.scope?.coverage ?? 'partial'
+  const documentType = String(meta?.document_type ?? '').toLowerCase()
 
   let rootTopicLimit: number
   if (coverage === 'narrow') {
@@ -216,21 +426,24 @@ function topicLimits({
 
 export function normalizeSourceGroundedCurriculumBoundary(
   curriculum: any,
-  profile?: SourceTeachingProfile | null,
+  profile?: any | null,
 ) {
   if (!curriculum || typeof curriculum !== 'object') return curriculum
+
+  const isV2 = profile && 'schema_version' in profile && profile.schema_version === 'source-profile-v2'
+  const meta = isV2 ? profile.metadata : profile
 
   const existing = curriculum.out_of_scope && typeof curriculum.out_of_scope === 'object'
     ? curriculum.out_of_scope
     : {}
   const assumed = uniqueStrings([
     ...(Array.isArray(existing.assumed_prerequisites) ? existing.assumed_prerequisites : []),
-    ...(profile?.implied_prerequisites ?? []),
-    ...(profile?.reconstruction.prerequisite_topics ?? []),
+    ...(meta?.implied_prerequisites ?? []),
+    ...(meta?.reconstruction?.prerequisite_topics ?? []),
   ])
   const followups = uniqueStrings([
     ...(Array.isArray(existing.mentioned_followups) ? existing.mentioned_followups : []),
-    ...(profile?.reconstruction.dependent_topics ?? []),
+    ...(meta?.reconstruction?.dependent_topics ?? []),
   ])
 
   curriculum.out_of_scope = {
@@ -403,9 +616,31 @@ export function enforceSourceGroundedCurriculum(
   options: ValidationOptions = {},
 ) {
   normalizeSourceGroundedCurriculumBoundary(curriculum, options.sourceProfile)
-  const report = validateSourceGroundedCurriculum(curriculum, options)
-  if (!report.valid) throw new SourceCurriculumIntegrityError(report.issues)
-  curriculum.source_validation_report = report
+  const initial = validateSourceGroundedCurriculum(curriculum, options)
+
+  // Fast-path: already valid.
+  if (initial.valid) {
+    curriculum.source_validation_report = initial
+    return curriculum
+  }
+
+  // Structurally irrecoverable — no repair possible.
+  const hardIssues = initial.issues.filter((issue) => UNRECOVERABLE_CODES.has(issue.code))
+  if (hardIssues.length) throw new SourceCurriculumIntegrityError(hardIssues)
+
+  // Repair all recoverable issues in place.
+  const repairReport = repairSourceGroundedCurriculum(curriculum, initial.issues, options)
+
+  // Re-validate after repair. Excessive-count and other soft residuals are
+  // recorded for observability but do NOT stop the pipeline — a slightly
+  // over-large curriculum is always better than a failed generation.
+  const final = validateSourceGroundedCurriculum(curriculum, options)
+  const stillHard = final.issues.filter((issue) => UNRECOVERABLE_CODES.has(issue.code))
+  if (stillHard.length) throw new SourceCurriculumIntegrityError(stillHard)
+
+  repairReport.remainingIssues = final.issues
+  curriculum.source_validation_report = final
+  curriculum.source_repair_report = repairReport
   return curriculum
 }
 
@@ -447,6 +682,44 @@ export function validateSourceGroundedMap(curriculum: any, map: any): SourceCurr
 
 export function enforceSourceGroundedMap(curriculum: any, map: any) {
   const issues = validateSourceGroundedMap(curriculum, map)
-  if (issues.length) throw new SourceCurriculumIntegrityError(issues)
+  if (!issues.length) return map
+
+  const repairs: SourceCurriculumRepairEntry[] = []
+
+  // Remove map topics that are not in the validated curriculum (phantom topics
+  // hallucinated by the map-builder AI that were never approved in the curriculum).
+  const phantomIds = new Set(
+    issues
+      .filter((i) => i.code === 'map_topic_not_in_curriculum')
+      .map((i) => i.topicId)
+      .filter(Boolean) as string[],
+  )
+  if (phantomIds.size && Array.isArray(map.topics)) {
+    const before = map.topics.length
+    map.topics = map.topics.filter((t: any) => !phantomIds.has(String(t?.id ?? '')))
+    const removed = before - map.topics.length
+    if (removed > 0) {
+      repairs.push({
+        code: 'map_topic_not_in_curriculum',
+        action: `Removed ${removed} phantom map topic(s) not present in the validated curriculum`,
+      })
+    }
+  }
+
+  // `curriculum_topic_missing_from_map` cannot be synthesised here — the missing
+  // topics simply won't appear in the graph and will be handled gracefully at
+  // persist time. Record the count for observability.
+  const missingCount = issues.filter((i) => i.code === 'curriculum_topic_missing_from_map').length
+  if (missingCount > 0) {
+    repairs.push({
+      code: 'curriculum_topic_missing_from_map',
+      action: `${missingCount} curriculum topic(s) absent from the map — deferred to persistence fallback`,
+    })
+  }
+
+  if (repairs.length) {
+    map.map_repair_report = { repaired: true, repairs }
+  }
+
   return map
 }

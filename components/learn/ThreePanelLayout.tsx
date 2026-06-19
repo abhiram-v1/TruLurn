@@ -8,12 +8,14 @@ export function ThreePanelLayout({
   right,
   roadmapCollapsed = false,
   doubtsExpanded = false,
+  lessonPanelRef,
 }: {
   left: React.ReactNode
   middle: React.ReactNode
   right: React.ReactNode
   roadmapCollapsed?: boolean
   doubtsExpanded?: boolean
+  lessonPanelRef?: React.RefObject<HTMLElement | null>
 }) {
   const [chatWidth, setChatWidth] = useState<number | null>(null)
   const isDraggingRef = useRef(false)
@@ -78,7 +80,7 @@ export function ThreePanelLayout({
       style={gridStyle}
     >
       <aside className="roadmap-panel">{left}</aside>
-      <section className="lesson-panel">{middle}</section>
+      <section className="lesson-panel" ref={lessonPanelRef as React.RefObject<HTMLElement>}>{middle}</section>
       <aside className="chat-panel" style={{ position: 'relative' }}>
         <div className="chat-resizer" onMouseDown={handleMouseDown} />
         {right}

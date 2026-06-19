@@ -872,7 +872,6 @@ export async function findRelevantSourceChunks({
           filter: [
             { equals: { path: 'course_id', value: courseId } },
             { equals: { path: 'user_id', value: userId } },
-            { equals: { path: 'embedding_version', value: ACTIVE_EMBEDDING_VERSION } },
           ],
         },
       },

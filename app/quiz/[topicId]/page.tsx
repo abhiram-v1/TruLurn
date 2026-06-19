@@ -5,6 +5,8 @@ import { QuizSession } from '@/components/quiz/QuizSession'
 import { BackButton } from '@/components/navigation/BackButton'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { getCachedCourse, getCachedTopicById } from '@/lib/cache/courseData'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 
 function QuizShell({
   children,
@@ -21,7 +23,10 @@ function QuizShell({
       <header className="topbar">
         <div className="topbar-left">
           <BackButton fallbackHref={lessonHref} />
-          <Link className="brand" href="/">TruLurn</Link>
+          <Link className="brand" href="/" style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <TruLurnLogo size={22} />
+            <span>TruLurn</span>
+          </Link>
         </div>
         {courseId && topicId ? (
           <Link className="button-subtle" href={lessonHref}>
@@ -39,14 +44,15 @@ export default async function QuizPage({
   searchParams,
 }: {
   params: { topicId: string }
-  searchParams: { review?: string }
+  searchParams: { review?: string; mode?: string }
 }) {
   const topicId = decodeURIComponent(params.topicId)
   const isReview = searchParams?.review === '1'
+  const isCourseCheckpoint = searchParams?.mode === 'checkpoint'
   const db = await getDb()
   const userId = await getRequiredUserId()
 
-  const topic = await db.collection('topics').findOne({ _id: topicId as any })
+  const topic = await getCachedTopicById(db, topicId)
   if (!topic) {
     return (
       <QuizShell>
@@ -59,7 +65,7 @@ export default async function QuizPage({
   }
 
   const courseId = String(topic.course_id)
-  const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
+  const course = await getCachedCourse(db, courseId, userId)
   if (!course) {
     return (
       <QuizShell courseId={courseId} topicId={topicId}>
@@ -71,22 +77,29 @@ export default async function QuizPage({
     )
   }
 
+  const examMode = isReview ? 'spot_check' : isCourseCheckpoint ? 'course_checkpoint' : 'full_topic'
+
   return (
     <QuizShell courseId={courseId} topicId={topicId}>
       <div style={{ marginTop: 34 }}>
         {isReview ? <p className="eyebrow">Spaced review</p> : null}
-        <h1 className="page-heading">{topic.title}</h1>
+        {isCourseCheckpoint ? <p className="eyebrow">Course check-in</p> : null}
+        <h1 className="page-heading">
+          {isCourseCheckpoint ? `${String(course.title ?? course.topic ?? 'Course')} check-in` : String(topic.title)}
+        </h1>
         <p className="page-subtitle">
-          {isReview
-            ? 'A quick retrieval check to keep this topic fresh. Pass it and the next review moves further out; miss it and it comes back sooner.'
-            : 'One question at a time. The engine uses your Traccia path, lesson pages, and prior evidence to choose what to ask.'}
+          {isCourseCheckpoint
+            ? 'A short quiz across everything you\'ve covered so far. Gaps are surfaced while the material is still fresh.'
+            : isReview
+              ? 'A quick retrieval check to keep this topic fresh. Pass it and the next review moves further out; miss it and it comes back sooner.'
+              : 'One question at a time. The engine uses your Traccia path, lesson pages, and prior evidence to choose what to ask.'}
         </p>
       </div>
       <QuizSession
         topicId={topicId}
-        topicTitle={String(topic.title ?? 'Current topic')}
+        topicTitle={isCourseCheckpoint ? String(course.title ?? course.topic ?? 'Course') : String(topic.title ?? 'Current topic')}
         courseId={courseId}
-        mode={isReview ? 'spot_check' : 'full_topic'}
+        mode={examMode}
         isReview={isReview}
       />
     </QuizShell>

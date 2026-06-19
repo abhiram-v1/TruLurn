@@ -12,6 +12,7 @@ import { scheduleTopicReview, cancelTopicReview, recordReviewResult } from '@/li
 import { syncLearnerMemoryV2 } from '@/lib/memory/service'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
+import { invalidateCourse } from '@/lib/cache/courseData'
 
 const FULL_TOPIC_MAX_FOLLOWUPS = 2
 const SPOT_CHECK_MAX = 3
@@ -38,6 +39,7 @@ type Blueprint = {
   priorEvidence: string
   isProgramming: boolean
   courseSkillContext: string
+  mode: ExamMode
   // Topic metadata forwarded for the quiz planner
   topicMeta: {
     title: string
@@ -74,10 +76,12 @@ function clamp(value: number, min: number, max: number) {
 // might need 2 questions; backpropagation with 4 lesson pages and 8 downstream
 // dependents might need 6. The AI reads the content and reasons about it.
 async function planQuizSession(blueprint: Blueprint): Promise<QuizPlan> {
-  const { topicMeta, targets, priorEvidence, isProgramming } = blueprint
+  const { topicMeta, targets, priorEvidence, isProgramming, mode } = blueprint
+  const isCourseCheckpoint = mode === 'course_checkpoint'
 
   // Summarise what was taught — key concepts + lesson summaries across all targets
   const lessonSummary = targets
+    .slice(0, isCourseCheckpoint ? 12 : targets.length)
     .map((t) => {
       const parts: string[] = [`Node: ${t.nodeTitle}`]
       if (t.summary) parts.push(`Summary: ${t.summary}`)
@@ -87,16 +91,58 @@ async function planQuizSession(blueprint: Blueprint): Promise<QuizPlan> {
 
   const allKeyConcepts = Array.from(
     new Set(targets.flatMap((t) =>
-      // concept field on each target is already a deduplicated key concept string
       [t.concept].filter(Boolean),
     )),
-  ).slice(0, 16)
+  ).slice(0, isCourseCheckpoint ? 20 : 16)
+
+  const coveredTopicCount = isCourseCheckpoint
+    ? new Set(targets.map((t) => t.nodeId)).size
+    : 1
 
   const availableTypes = isProgramming
     ? 'mcq, true_false, apply, spot_error, explain, code'
     : 'mcq, true_false, apply, spot_error, explain'
 
-  const system = `You are TruLurn's quiz architect. Your job is to look at what was actually taught in a lesson and decide:
+  // question_count range varies: topic quiz 2–8, course checkpoint 3–10
+  const minQ = isCourseCheckpoint ? 3 : 2
+  const maxQ = isCourseCheckpoint ? 10 : 8
+
+  const system = isCourseCheckpoint
+    ? `You are TruLurn's quiz architect. The student has just finished a topic and we are running a COURSE CHECKPOINT — questions drawn from everything they have covered so far, not just the last topic.
+
+Your job:
+1. Decide how many questions genuinely sample the breadth of what they have covered
+2. Choose question types that surface gaps across topics, not just the most recent one
+
+Ask yourself:
+- Across all these topics, what are the most likely misunderstandings?
+- Which connections between topics would a surface learner miss?
+- What is the minimum question set that gives real confidence about course-wide understanding?
+
+Question types:
+- mcq: Multiple choice. Tests specific mechanism understanding; good distractors trip up partial understanding.
+- true_false: Quick check on a precise definition or a common misconception.
+- apply: Apply to a new scenario not in the lesson. Tests mechanism vs recall.
+- spot_error: Find the mistake in an argument or code. Only possible with deep understanding.
+- explain: Explain in own words. Tests ability to articulate reasoning, not just recognise it.
+- code: Write code. Only for programming topics where implementation reveals understanding.
+
+Question count guidance (course checkpoint):
+- 1–2 topics covered → 3–4 questions
+- 3–5 topics covered → 4–6 questions
+- 6–10 topics covered → 6–8 questions
+- 10+ topics covered → 7–10 questions
+
+Absolute limits: question_count must be between ${minQ} and ${maxQ} (inclusive).
+Never pad. Mix types to probe different topics. Never repeat the same type consecutively.
+
+Return ONLY valid JSON:
+{
+  "question_count": <integer ${minQ}–${maxQ}>,
+  "type_plan": [<type>, <type>, ...],
+  "reasoning": "<one or two sentences: what drove the count and type choices>"
+}`
+    : `You are TruLurn's quiz architect. Your job is to look at what was actually taught in a lesson and decide:
 1. How many questions genuinely help reveal whether a student understood it (not more, not fewer)
 2. What question types would best expose real understanding vs surface recall
 
@@ -115,7 +161,7 @@ Question types:
 - explain: Explain in own words. Tests ability to articulate reasoning, not just recognise it.
 - code: Write code. Only for programming topics where implementation reveals understanding.
 
-Absolute limits: question_count must be between 2 and 8 (inclusive).
+Absolute limits: question_count must be between ${minQ} and ${maxQ} (inclusive).
 Practical guidance:
 - Simple definition or orientation concept → 2–3
 - Standard mechanism with one key insight → 3–4
@@ -128,12 +174,24 @@ Never repeat the same type consecutively in type_plan.
 
 Return ONLY valid JSON matching this exact shape:
 {
-  "question_count": <integer 2–8>,
+  "question_count": <integer ${minQ}–${maxQ}>,
   "type_plan": [<type>, <type>, ...],
   "reasoning": "<one or two sentences: what drove the count and type choices>"
 }`
 
-  const user = `Course: ${blueprint.course.title ?? blueprint.course.topic}
+  const user = isCourseCheckpoint
+    ? `Course: ${blueprint.course.title ?? blueprint.course.topic}
+Quiz mode: course checkpoint
+Topics covered so far: ${coveredTopicCount}
+Available question types: ${availableTypes}
+
+Key concepts from across the course:
+${allKeyConcepts.join(', ') || 'see summaries below'}
+
+Sample lesson content (from covered topics):
+${lessonSummary || 'No lesson summaries available.'}
+${priorEvidence ? `\nPrior quiz evidence:\n${priorEvidence}` : ''}`
+    : `Course: ${blueprint.course.title ?? blueprint.course.topic}
 Topic: ${topicMeta.title}
 Concept kind: ${topicMeta.conceptKind || 'unknown'}
 Topic depth: ${topicMeta.topicDepth || 'medium'}
@@ -167,7 +225,7 @@ ${priorEvidence ? `\nPrior quiz evidence:\n${priorEvidence}` : ''}`
       },
     })
     const parsed = parseAIJson<any>(raw)
-    const count = clamp(Math.round(Number(parsed.question_count ?? 4)), 2, 8)
+    const count = clamp(Math.round(Number(parsed.question_count ?? 4)), minQ, maxQ)
     const validTypes = new Set(['mcq', 'true_false', 'apply', 'spot_error', 'explain', 'code'])
     const rawPlan: QuestionType[] = Array.isArray(parsed.type_plan)
       ? parsed.type_plan
@@ -199,10 +257,12 @@ ${priorEvidence ? `\nPrior quiz evidence:\n${priorEvidence}` : ''}`
     // Fallback: simple heuristic so a planning failure never blocks the quiz
     const kind = topicMeta.conceptKind
     const depth = topicMeta.topicDepth
-    const count = kind === 'pitfall' || kind === 'math' ? 5
-      : depth === 'deep' ? 5
-      : depth === 'shallow' ? 3
-      : 4
+    const count = isCourseCheckpoint
+      ? Math.min(maxQ, Math.max(minQ, Math.ceil(coveredTopicCount * 0.8)))
+      : kind === 'pitfall' || kind === 'math' ? 5
+        : depth === 'deep' ? 5
+        : depth === 'shallow' ? 3
+        : 4
     const FALLBACK: QuestionType[] = isProgramming
       ? ['mcq', 'apply', 'spot_error', 'explain', 'code']
       : ['mcq', 'apply', 'spot_error', 'explain', 'true_false']
@@ -361,7 +421,7 @@ export function serializeExamSession(session: any, turn: any) {
   }
 }
 
-async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId: string): Promise<Blueprint> {
+async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId: string, mode: ExamMode = 'full_topic'): Promise<Blueprint> {
   const courseId = String(course._id)
   const topicId = String(topic._id)
   const allTopics = await db.collection('topics')
@@ -387,12 +447,18 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
     .toArray()
 
   const orderedTopics = sortTracciaTopics(allTopics as any[])
-  const focusTopics = isContainerTopic(topic)
-    ? orderedTopics.filter((candidate: any) => {
-        const pathIds = (candidate.path_ids ?? []).map(String)
-        return pathIds.includes(topicId) && String(candidate._id) !== topicId && !isContainerTopic(candidate)
-      })
-    : [topic]
+  // course_checkpoint: gather all visited/active leaf topics across the course.
+  // full_topic / spot_check: scope to the target topic (or its container's children).
+  const focusTopics = mode === 'course_checkpoint'
+    ? orderedTopics.filter((candidate: any) =>
+        !isContainerTopic(candidate) && (candidate.state ?? 'active') !== 'locked',
+      )
+    : isContainerTopic(topic)
+      ? orderedTopics.filter((candidate: any) => {
+          const pathIds = (candidate.path_ids ?? []).map(String)
+          return pathIds.includes(topicId) && String(candidate._id) !== topicId && !isContainerTopic(candidate)
+        })
+      : [topic]
 
   const focusIds = focusTopics.length ? focusTopics.map((item: any) => String(item._id)) : [topicId]
   const [branch, pages, pageSummaries, oldAttempts, recentSessions, courseSkillContext] = await Promise.all([
@@ -497,12 +563,28 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
     })
   }
 
+  // Fetch the actual questions asked in the most recent completed session so the
+  // question generator can avoid verbatim repeats on a retake.
+  const prevSessionTurns = recentSessions.length > 0
+    ? await db.collection('examTurns')
+        .find({ session_id: String(recentSessions[0]._id) })
+        .project({ question: 1, concept: 1, type: 1, turn_index: 1 })
+        .sort({ turn_index: 1 })
+        .limit(10)
+        .toArray()
+    : []
+
   const priorEvidence = [
     ...oldAttempts.map((attempt: any) => {
       const passed = attempt.passed ? 'passed' : 'needs review'
       return `Old quiz attempt: ${passed}; gaps ${compact(JSON.stringify(attempt.evaluation ?? {}), 320)}`
     }),
     ...recentSessions.map((session: any) => `Recent exam: ${session.summary?.passed ? 'completed strongly' : 'review suggested'}; ${compact(session.summary?.student_summary ?? '', 240)}`),
+    ...(prevSessionTurns.length ? [
+      `Previously asked questions (do NOT repeat these — generate similar but distinct variations):\n${
+        prevSessionTurns.map((t: any, i: number) => `${i + 1}. [${t.type}] ${compact(t.question, 130)}`).join('\n')
+      }`,
+    ] : []),
   ].join('\n')
 
   const programmingCheckText = pages
@@ -524,6 +606,7 @@ async function buildBlueprint(db: Db, course: CourseDoc, topic: TopicDoc, userId
     priorEvidence,
     isProgramming: isProgrammingContext(course, topic, programmingCheckText),
     courseSkillContext: courseSkillContext?.text ?? '',
+    mode,
     topicMeta: {
       title:          String(topic.title ?? ''),
       conceptKind:    String(topic.concept_kind ?? topic.node_type ?? ''),
@@ -640,6 +723,7 @@ General rules:
 - Do not change the question type.
 - If this is a follow-up, approach the same concept from a genuinely different angle — not a harder repeat of the same question.
 - For critical concepts, test reasoning or application. Never ask for pure recall.
+- If prior quiz evidence lists previously asked questions, you MUST NOT reproduce any of them. Write a distinct question that tests the same concept from a different scenario, framing, or abstraction level — one that would surface the same gap if the student still doesn't understand.
 - For code questions, ask for a bounded implementation of about 8–25 lines that demonstrates the concept in action.
 - The rubric should describe what a genuinely clear answer looks like, not a perfect one.
 - When visual interpretation is the tested skill, the question may include a chart using the contract below. Otherwise do not add one.
@@ -836,10 +920,10 @@ export async function startOrResumeExam({
 
   if (!session) {
     // Build blueprint once here so createTurn can reuse it without re-fetching
-    const blueprint = await buildBlueprint(db, course, topic, userId)
+    const blueprint = await buildBlueprint(db, course, topic, userId, mode)
 
-    // For spot_check, use a fixed budget. For full_topic, let the AI plan the session
-    // by reading the actual lesson content rather than applying a depth-level formula.
+    // For spot_check, use a fixed budget. For full_topic / course_checkpoint, let the
+    // AI plan the session by reading the actual lesson content.
     const quizPlan: QuizPlan | null = mode === 'spot_check'
       ? null
       : await planQuizSession(blueprint)
@@ -986,7 +1070,7 @@ ${turn.type === 'code' ? `\`\`\`\n${studentAnswer || '(no answer)'}\n\`\`\`` : s
 }
 
 async function maybeInsertFollowup(db: Db, session: any, evaluatedTurn: any, evaluation: EvaluationResult) {
-  if (session.mode !== 'full_topic') return
+  if (session.mode !== 'full_topic' && session.mode !== 'course_checkpoint') return
   if (evaluation.passed) return
   const turns = await getSessionTurns(db, String(session._id))
   if (turns.length >= Number(session.max_questions ?? 7)) return
@@ -1113,8 +1197,12 @@ async function finalizeExam(db: Db, session: any) {
     .map((item) => String(item.turn.concept))
     .slice(0, 5)
 
+  const isCourseCheckpoint = session.mode === 'course_checkpoint'
   let graphUpdate = null
-  if (session.mode === 'full_topic') {
+  // Graph + memory run for every mode. Per-topic writes (quizAttempts, review
+  // signal, spaced repetition) are scoped to full_topic only.
+  if (session.mode === 'full_topic' || isCourseCheckpoint || session.mode === 'spot_check') {
+    if (session.mode === 'full_topic') {
     await db.collection('quizAttempts').insertOne({
       _id: crypto.randomUUID() as any,
       course_id: String(session.course_id),
@@ -1213,7 +1301,9 @@ async function finalizeExam(db: Db, session: any) {
         console.warn('[examEngine] prerequisite gap detection failed:', err)
       }
     }
+    }  // end: full_topic-only writes
 
+    // Graph update — runs for full_topic and course_checkpoint
     try {
       const [topic, allTopics] = await Promise.all([
         db.collection('topics').findOne({ _id: session.topic_id as any, course_id: session.course_id }),
@@ -1287,9 +1377,13 @@ async function finalizeExam(db: Db, session: any) {
     total_questions: evaluations.length,
     strong_concepts: Array.from(new Set(strongConcepts)),
     review_concepts: Array.from(new Set(reviewConcepts)),
-    student_summary: passed
-      ? 'Your answers show enough understanding to move forward. Review the notes below if you want to strengthen the details.'
-      : 'This quiz found a few concepts worth revisiting before treating the topic as settled.',
+    student_summary: isCourseCheckpoint
+      ? (passed
+          ? 'Your recall across the course looks solid. Keep the momentum going.'
+          : 'A few concepts across the course could use another pass — check the gaps below.')
+      : (passed
+          ? 'Your answers show enough understanding to move forward. Review the notes below if you want to strengthen the details.'
+          : 'This quiz found a few concepts worth revisiting before treating the topic as settled.'),
     graph_update: graphUpdate
       ? { summary: graphUpdate.summary, nextSuggestedTopicId: graphUpdate.nextSuggestedTopicId }
       : null,
@@ -1314,6 +1408,7 @@ async function finalizeExam(db: Db, session: any) {
     user_id: String(session.user_id),
     course_id: String(session.course_id),
   })
+  invalidateCourse(String(session.course_id))
   return {
     ...serializeExamSession({ ...session, status: 'completed', summary }, null),
     turns: evaluatedTurns.map((turn) => ({

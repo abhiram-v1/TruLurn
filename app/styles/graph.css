@@ -55,6 +55,20 @@
   --kg-unstable:   #C9352F;
   --kg-active:     #d36d4a;
 
+  /* ── Multi-spectrum confidence color scale (11 stops) ── */
+  /* Encodes certainty: deep red = unknown, magenta = core verified knowledge */
+  --kg-conf-0:   #DC2626;   /* 0–13%:  Deep Red   — Very Low Confidence  */
+  --kg-conf-1:   #EA580C;   /* 14–23%: Orange     — Low Confidence       */
+  --kg-conf-2:   #CA8A04;   /* 24–33%: Yellow     — Moderate Confidence  */
+  --kg-conf-3:   #65A30D;   /* 34–43%: Lime       — Emerging Confidence  */
+  --kg-conf-4:   #16A34A;   /* 44–53%: Green      — High Confidence      */
+  --kg-conf-5:   #0D9488;   /* 54–62%: Teal       — Strong Confidence    */
+  --kg-conf-6:   #0891B2;   /* 63–71%: Cyan       — Verified Confidence  */
+  --kg-conf-7:   #2563EB;   /* 72–79%: Blue       — Highly Stable        */
+  --kg-conf-8:   #4F46E5;   /* 80–87%: Indigo     — Long-Term Stable     */
+  --kg-conf-9:   #7C3AED;   /* 88–94%: Purple     — Critical/Core        */
+  --kg-conf-10:  #C026D3;   /* 95–100%: Magenta   — Core + High Importance */
+
   /* Floating-panel design language — every canvas overlay (HUD, zoom, legend,
      minimap, banners) shares these so the chrome reads as one product. */
   --kg-panel-bg:     rgba(253, 249, 240, 0.92);
@@ -2159,3 +2173,100 @@
   border-color: var(--kg-unstable, #b91c1c);
   color: var(--kg-unstable, #b91c1c);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GRAPH MANAGER — Multi-spectrum visualization & review state encodings
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Edge thickness from relationship importance score ── */
+.kg-link.score-strong  { stroke-width: 3.2 !important; }
+.kg-link.score-medium  { stroke-width: 2.0 !important; }
+.kg-link.score-weak    { stroke-width: 1.1 !important; }
+
+/* ── Edge opacity from confidence score (applied inline via style) ── */
+/* Base: 0.85. Inline style overrides per-edge for continuous spectrum. */
+
+/* ── Node review state border encoding ── */
+/* solid = observed / confirmed / verified (default, no override needed) */
+.kg-node-card.review-inferred,
+.kg-node-card.review-proposed {
+  border-style: dashed !important;
+}
+.kg-node-card.review-deprecated {
+  border-style: dotted !important;
+  opacity: 0.62 !important;
+  filter: grayscale(0.4);
+}
+.kg-node-card.review-contradicted {
+  border-style: dotted !important;
+  border-color: var(--kg-conf-0) !important;
+  box-shadow: 0 0 0 2px rgba(220,38,38,.15), 0 2px 8px rgba(5,5,23,.1) !important;
+}
+.kg-node-card.review-verified {
+  box-shadow:
+    0 0 0 2px rgba(12,145,155,.2),
+    0 4px 14px rgba(5,5,23,.12),
+    0 1px 0 rgba(255,255,255,.88) inset !important;
+}
+.kg-node-card.review-confirmed {
+  box-shadow:
+    0 0 0 1px rgba(37,99,235,.16),
+    0 3px 10px rgba(5,5,23,.1),
+    0 1px 0 rgba(255,255,255,.84) inset !important;
+}
+
+/* ── Glow animation for recently active nodes (applied via .recently-active) ── */
+@keyframes kg-confidence-glow {
+  0%, 100% { box-shadow: 0 0 0 0 transparent, 0 2px 8px rgba(5,5,23,.08); }
+  50%       { box-shadow: 0 0 10px 3px var(--kg-glow-color, rgba(13,148,136,.3)), 0 4px 14px rgba(5,5,23,.12); }
+}
+.kg-node-card.recently-active {
+  animation: kg-confidence-glow 2.8s ease-in-out infinite;
+}
+
+/* ── Confidence-tinted left-border accent (applied via --kg-conf-accent inline) ── */
+.kg-node-card.has-confidence-score {
+  border-left-width: 3px;
+  border-left-style: solid;
+  /* border-left-color set inline from confidenceToColor() */
+}
+
+/* ── Spine rail for the critical path ── */
+.kg-spine-rail {
+  fill: none;
+  stroke: #8b5cf6;
+  stroke-width: 2.5;
+  stroke-dasharray: 8 5;
+  opacity: 0.28;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ── Confidence legend in sidebar ── */
+.kg-conf-legend {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0 4px;
+}
+.kg-conf-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--kg-ink-2);
+}
+.kg-conf-swatch {
+  width: 10px; height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.kg-conf-swatch.s0  { background: var(--kg-conf-0); }
+.kg-conf-swatch.s1  { background: var(--kg-conf-1); }
+.kg-conf-swatch.s2  { background: var(--kg-conf-2); }
+.kg-conf-swatch.s3  { background: var(--kg-conf-3); }
+.kg-conf-swatch.s4  { background: var(--kg-conf-4); }
+.kg-conf-swatch.s5  { background: var(--kg-conf-5); }
+.kg-conf-swatch.s6  { background: var(--kg-conf-6); }
+.kg-conf-swatch.s7  { background: var(--kg-conf-7); }
+.kg-conf-swatch.s8  { background: var(--kg-conf-8); }
+.kg-conf-swatch.s9  { background: var(--kg-conf-9); }
+.kg-conf-swatch.s10 { background: var(--kg-conf-10); }

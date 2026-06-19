@@ -233,16 +233,29 @@ function ResultView({
   state,
   courseId,
   topicId,
+  mode,
+  onRetake,
 }: {
   state: ExamSessionPayload
   courseId: string
   topicId: string
+  mode: ExamMode
+  onRetake: () => void
 }) {
   const summary = state.session.summary
   const turns = state.turns ?? []
   const passed = Boolean(summary?.passed)
   const nextTopicId = summary?.graph_update?.nextSuggestedTopicId ?? null
   const prereqGap = summary?.prerequisite_gap ?? null
+  const reviewConcepts = summary?.review_concepts ?? []
+  // course_checkpoint has no single lesson to return to — send back to Atlas
+  const isCourseCheckpoint = mode === 'course_checkpoint'
+  const lessonHref = isCourseCheckpoint
+    ? `/course/${courseId}`
+    : `/learn/${courseId}/${encodeURIComponent(topicId)}`
+  const reviewHref = isCourseCheckpoint
+    ? `/course/${courseId}`
+    : `/learn/${courseId}/${encodeURIComponent(topicId)}`
 
   return (
     <div className="quiz-stack">
@@ -272,18 +285,18 @@ function ResultView({
         </div>
       ) : null}
 
-      {(summary?.strong_concepts?.length || summary?.review_concepts?.length) ? (
+      {(summary?.strong_concepts?.length || reviewConcepts.length) ? (
         <div className="question-block">
-          {summary.strong_concepts?.length ? (
+          {summary?.strong_concepts?.length ? (
             <>
               <div className="question-meta">Felt steady</div>
               <p className="question-text">{summary.strong_concepts.join(', ')}</p>
             </>
           ) : null}
-          {summary.review_concepts?.length ? (
+          {reviewConcepts.length ? (
             <>
               <div className="question-meta" style={{ marginTop: 18 }}>Worth revisiting</div>
-              <p className="question-text">{summary.review_concepts.join(', ')}</p>
+              <p className="question-text">{reviewConcepts.join(', ')}</p>
             </>
           ) : null}
         </div>
@@ -321,23 +334,38 @@ function ResultView({
         </div>
       ))}
 
-      <div className="topbar-actions">
-        <Link className="button-subtle" href={`/learn/${courseId}/${topicId}`}>
-          Return to lesson
-        </Link>
-        {passed && nextTopicId ? (
-          <Link className="button" href={`/learn/${courseId}/${encodeURIComponent(nextTopicId)}`}>
-            Continue →
-          </Link>
-        ) : passed ? (
-          <Link className="button" href={`/course/${courseId}`}>
-            Back to Atlas
-          </Link>
+      <div className="quiz-result-actions">
+        {!passed ? (
+          <>
+            <Link className="button" href={reviewHref}>
+              Review lesson
+            </Link>
+            <button className="button-subtle" type="button" onClick={onRetake}>
+              Retake quiz
+            </button>
+          </>
+        ) : passed && nextTopicId ? (
+          <>
+            <Link className="button" href={`/learn/${courseId}/${encodeURIComponent(nextTopicId)}`}>
+              Continue →
+            </Link>
+            <button className="button-subtle" type="button" onClick={onRetake}>
+              Retake quiz
+            </button>
+          </>
         ) : (
-          <Link className="button" href={`/learn/${courseId}/${topicId}`}>
-            Review lesson
-          </Link>
+          <>
+            <Link className="button" href={`/course/${courseId}`}>
+              Back to Atlas
+            </Link>
+            <button className="button-subtle" type="button" onClick={onRetake}>
+              Retake quiz
+            </button>
+          </>
         )}
+        <Link className="button-quiet" href={lessonHref}>
+          {isCourseCheckpoint ? 'Back to Atlas' : 'Return to lesson'}
+        </Link>
       </div>
     </div>
   )
@@ -356,6 +384,7 @@ export function QuizSession({
   mode?: ExamMode
   isReview?: boolean
 }) {
+  const [retakeKey, setRetakeKey] = useState(0)
   const [state, setState] = useState<ExamSessionPayload | null>(null)
   const [answer, setAnswer] = useState('')
   const [isLoading, setIsLoading] = useState(true)
@@ -367,6 +396,7 @@ export function QuizSession({
     async function start() {
       setIsLoading(true)
       setError(null)
+      setState(null)
       try {
         const res = await fetch('/api/exams/start', {
           method: 'POST',
@@ -389,7 +419,7 @@ export function QuizSession({
     return () => {
       alive = false
     }
-  }, [courseId, topicId, mode, isReview])
+  }, [courseId, topicId, mode, isReview, retakeKey])
 
   const turn = state?.turn ?? null
   const progressLabel = useMemo(() => {
@@ -450,7 +480,15 @@ export function QuizSession({
   }
 
   if (state?.session.status === 'completed') {
-    return <ResultView state={state} courseId={courseId} topicId={topicId} />
+    return (
+      <ResultView
+        state={state}
+        courseId={courseId}
+        topicId={topicId}
+        mode={mode}
+        onRetake={() => setRetakeKey((k) => k + 1)}
+      />
+    )
   }
 
   if (!turn) {

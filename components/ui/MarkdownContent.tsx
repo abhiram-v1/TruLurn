@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -30,6 +30,7 @@ import {
   IconSparkles,
 } from '@tabler/icons-react'
 import { TruViz } from '@/components/trueviz/TruViz'
+import { LessonImage } from '@/components/ui/LessonImage'
 
 SyntaxHighlighter.registerLanguage('python', python)
 SyntaxHighlighter.registerLanguage('sql', sql)
@@ -194,13 +195,109 @@ function detectCalloutType(node: any): CalloutType | null {
 
   if (/^Definition/i.test(label)) return 'definition'
   if (/^Example/i.test(label)) return 'example'
-  if (/^Key insight/i.test(label) || /^Key idea/i.test(label)) return 'insight'
+  if (
+    /^Key insight/i.test(label)
+    || /^Key idea/i.test(label)
+    || /^Remember/i.test(label)
+    || /^TL;?DR/i.test(label)
+  ) return 'insight'
   return null
+}
+
+// ── Figure label parsing + reference linking ──────────────────────────────────
+
+const FIGURE_KIND_RE = /^(figure|fig\.?|table|chart|diagram|exhibit|plate|scheme)\s*\.?\s*(\d+(?:\.\d+)?)\s*[:\-–—.]?\s*(.*)$/i
+
+function slugifyLabel(label: string): string {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
+/** Parse an image's alt/title into a figure label + caption. */
+function parseFigureAlt(alt?: string, title?: string): { figureLabel: string; caption: string; anchorId?: string } {
+  const text = (alt ?? '').trim()
+  const m = text.match(FIGURE_KIND_RE)
+  if (m) {
+    let kind = m[1].replace(/\.$/, '')
+    kind = kind.toLowerCase() === 'fig' ? 'Figure' : kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase()
+    const figureLabel = `${kind} ${m[2]}`
+    return { figureLabel, caption: (m[3] || title || '').trim(), anchorId: slugifyLabel(figureLabel) }
+  }
+  return { figureLabel: '', caption: (title || text || '').trim() }
+}
+
+/**
+ * Turn prose mentions of figures the page actually embeds ("see Figure 2") into
+ * in-page anchor links, so clicking scrolls to and highlights the image. Existing
+ * markdown links/images are masked first so their internals are never rewritten.
+ */
+function linkFigureReferences(markdown: string): string {
+  const labels = new Set<string>()
+  // Collect figure labels from embedded images: ![Figure N: ...](...)
+  const imgRe = /!\[([^\]]*)\]\([^)]*\)/g
+  let im: RegExpExecArray | null
+  while ((im = imgRe.exec(markdown))) {
+    const { figureLabel } = parseFigureAlt(im[1])
+    if (figureLabel) labels.add(figureLabel)
+  }
+  if (!labels.size) return markdown
+
+  // Mask images and links so we don't rewrite their internals.
+  const masks: string[] = []
+  const masked = markdown.replace(/!?\[[^\]]*\]\([^)]*\)/g, (match) => {
+    masks.push(match)
+    return ` ${masks.length - 1} `
+  })
+
+  let linked = masked
+  for (const label of labels) {
+    const anchor = slugifyLabel(label)
+    const pattern = new RegExp(`(?<![\\w[])(${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})(?![\\w])`, 'g')
+    linked = linked.replace(pattern, `[$1](#${anchor})`)
+  }
+
+  // Restore masked tokens.
+  return linked.replace(/ (\d+) /g, (_, i) => masks[Number(i)] ?? '')
+}
+
+function scrollToFigure(anchor: string) {
+  const el = document.getElementById(anchor)
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  el.classList.add('lesson-figure-flash')
+  window.setTimeout(() => el.classList.remove('lesson-figure-flash'), 1600)
 }
 
 // ── Custom renderers ──────────────────────────────────────────────────────────
 
 const components: Components = {
+  img({ src, alt, title }) {
+    if (!src || typeof src !== 'string') return null
+    const { figureLabel, caption, anchorId } = parseFigureAlt(alt, title as string | undefined)
+    return (
+      <LessonImage
+        src={src}
+        alt={alt}
+        caption={caption || undefined}
+        figureLabel={figureLabel || undefined}
+        anchorId={anchorId}
+      />
+    )
+  },
+  a({ href, children }) {
+    if (href && href.startsWith('#figure-')) {
+      const anchor = href.slice(1)
+      return (
+        <a
+          className="lesson-figure-ref"
+          href={href}
+          onClick={(e) => { e.preventDefault(); scrollToFigure(anchor) }}
+        >
+          {children}
+        </a>
+      )
+    }
+    return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>
+  },
   // Strip the <pre> wrapper — CodeBlock provides its own container
   pre({ children }) {
     return <>{children}</>
@@ -219,7 +316,11 @@ const components: Components = {
     }
     return <code className="md-inline-code">{children}</code>
   },
-  p({ children }) {
+  p({ children, node }) {
+    const hasImage = node?.children?.some((child: any) => child.type === 'image')
+    if (hasImage) {
+      return <>{children}</>
+    }
     return <p className="md-p">{children}</p>
   },
   strong({ children }) {
@@ -288,6 +389,8 @@ interface MarkdownContentProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MarkdownContent({ children, className = '' }: MarkdownContentProps) {
+  // Linkify figure references against the images this page embeds.
+  const processed = useMemo(() => linkFigureReferences(children), [children])
   return (
     <div className={`md-content ${className}`.trim()}>
       <ReactMarkdown
@@ -295,7 +398,7 @@ export function MarkdownContent({ children, className = '' }: MarkdownContentPro
         rehypePlugins={[rehypeKatex]}
         components={components}
       >
-        {children}
+        {processed}
       </ReactMarkdown>
     </div>
   )

@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     if (!courseId || !topicId) {
       return NextResponse.json({ error: 'Missing courseId or topicId.' }, { status: 400 })
     }
-    if (!['full_topic', 'spot_check'].includes(mode)) {
+    if (!['full_topic', 'spot_check', 'course_checkpoint'].includes(mode)) {
       return NextResponse.json({ error: 'Invalid exam mode.' }, { status: 400 })
     }
 

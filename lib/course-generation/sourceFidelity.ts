@@ -1,4 +1,4 @@
-import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
+import type { SourceTeachingProfile, SourceProfileEnvelope } from '@/lib/course-generation/sourceProfile'
 
 // ── Adaptive source fidelity policy ──────────────────────────────────────────
 //
@@ -37,7 +37,7 @@ export type SourceFidelitySignals = {
   mode?: string | null
   courseDepth?: string | null
   learningPurpose?: string | null
-  sourceProfile?: SourceTeachingProfile | null
+  sourceProfile?: SourceTeachingProfile | SourceProfileEnvelope | null
   /** Explicit student request persisted by the agent — overrides derived coverage. */
   coveragePreference?: string | null
 }
@@ -83,7 +83,14 @@ export function resolveSourceFidelityPolicy(signals: SourceFidelitySignals): Sou
 
   // The material itself signals exam preparation → coverage must be complete
   // regardless of style. A student with exam notes can't afford dropped points.
-  const examSignals = signals.sourceProfile?.exam_signals?.length ?? 0
+  let examSignals = 0
+  if (signals.sourceProfile) {
+    if ('schema_version' in signals.sourceProfile && signals.sourceProfile.schema_version === 'source-profile-v2') {
+      examSignals = signals.sourceProfile.metadata?.exam_signals?.length ?? 0
+    } else {
+      examSignals = (signals.sourceProfile as SourceTeachingProfile).exam_signals?.length ?? 0
+    }
+  }
   if (examSignals >= 2 && coverage !== 'complete') {
     coverage = 'complete'
     reasons.push('Source material carries exam signals — raised coverage to complete.')

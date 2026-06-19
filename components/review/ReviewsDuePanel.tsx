@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
+import { IconChevronDown } from '@tabler/icons-react'
 
 type DueReview = {
   id: string
@@ -20,6 +21,7 @@ type DueReview = {
 // Scoped to one course when `courseId` is passed, otherwise account-wide.
 export function ReviewsDuePanel({ courseId }: { courseId?: string }) {
   const [reviews, setReviews] = useState<DueReview[] | null>(null)
+  const [open, setOpen] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -42,13 +44,17 @@ export function ReviewsDuePanel({ courseId }: { courseId?: string }) {
   if (!reviews || reviews.length === 0) return null
 
   return (
-    <section className="reviews-due-panel" aria-label="Reviews due">
-      <div className="reviews-due-header">
-        <span className="reviews-due-title">
-          {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'} due
+    <section className={`reviews-due-panel atlas-float-card${open ? ' is-open' : ''}`} aria-label="Reviews due">
+      <button type="button" className="atlas-float-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span className="reviews-due-header">
+          <span className="reviews-due-title">
+            {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'} due
+          </span>
+          <span className="reviews-due-sub">Quick retrieval checks keep mastered topics from fading.</span>
         </span>
-        <span className="reviews-due-sub">Quick retrieval checks keep mastered topics from fading.</span>
-      </div>
+        <IconChevronDown size={16} stroke={1.8} className="atlas-float-chevron" aria-hidden="true" />
+      </button>
+      {open ? (
       <ul className="reviews-due-list">
         {reviews.slice(0, 6).map((review) => (
           <li key={review.id} className="reviews-due-item">
@@ -75,6 +81,7 @@ export function ReviewsDuePanel({ courseId }: { courseId?: string }) {
           </li>
         ))}
       </ul>
+      ) : null}
     </section>
   )
 }

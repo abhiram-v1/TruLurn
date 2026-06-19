@@ -20,6 +20,9 @@ const sandboxRequire = (id) => {
       formatSourceEvidencePackets: (items) => items.map((item) => item.content).join('\n'),
     }
   }
+  if (id === '@/lib/ai/skills/dataChart') {
+    return { COMPACT_CHART_OUTPUT_CONTRACT: '' }
+  }
   throw new Error(`Unexpected runtime import in agent chat contract check: ${id}`)
 }
 

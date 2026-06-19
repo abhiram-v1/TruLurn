@@ -336,6 +336,7 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   const branches = Array.isArray(input.map?.branches) ? input.map.branches : []
   const topics = Array.isArray(input.map?.topics) ? input.map.topics : []
   const structuralEdges = Array.isArray(input.map?.structural_edges) ? input.map.structural_edges : []
+  const graphProvenance = input.map?.provenance ?? null
   const firstBranch = branches[0]
 
   if (!firstBranch) throw new Error('Generated roadmap has no branches.')
@@ -392,6 +393,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     topic_count: courseSummary.topic_count,
     status: 'ready',
     validation_report: (input.map as any)?.validation_report ?? null,
+    graph_schema_version: graphProvenance?.schema_version ?? 'legacy-v1',
+    graph_generation_provenance: graphProvenance,
+    graph_generation_revision: Number(graphProvenance?.generation_revision ?? 0),
     source_curriculum_validation: input.mode === 'source_grounded'
       ? (input.curriculum as any)?.source_validation_report ?? null
       : null,
@@ -517,6 +521,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       source_coverage: sourceCoverage,
       concept_group: conceptGroup,
       source_anchor: sourceAnchor,
+      source_refs: Array.isArray(topic.source_refs) ? topic.source_refs.map(String) : [],
+      generation_origin: graphProvenance ? 'generated' : 'legacy',
+      generation_revision: Number(graphProvenance?.generation_revision ?? 0),
       created_at: new Date(),
       updated_at: new Date(),
     }
@@ -640,6 +647,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       to_topic_id: to,
       edge_type: edgeType,
       reason: edge.reason ?? null,
+      source_refs: Array.isArray(edge.source_refs) ? edge.source_refs.map(String) : [],
+      generation_origin: graphProvenance ? 'generated' : 'legacy',
+      generation_revision: Number(graphProvenance?.generation_revision ?? 0),
       strength: edgeType === 'prerequisite' ? 3 : edgeType === 'recommended' ? 2 : 1,
       created_at: new Date(),
     }
@@ -657,6 +667,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
           to_topic_id: String(topic._id),
           edge_type: 'prerequisite',
           reason: `${prereqId} is a prerequisite for ${topic.title}.`,
+          source_refs: Array.isArray(topic.source_refs) ? topic.source_refs.map(String) : [],
+          generation_origin: graphProvenance ? 'generated' : 'legacy',
+          generation_revision: Number(graphProvenance?.generation_revision ?? 0),
           // Match structural prerequisite edges (strength 3) — the same relationship
           // must not render at a different weight depending on which source emitted it.
           strength: 3,
@@ -681,6 +694,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
         to_topic_id: String(nextId),
         edge_type: 'recommended',
         reason: `"${topic.title}" is a useful next step before continuing the course.`,
+        source_refs: Array.isArray(topic.source_refs) ? topic.source_refs.map(String) : [],
+        generation_origin: graphProvenance ? 'generated' : 'legacy',
+        generation_revision: Number(graphProvenance?.generation_revision ?? 0),
         strength: 2,
         created_at: new Date(),
       })
@@ -711,6 +727,12 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
           to_topic_id: to,
           edge_type: 'sequence',
           reason: `The uploaded material places "${orderedTopics[i].title}" before "${orderedTopics[i + 1].title}".`,
+          source_refs: Array.from(new Set([
+            ...(Array.isArray(orderedTopics[i].source_refs) ? orderedTopics[i].source_refs : []),
+            ...(Array.isArray(orderedTopics[i + 1].source_refs) ? orderedTopics[i + 1].source_refs : []),
+          ])).map(String),
+          generation_origin: graphProvenance ? 'generated' : 'legacy',
+          generation_revision: Number(graphProvenance?.generation_revision ?? 0),
           strength: 3,
           created_at: new Date(),
         })
@@ -729,6 +751,9 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     course_id: courseId,
     curriculum: input.curriculum ?? null,
     map: input.map ?? null,
+    graph_schema_version: graphProvenance?.schema_version ?? 'legacy-v1',
+    graph_generation_provenance: graphProvenance,
+    graph_generation_revision: Number(graphProvenance?.generation_revision ?? 0),
     created_at: new Date(),
   })
   await db.collection('courseSummaries').insertOne({

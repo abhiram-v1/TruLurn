@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { generateAIResult, parseAIJson, resolveAIFeatureRoute } from '@/lib/ai'
-import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
+import { curriculumBuilderSkill } from '@/lib/ai/skills'
 import type {
   CourseDepth,
   KnowledgeLevel,
@@ -14,6 +14,7 @@ import {
 } from '@/lib/course-generation/research'
 import { buildSandboxGraphData, type SandboxMap } from '@/lib/graph/sandbox'
 import { ensureSandboxEnvironment } from '@/lib/graph/sandboxEnvironment'
+import { generateCourseGraph } from '@/lib/graph-generation'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -113,11 +114,11 @@ export async function POST(request: Request) {
     stageTimes.curriculum = Date.now() - curriculumStartedAt
 
     const mapStartedAt = Date.now()
-    const mapGeneration = await generateAIResult({
-      feature: 'map_generation',
-      ...mapBuilderSkill(curriculum),
+    const mapGeneration = await generateCourseGraph({
+      curriculum,
+      mode: 'ai_teacher',
     })
-    const map = parseAIJson<SandboxMap>(mapGeneration.text)
+    const map = mapGeneration.map as SandboxMap
     stageTimes.map = Date.now() - mapStartedAt
 
     const graph = buildSandboxGraphData(curriculum, map)
@@ -131,7 +132,7 @@ export async function POST(request: Request) {
       diagnostics: {
         provider: {
           curriculum: curriculumGeneration.provider,
-          map: mapGeneration.provider,
+          map: mapGeneration.provenance.provider,
         },
         totalMs: Date.now() - startedAt,
         stageTimes,

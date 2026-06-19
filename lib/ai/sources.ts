@@ -8,9 +8,29 @@ export type SourceExtraction = {
   limitations: string[]
 }
 
+/** An image extracted from a source document, returned by the MarkItDown service. */
+export type ExtractedSourceImage = {
+  page: number
+  order: number
+  caption: string
+  classification: string
+  chart_type: string
+  ocr_text: string
+  relevance: number
+  figure_label: string
+  nearby_text: string
+  content_hash: string
+  width?: number
+  height?: number
+  mime?: string
+  /** base64-encoded display JPEG bytes (absent when the service is text-only). */
+  data?: string
+}
+
 export type SourceFileExtraction = {
   text: string | null
   limitation: string | null
+  images: ExtractedSourceImage[]
 }
 
 export function isTextSource(file: File): boolean {
@@ -32,7 +52,13 @@ export function isRichSource(file: File): boolean {
  *  - The service is unreachable (not running)
  *  - The service returned a non-OK response
  */
-export async function convertViaMarkItDown(file: File): Promise<string | null> {
+export type MarkItDownResult = {
+  markdown: string
+  images: ExtractedSourceImage[]
+  error?: string
+}
+
+export async function convertViaMarkItDown(file: File): Promise<MarkItDownResult | null> {
   const serviceUrl = process.env.MARKITDOWN_SERVICE_URL
     ?? (process.env.NODE_ENV === 'development' ? 'http://127.0.0.1:3002' : undefined)
   if (!serviceUrl) return null
@@ -54,15 +80,20 @@ export async function convertViaMarkItDown(file: File): Promise<string | null> {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}))
-      console.warn(`[MarkItDown] ${file.name}: ${(err as { detail?: string }).detail ?? res.statusText}`)
-      return null
+      const errMsg = (err as { detail?: string }).detail ?? res.statusText
+      console.warn(`[MarkItDown] ${file.name}: ${errMsg}`)
+      return { markdown: '', images: [], error: errMsg }
     }
 
-    const data = (await res.json()) as { markdown?: string }
-    return typeof data.markdown === 'string' && data.markdown.trim() ? data.markdown : null
+    const data = (await res.json()) as { markdown?: string; images?: ExtractedSourceImage[] }
+    const markdown = typeof data.markdown === 'string' ? data.markdown.trim() : ''
+    const images = Array.isArray(data.images) ? data.images : []
+    if (!markdown && !images.length) return { markdown: '', images: [], error: 'No text or images could be extracted.' }
+    return { markdown, images }
   } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e)
     console.warn(`[MarkItDown] Service unreachable for ${file.name}:`, e)
-    return null
+    return { markdown: '', images: [], error: `service unreachable (${errMsg})` }
   } finally {
     clearTimeout(timeout)
   }
@@ -72,27 +103,32 @@ export async function extractTextFromSourceFile(file: File): Promise<SourceFileE
   if (isTextSource(file)) {
     const text = await file.text()
     return text.trim()
-      ? { text: text.trim(), limitation: null }
-      : { text: null, limitation: `${file.name} was empty.` }
+      ? { text: text.trim(), limitation: null, images: [] }
+      : { text: null, limitation: `${file.name} was empty.`, images: [] }
   }
 
   if (isRichSource(file)) {
-    const markdown = await convertViaMarkItDown(file)
-    if (markdown) return { text: markdown.trim(), limitation: null }
+    const converted = await convertViaMarkItDown(file)
+    if (converted && (converted.markdown || converted.images.length)) {
+      return { text: converted.markdown.trim() || null, limitation: null, images: converted.images }
+    }
 
     const serviceConfigured = Boolean(
       process.env.MARKITDOWN_SERVICE_URL || process.env.NODE_ENV === 'development',
     )
+    const reason = converted?.error ? ` - ${converted.error}` : ' - unknown error'
     return {
       text: null,
+      images: [],
       limitation: serviceConfigured
-        ? `${file.name} could not be converted - the MarkItDown service is unavailable or returned no text.`
+        ? `${file.name} could not be converted${reason}`
         : `${file.name} was skipped - rich document conversion is not configured. Start the MarkItDown service and set MARKITDOWN_SERVICE_URL.`,
     }
   }
 
   return {
     text: null,
+    images: [],
     limitation:
       `${file.name}: unsupported format. ` +
       'Upload text, Markdown, JSON, CSV, PDF, Word (.docx), PowerPoint (.pptx), or Excel (.xlsx) files.',
@@ -122,7 +158,8 @@ export async function extractSourceTextFromFormData(formData: FormData): Promise
 
     // ── Rich documents — convert via MarkItDown service ──────────────────────
     if (isRichSource(value)) {
-      const markdown = await convertViaMarkItDown(value)
+      const converted = await convertViaMarkItDown(value)
+      const markdown = converted?.markdown ?? ''
 
       if (markdown) {
         chunks.push(`${sourceHeader}\n${markdown.trim()}`)
@@ -132,8 +169,9 @@ export async function extractSourceTextFromFormData(formData: FormData): Promise
           `Start the MarkItDown service and set MARKITDOWN_SERVICE_URL.`
         )
       } else {
+        const reason = converted?.error ? ` — ${converted.error}` : ''
         limitations.push(
-          `${value.name} could not be converted — the MarkItDown service is unavailable or returned no text.`
+          `${value.name} could not be converted${reason}`
         )
       }
       continue

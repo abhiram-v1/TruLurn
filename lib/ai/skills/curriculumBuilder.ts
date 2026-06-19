@@ -1,6 +1,7 @@
 import type { CurriculumSkillInput, SkillPrompt } from '@/lib/ai/skills/types'
 import { buildCurriculumFidelityNote, resolveSourceFidelityPolicy } from '@/lib/course-generation/sourceFidelity'
 import { formatSourceProfileForCurriculum } from '@/lib/course-generation/sourceProfile'
+import { formatCompactSourceForPrompt } from '@/lib/course-generation/sourceCompaction'
 
 export function curriculumBuilderSkill(input: CurriculumSkillInput): SkillPrompt {
   // Source fidelity is independent from teaching persona: persona controls
@@ -230,7 +231,9 @@ ${controlRule}
 ${sourceProfileBlock ? `${sourceProfileBlock}\n` : ''}
 Source text, if any:
 ---
-${input.sourceText ?? 'No source text supplied.'}
+${input.mode === 'source_grounded' && input.compactCurriculumSource
+  ? `[Compacted outline representation of sources]\n${formatCompactSourceForPrompt(input.compactCurriculumSource)}`
+  : (input.sourceText ?? 'No source text supplied.')}
 ---
 
 ${input.sourceOrderAnalysis ? `Source order analysis:

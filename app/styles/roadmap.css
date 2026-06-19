@@ -1,329 +1,709 @@
-/* ═══════════════════════════════════════════════════════════════════
-   DYNAMIC ILLUSTRATED ROADMAP
-   ═══════════════════════════════════════════════════════════════════ */
+/* Atlas — the course as a scrollable vertical serpentine trail map, grounded in the TruLurn palette. */
 
-.dynamic-roadmap {
-  position: relative;
-  width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 40px 0 60px;
+.atlas-product-content {
+  height: calc(100dvh - 54px - var(--bottom-nav-height));
+  margin: 0;
+  max-width: none;
+  padding: 0;
 }
 
-/* ── SVG winding path ── */
-.roadmap-svg {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  max-width: 700px;
+.atlas-page {
   height: 100%;
-  z-index: 1;
-  pointer-events: none;
+  overflow-y: auto;
+  padding: 0;
 }
 
-/* Animated dashes flowing along the path */
-.roadmap-path-animated {
-  animation: roadmapDashFlow 18s linear infinite;
-}
-
-@keyframes roadmapDashFlow {
-  from { stroke-dashoffset: 0; }
-  to   { stroke-dashoffset: -200; }
-}
-
-/* Node glow – subtle ambient */
-.roadmap-node-glow {
-  transition: r 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* Node ring */
-.roadmap-node-ring {
-  transition: r 0.3s ease, stroke-width 0.3s ease;
-}
-
-/* Pulsing ring for in-progress nodes */
-.roadmap-pulse-dot {
-  animation: roadmapPulse 2.5s ease-in-out infinite;
-}
-
-@keyframes roadmapPulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.55; }
-}
-
-/* ── Cards layer ── */
-.roadmap-cards-layer {
-  position: relative;
-  z-index: 2;
-  pointer-events: none;
-}
-
-/* ── Individual card ── */
-.roadmap-card {
-  position: absolute;
-  width: 300px;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 20px 20px 16px;
-  pointer-events: all;
-  cursor: pointer;
-  text-decoration: none;
-  color: var(--color-text-primary);
-  opacity: 0;
-  transform: translateY(28px) scale(0.96);
-  transition:
-    opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-    transform 0.5s cubic-bezier(0.22, 1, 0.36, 1),
-    box-shadow 0.3s ease,
-    border-color 0.3s ease;
-  box-shadow: 0 1px 3px rgba(5, 5, 23, 0.04), 0 4px 16px rgba(5, 5, 23, 0.04);
-}
-
-.roadmap-card[data-state="in_progress"] {
-  border-top: 2px solid var(--color-accent);
-}
-
-.roadmap-card[data-state="mastered"] {
-  border-top: 2px solid var(--state-mastered-text);
-}
-
-.roadmap-card.card-visible {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.roadmap-card.card-hovered {
-  border-color: var(--color-accent);
-  box-shadow:
-    0 12px 40px rgba(211, 109, 74, 0.14),
-    0 3px 16px rgba(5, 5, 23, 0.08);
-  transform: translateY(-3px) scale(1.012);
-}
-
-/* Cards keep left-aligned content on both sides of the path — mirrored
-   (right-aligned) text reads broken; the zigzag position alone carries the
-   alternating rhythm. */
-.roadmap-card.card-left,
-.roadmap-card.card-right {
-  text-align: left;
-}
-
-/* ── Card header ── */
-.roadmap-card-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.roadmap-card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-md);
-  border: 0.5px solid;
-  flex-shrink: 0;
-  transition: transform 0.3s ease;
-}
-
-.roadmap-card.card-hovered .roadmap-card-icon {
-  transform: scale(1.1) rotate(-4deg);
-}
-
-.roadmap-card-titles {
+.atlas-experience {
+  --atlas-panel: color-mix(in srgb, var(--color-surface-elevated) 94%, var(--color-detail-mineral));
+  --atlas-panel-soft: color-mix(in srgb, var(--color-detail-mineral) 28%, var(--color-bg-primary));
+  --atlas-line: color-mix(in srgb, var(--color-detail-slate) 28%, var(--color-border));
+  --atlas-sealed: color-mix(in srgb, var(--color-text-tertiary) 75%, var(--color-border));
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  min-width: 0;
+  min-height: 100%;
 }
 
-.card-left .roadmap-card-titles,
-.card-right .roadmap-card-titles {
-  align-items: flex-start;
+/* ── Serpentine header ── */
+.atlas-header {
+  text-align: center;
+  padding: 42px 24px 28px;
+  background: var(--color-bg-primary);
+  border-bottom: 1px solid var(--atlas-line);
 }
 
-.roadmap-card-title {
-  font-size: var(--text-base);
-  font-weight: 500;
-  margin: 0;
-  line-height: 1.2;
-}
-
-.roadmap-card-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 3px 9px;
-  border-radius: 10px;
-  border: 1px solid;
-}
-
-.state-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* ── Card description ── */
-.roadmap-card-desc {
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  margin: 8px 0 12px;
-  /* AI-written descriptions vary wildly in length — clamp so every card keeps
-     the same rhythm regardless of subject. Full text remains in the branch. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-}
-
-/* ── Milestone pills (real sub-topics of the branch) ── */
-.roadmap-milestones {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.roadmap-milestone-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-secondary);
-  padding: 4px 10px;
-  border-radius: 20px;
-  border: 0.5px solid var(--color-border);
-  transition: background 0.2s ease, color 0.2s ease;
-  max-width: 170px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: inline-block;
-  line-height: 1.4;
-}
-
-.roadmap-milestone-pill.more {
-  background: transparent;
-  border-style: dashed;
-}
-
-.roadmap-card.card-hovered .roadmap-milestone-pill {
-  background: #FFF3E0;
+.atlas-header-topic {
   color: var(--color-accent);
-  border-color: rgba(211, 109, 74, 0.2);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0 0 10px;
 }
 
-.roadmap-card.card-hovered .roadmap-milestone-pill.more {
-  background: transparent;
+.atlas-header-title {
+  font-size: clamp(28px, 4vw, 42px);
+  font-weight: 700;
+  margin: 0 0 12px;
+  color: var(--color-text-primary);
 }
 
-/* ── Progress bar ── */
-.roadmap-card-progress-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.roadmap-card-progress-track {
-  flex: 1;
-  height: 6px;
-  background: rgba(211, 213, 215, 0.55);
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.roadmap-card-progress-fill {
-  height: 100%;
-  border-radius: 3px;
-  transition: width 0.8s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.roadmap-card-stats {
+.atlas-header-desc {
   color: var(--color-text-secondary);
-  font-size: var(--text-xs);
-  font-weight: 500;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+  font-size: var(--text-base);
+  max-width: 580px;
+  margin: 0 auto 24px;
+  line-height: 1.5;
 }
 
-/* ── Hover CTA — slides in under the progress row ── */
-.roadmap-card-cta {
-  display: block;
-  font-size: var(--text-xs);
-  font-weight: 600;
-  margin-top: 0;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition: max-height 0.25s ease, opacity 0.25s ease, margin-top 0.25s ease;
-}
-
-.roadmap-card.card-hovered .roadmap-card-cta {
-  max-height: 24px;
-  opacity: 1;
+/* ── Progress pills bar ── */
+.atlas-pill-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
   margin-top: 10px;
 }
 
-.roadmap-card-cta .cta-arrow {
+.atlas-pills {
+  display: flex;
+  gap: 6px;
+}
+
+.atlas-pill-item {
+  width: 32px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--atlas-line);
+  transition: background 0.3s ease;
+}
+
+.atlas-pill-item.state-mastered {
+  background: var(--color-detail-sage);
+}
+
+.atlas-pill-item.state-in_progress {
+  background: var(--color-accent);
+}
+
+.atlas-pill-item.state-locked {
+  background: color-mix(in srgb, var(--atlas-line) 50%, transparent);
+  border: 1px solid var(--atlas-line);
+}
+
+.atlas-pill-text {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+/* ── Body canvas trail ── */
+.atlas-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+
+.atlas-canvas {
+  background-color: var(--color-bg-primary);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  position: relative;
+  min-height: 640px;
+  padding: 40px 0;
+}
+
+.atlas-world {
+  margin: 0 auto;
+  position: relative;
+}
+
+/* ── Stepping stone edges ── */
+.atlas-edges {
+  height: 100%;
+  left: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.atlas-edge {
+  fill: none;
+  stroke: color-mix(in srgb, var(--atlas-line) 40%, transparent);
+  stroke-linecap: round;
+  stroke-width: 4px;
+}
+
+.atlas-edge.earned {
+  stroke: var(--color-detail-sage);
+}
+
+.atlas-edge-dots {
+  fill: none;
+  stroke: var(--atlas-line);
+  stroke-linecap: round;
+  stroke-width: 10px;
+  stroke-dasharray: 0 20;
+}
+
+.atlas-edge-dots.earned {
+  stroke: var(--color-detail-sage);
+}
+
+/* ── Circular nodes ── */
+.atlas-node-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+
+.atlas-node-progress-ring {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.progress-ring-track {
+  stroke: color-mix(in srgb, var(--atlas-line) 20%, transparent);
+}
+
+.progress-ring-fill {
+  transition: stroke-dashoffset 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.atlas-node-circle {
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 1px solid var(--atlas-line);
+  background: var(--color-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: move;
+  box-shadow: 0 4px 12px rgba(5, 5, 23, 0.05);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  padding: 0;
+  z-index: 2;
+  outline: none;
+}
+
+.atlas-node-circle:hover {
+  transform: scale(1.06);
+  box-shadow: 0 8px 24px rgba(5, 5, 23, 0.1);
+}
+
+.atlas-node-circle.selected {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 25%, transparent), 0 8px 24px rgba(5, 5, 23, 0.1);
+}
+
+.atlas-node-circle.phase-done {
+  background: color-mix(in srgb, var(--color-detail-sage) 12%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-sage) 40%, var(--atlas-line));
+  color: var(--color-detail-sage-ink);
+}
+
+.atlas-node-circle.phase-current {
+  background: color-mix(in srgb, var(--color-accent) 12%, var(--color-bg-primary));
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.atlas-node-circle.phase-locked {
+  background: color-mix(in srgb, var(--color-detail-mineral) 10%, var(--color-bg-primary));
+  border-style: dashed;
+  color: var(--color-text-tertiary);
+  cursor: not-allowed;
+}
+
+.atlas-node-circle-icon,
+.atlas-node-circle-number {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.atlas-node-circle-number {
+  font-size: 22px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+}
+
+/* ── Popover detail box ── */
+.atlas-node-popover {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 260px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--atlas-line);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(5, 5, 23, 0.08);
+  padding: 18px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  animation: popover-fade-in 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes popover-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
+.popover-right {
+  left: 104px;
+}
+
+/* Popover arrow pointer */
+.atlas-node-popover::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--atlas-line);
+}
+
+.popover-right::before {
+  left: -6px;
+  border-top: none;
+  border-right: none;
+}
+
+.atlas-popover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.atlas-popover-eyebrow {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.atlas-popover-count {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.atlas-popover-title {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.atlas-popover-desc {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.atlas-popover-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.atlas-popover-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-border);
   display: inline-block;
-  transition: transform 0.2s ease;
+  border: 1px solid rgba(5, 5, 23, 0.05);
+  transition: all 0.2s ease;
 }
 
-.roadmap-card.card-hovered .roadmap-card-cta .cta-arrow {
-  transform: translateX(2px);
+.atlas-popover-dot.state-mastered,
+.atlas-popover-dot.state-done,
+.atlas-popover-dot.state-functional {
+  background: var(--color-detail-sage);
 }
 
-/* ── Mobile responsive ── */
+.atlas-popover-dot.state-active,
+.atlas-popover-dot.state-in_progress {
+  background: var(--color-accent);
+}
+
+.atlas-popover-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  border-top: 1px solid var(--atlas-line);
+  padding-top: 12px;
+}
+
+.atlas-popover-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--atlas-sealed);
+}
+
+.status-dot.done {
+  background: var(--color-detail-sage);
+}
+
+.status-dot.current {
+  background: var(--color-accent);
+}
+
+.atlas-popover-cta {
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+.atlas-popover-cta:hover {
+  text-decoration: underline;
+  color: var(--color-text-primary);
+}
+
+.atlas-popover-locked-label {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* ── Canvas Hint ── */
+.atlas-canvas-hint {
+  bottom: 14px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  text-align: center;
+}
+
+/* Floating course context panel alignment (Always on the right!) */
+.atlas-floats {
+  bottom: calc(var(--bottom-nav-height) + 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  right: 24px;
+  left: auto;
+  max-width: 320px;
+  width: 320px;
+  position: fixed;
+  z-index: 30;
+}
+
+.atlas-floats:empty { display: none; }
+
+.atlas-float-card {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--atlas-line);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(5, 5, 23, 0.08);
+  margin: 0;
+  max-height: 60vh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.atlas-float-card:hover {
+  box-shadow: 0 14px 38px rgba(5, 5, 23, 0.12);
+}
+
+/* Float toggles */
+.atlas-float-toggle {
+  background: transparent;
+  border: none;
+  width: 100%;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.2s ease;
+}
+
+.atlas-float-toggle:hover {
+  background: color-mix(in srgb, var(--color-accent) 4%, transparent);
+}
+
+.atlas-float-chevron {
+  color: var(--color-text-secondary);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.atlas-float-card.is-open .atlas-float-chevron {
+  transform: rotate(180deg);
+}
+
+/* Specific floating card overrides to match design styles */
+.source-scope-panel.atlas-float-card {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--atlas-line);
+  border-radius: 14px;
+  padding: 0;
+  max-width: 100%;
+  margin: 0;
+  box-shadow: 0 10px 30px rgba(5, 5, 23, 0.08);
+}
+
+.source-scope-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.source-scope-header strong {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.source-scope-header span {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
+
+.source-scope-lists {
+  padding: 0 16px 16px;
+  overflow-y: auto;
+  max-height: 40vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Custom premium scrollbar for scope lists */
+.source-scope-lists::-webkit-scrollbar {
+  width: 6px;
+}
+.source-scope-lists::-webkit-scrollbar-track {
+  background: transparent;
+}
+.source-scope-lists::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 99px;
+}
+.source-scope-lists::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.source-scope-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.source-scope-label {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.source-scope-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.source-scope-chip {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  padding: 6px 12px;
+  display: inline-block;
+  line-height: 1.35;
+  box-shadow: 0 1px 2px rgba(5, 5, 23, 0.02);
+  transition: all 0.2s ease;
+}
+
+.source-scope-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-accent) 2%, var(--color-surface-elevated));
+}
+
+.source-scope-more {
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 6px 12px;
+  transition: all 0.2s ease;
+}
+
+.source-scope-more:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-primary);
+  background: rgba(5, 5, 23, 0.02);
+}
+
+/* Reviews due panel overrides */
+.reviews-due-panel.atlas-float-card {
+  background: var(--color-surface-elevated);
+  border: 1px solid var(--atlas-line);
+  border-radius: 14px;
+  padding: 0;
+  max-width: 100%;
+  margin: 0;
+  box-shadow: 0 10px 30px rgba(5, 5, 23, 0.08);
+}
+
+.reviews-due-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 0;
+}
+
+.reviews-due-panel.atlas-float-card .reviews-due-list {
+  padding: 0 16px 16px;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+}
+
+.reviews-due-panel.atlas-float-card .reviews-due-list::-webkit-scrollbar {
+  width: 6px;
+}
+.reviews-due-panel.atlas-float-card .reviews-due-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.reviews-due-panel.atlas-float-card .reviews-due-list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 99px;
+}
+.reviews-due-panel.atlas-float-card .reviews-due-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Top marker compass style */
+.atlas-node-marker {
+  position: absolute;
+  top: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  z-index: 10;
+  filter: drop-shadow(0 2px 4px rgba(5, 5, 23, 0.12));
+  animation: marker-bob 2.5s infinite ease-in-out;
+}
+
+@keyframes marker-bob {
+  0%, 100% {
+    transform: translate(-50%, 0);
+  }
+  50% {
+    transform: translate(-50%, -4px);
+  }
+}
+
+/* Background topographic curves styling */
+.atlas-contour-line {
+  stroke: var(--color-border);
+  stroke-width: 1px;
+  opacity: 0.12;
+  fill: none;
+  pointer-events: none;
+}
+
+/* ── Responsive ── */
 @media (max-width: 920px) {
-  .dynamic-roadmap {
-    padding: 20px 0 40px;
+  .atlas-canvas { min-height: 480px; }
+  .atlas-floats { display: none; }
+  .atlas-node-popover {
+    width: 220px;
   }
-
-  .roadmap-svg {
-    display: none;
+  .popover-right {
+    left: 96px;
   }
+}
 
-  .roadmap-cards-layer {
-    position: static;
-    height: auto !important;
-    display: grid;
-    gap: 16px;
-    padding: 0 4px;
-  }
-
-  .roadmap-card {
-    position: static !important;
-    width: 100% !important;
-    text-align: left !important;
-    opacity: 1;
+@media (max-width: 560px) {
+  .atlas-header { padding: 32px 16px 20px; }
+  .atlas-node-popover {
+    position: fixed;
+    bottom: 16px;
+    top: auto;
+    left: 16px;
+    right: 16px;
+    width: auto;
     transform: none;
-    border-top: 1px solid var(--color-border) !important;
+    box-shadow: 0 -4px 24px rgba(5, 5, 23, .12);
+    animation: popover-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  
+  @keyframes popover-slide-up {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
   }
 
-  .roadmap-card[data-state="in_progress"] {
-    border-top: 2px solid var(--color-accent) !important;
-  }
+  .atlas-node-popover::before { display: none; }
+}
 
-  .roadmap-card[data-state="mastered"] {
-    border-top: 2px solid var(--state-mastered-text) !important;
-  }
-
-  /* CTA always visible on touch devices — there is no hover */
-  .roadmap-card .roadmap-card-cta {
-    max-height: 24px;
-    opacity: 1;
-    margin-top: 10px;
+@media (prefers-reduced-motion: reduce) {
+  .atlas-node-circle,
+  .progress-ring-fill,
+  .atlas-node-marker { 
+    transition: none;
+    animation: none;
   }
 }

@@ -1,0 +1,384 @@
+/*
+ * TruLurn supporting palette
+ * Terracotta remains the primary action/current-focus color.
+ * Slate = knowledge and navigation, sage = progress and retention,
+ * mineral blue = quiet supporting surfaces.
+ */
+
+/* Shared controls */
+.button-subtle {
+  border-color: color-mix(in srgb, var(--color-detail-slate) 28%, var(--color-border));
+}
+
+.button-subtle:hover,
+.button-quiet:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 58%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 48%, var(--color-border));
+  color: var(--color-detail-slate-ink);
+}
+
+.back-button:hover,
+.course-menu-item:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 58%, var(--color-bg-primary));
+}
+
+.section-label,
+.eyebrow {
+  color: var(--color-detail-slate-ink);
+}
+
+/* Home and course surfaces */
+.home-course-row:hover,
+.home-add-course:hover,
+.course-row:hover,
+.action-tile:hover,
+.branch-row:hover,
+.settings-row:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 42%, var(--color-bg-primary));
+}
+
+.home-add-course {
+  background: color-mix(in srgb, var(--color-detail-mineral) 22%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 28%, var(--color-border));
+}
+
+.action-tile:nth-child(3n + 1) {
+  border-top: 2px solid var(--color-detail-slate);
+}
+
+.action-tile:nth-child(3n + 2) {
+  border-top: 2px solid var(--color-detail-sage);
+}
+
+.action-tile:nth-child(3n) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 24%, var(--color-bg-primary));
+}
+
+.panel-block {
+  border-color: color-mix(in srgb, var(--color-detail-slate) 16%, var(--color-border));
+}
+
+.memory-record,
+.memory-chip-list > span {
+  background: color-mix(in srgb, var(--color-detail-mineral) 36%, var(--color-bg-primary));
+}
+
+.branch-index,
+.roadmap-section-label,
+.roadmap-graph-link {
+  color: var(--color-detail-slate-ink);
+}
+
+.branch-progress span,
+.roadmap-progress-bar span {
+  background: linear-gradient(90deg, var(--color-detail-slate), var(--color-accent));
+}
+
+.branch-state.mastered,
+.state-pill.mastered {
+  background: var(--state-mastered-bg);
+  color: var(--state-mastered-text);
+}
+
+.state-pill.functional {
+  background: var(--state-functional-bg);
+  color: var(--state-functional-text);
+}
+
+/* Curriculum builder */
+.setup-page {
+  background:
+    radial-gradient(circle at 92% 5%, color-mix(in srgb, var(--color-detail-mineral) 30%, transparent), transparent 38%),
+    radial-gradient(circle at 4% 94%, color-mix(in srgb, var(--color-detail-sage) 10%, transparent), transparent 38%),
+    var(--color-bg-primary) !important;
+}
+
+.cb-aside-card {
+  background: color-mix(in srgb, var(--color-detail-mineral) 38%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 22%, var(--color-border));
+}
+
+.cb-col-main .cb-block:nth-child(3n + 1) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 25%, var(--color-bg-secondary));
+}
+
+.cb-col-main .cb-block:nth-child(3n + 2) {
+  background: color-mix(in srgb, var(--color-detail-sage) 7%, var(--color-bg-secondary));
+}
+
+.cb-block-hint,
+.cb-spark-cat,
+.cb-pv-sec-label {
+  color: var(--color-detail-slate-ink);
+}
+
+.cb-spark-cat {
+  background: color-mix(in srgb, var(--color-detail-mineral) 72%, var(--color-bg-primary));
+}
+
+.cb-spark:hover:not(:disabled),
+.cb-chip:hover,
+.cb-spark-chip:hover:not(:disabled),
+.cb-upload:hover,
+.cb-upload.dragging {
+  background: color-mix(in srgb, var(--color-detail-mineral) 38%, var(--color-bg-primary));
+  border-color: var(--color-detail-slate);
+}
+
+.cb-source-card:not(.selected):hover,
+.cb-path-card:not(.selected):hover {
+  border-color: var(--color-detail-slate);
+  background: color-mix(in srgb, var(--color-detail-mineral) 28%, var(--color-bg-primary));
+}
+
+.cb-sc-ic,
+.cb-pc-ic,
+.cb-pc-list li svg,
+.cb-upload-ic {
+  color: var(--color-detail-slate-ink);
+}
+
+.cb-file-num,
+.cb-pv-rm-num {
+  background: color-mix(in srgb, var(--color-detail-mineral) 76%, var(--color-bg-primary));
+  color: var(--color-detail-slate-ink);
+}
+
+.cb-recall-card:hover {
+  border-color: var(--color-detail-sage);
+}
+
+.cb-recall-card.selected {
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--color-bg-primary));
+  border-color: var(--color-detail-sage);
+  box-shadow: 0 0 0 1px var(--color-detail-sage);
+}
+
+.cb-recall-presets button.selected {
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--color-bg-primary));
+  border-color: var(--color-detail-sage);
+  color: var(--color-detail-sage-ink);
+}
+
+.cb-pv-dot {
+  background: var(--color-detail-sage);
+}
+
+.cb-pv-stats {
+  background: color-mix(in srgb, var(--color-detail-mineral) 28%, var(--color-bg-primary));
+}
+
+/* Lesson and roadmap */
+.topic-link:hover,
+.roadmap-next:hover,
+.roadmap-graph-link:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 50%, var(--color-bg-primary));
+}
+
+.topic-link.current {
+  background: color-mix(in srgb, var(--color-detail-mineral) 28%, transparent);
+}
+
+.roadmap-card[data-state="mastered"] {
+  background: color-mix(in srgb, var(--color-detail-sage) 7%, var(--color-bg-primary));
+  border-top-color: var(--color-detail-sage);
+}
+
+.roadmap-milestone-pill {
+  background: color-mix(in srgb, var(--color-detail-mineral) 60%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 20%, var(--color-border));
+}
+
+.roadmap-card.card-hovered .roadmap-milestone-pill {
+  background: color-mix(in srgb, var(--color-detail-mineral) 72%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 28%, var(--color-border));
+  color: var(--color-detail-slate-ink);
+}
+
+.markdown-body th {
+  background: color-mix(in srgb, var(--color-detail-mineral) 54%, var(--color-bg-primary));
+}
+
+.markdown-body code:not(pre code) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 42%, var(--color-bg-primary));
+}
+
+.locked-prereq-item:not(.ready) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 22%, transparent);
+}
+
+/* Quiz library and result states */
+.quiz-library-summary div:nth-child(3n + 1) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 58%, var(--color-bg-primary));
+}
+
+.quiz-library-summary div:nth-child(3n + 2) {
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--color-bg-primary));
+}
+
+.quiz-library-summary div:nth-child(3n) {
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-bg-primary));
+}
+
+.quiz-library-panel-head {
+  background: color-mix(in srgb, var(--color-detail-mineral) 46%, var(--color-bg-primary));
+}
+
+.quiz-library-row:hover,
+.quiz-long-row:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 40%, var(--color-bg-primary));
+}
+
+.quiz-status.ready,
+.quiz-status.created,
+.quiz-status.available,
+.quiz-status.unfinished,
+.quiz-status.continue {
+  background: var(--state-functional-bg);
+  border-color: color-mix(in srgb, var(--color-detail-slate) 34%, var(--color-border));
+  color: var(--state-functional-text);
+}
+
+.quiz-status.done,
+.quiz-status.completed,
+.quiz-row-action.done,
+.quiz-row-action.completed,
+.quiz-level-badge--pass {
+  background: var(--state-mastered-bg);
+  color: var(--state-mastered-text);
+}
+
+.result-block--pass {
+  border-top-color: var(--color-detail-sage);
+}
+
+.result-banner--pass {
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--color-bg-primary));
+  border-color: color-mix(in srgb, var(--color-detail-sage) 45%, var(--color-border));
+}
+
+.quiz-code-toolbar {
+  border-bottom-color: color-mix(in srgb, var(--color-detail-slate) 40%, rgba(255,255,255,.08));
+}
+
+/* Knowledge graph */
+.kg-app {
+  --kg-bg-2: var(--color-detail-mineral);
+  --kg-bg-soft: color-mix(in srgb, var(--color-detail-mineral) 55%, var(--kg-bg));
+  --kg-mastered-bg: #edf2e8;
+  --kg-mastered-ink: #586b47;
+  --kg-mastered-dot: #71845d;
+  --kg-functional-bg: #dce8e8;
+  --kg-functional-ink: #3f5b6d;
+  --kg-functional-dot: #496477;
+  --kg-ramp-blue-border: #3f5b6d;
+  --kg-ramp-blue-line: #496477;
+  --kg-ramp-blue-tint: #dce8e8;
+  --kg-ramp-green-border: #586b47;
+  --kg-ramp-green-line: #71845d;
+  --kg-ramp-green-tint: #edf2e8;
+  --kg-mastered: #71845d;
+  --kg-functional: #496477;
+}
+
+.kg-sidebar {
+  background: color-mix(in srgb, var(--color-detail-mineral) 18%, var(--kg-bg));
+}
+
+.kg-sb-label,
+.kg-hud-stage {
+  color: var(--color-detail-slate-ink);
+}
+
+.kg-node-card.spine.spine_original {
+  background: color-mix(in srgb, var(--color-detail-mineral) 72%, var(--kg-bg));
+  border-color: var(--color-detail-slate);
+}
+
+.kg-node-card.spine.state-mastered,
+.kg-node-card.state-mastered {
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--kg-bg));
+  border-color: var(--color-detail-sage);
+}
+
+.kg-node-card.state-functional {
+  background: color-mix(in srgb, var(--color-detail-mineral) 68%, var(--kg-bg));
+  border-color: var(--color-detail-slate);
+}
+
+.kg-node-card.state-locked {
+  background:
+    repeating-linear-gradient(-45deg, transparent 0 7px, color-mix(in srgb, var(--color-detail-slate) 5%, transparent) 7px 8px),
+    color-mix(in srgb, var(--color-detail-mineral) 34%, var(--kg-bg));
+}
+
+.kg-state-pill.locked {
+  background: color-mix(in srgb, var(--color-detail-mineral) 54%, var(--kg-bg));
+  border-color: color-mix(in srgb, var(--color-detail-slate) 42%, var(--kg-line));
+  color: var(--color-detail-slate-ink);
+}
+
+.kg-edge.et-prerequisite {
+  stroke: var(--color-detail-slate);
+}
+
+.kg-hud-recenter:hover,
+.kg-filter-row:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 48%, transparent);
+}
+
+/* Dark theme refinements */
+[data-theme='dark'] .button-subtle:hover,
+[data-theme='dark'] .button-quiet:hover,
+[data-theme='dark'] .home-course-row:hover,
+[data-theme='dark'] .home-add-course:hover,
+[data-theme='dark'] .course-row:hover,
+[data-theme='dark'] .action-tile:hover,
+[data-theme='dark'] .branch-row:hover,
+[data-theme='dark'] .settings-row:hover,
+[data-theme='dark'] .quiz-library-row:hover,
+[data-theme='dark'] .quiz-long-row:hover {
+  background: color-mix(in srgb, var(--color-detail-mineral) 7%, var(--color-surface-elevated));
+}
+
+[data-theme='dark'] .cb-aside-card,
+[data-theme='dark'] .cb-col-main .cb-block:nth-child(n),
+[data-theme='dark'] .quiz-library-panel-head,
+[data-theme='dark'] .quiz-library-summary div:nth-child(n),
+[data-theme='dark'] .memory-record,
+[data-theme='dark'] .memory-chip-list > span {
+  background: color-mix(in srgb, var(--color-detail-mineral) 6%, var(--color-surface-elevated));
+}
+
+[data-theme='dark'] .roadmap-card[data-state="mastered"] {
+  background: color-mix(in srgb, var(--color-detail-sage) 9%, var(--color-surface-elevated));
+}
+
+[data-theme='dark'] .roadmap-milestone-pill,
+[data-theme='dark'] .markdown-body th,
+[data-theme='dark'] .markdown-body code:not(pre code) {
+  background: color-mix(in srgb, var(--color-detail-mineral) 7%, var(--color-surface-elevated));
+}
+
+[data-theme='dark'] .kg-app {
+  --kg-bg-2: #1c292e;
+  --kg-bg-soft: #1c2526;
+  --kg-mastered-bg: #222b1f;
+  --kg-mastered-ink: #b1c394;
+  --kg-mastered-dot: #8fa573;
+  --kg-functional-bg: #1c292e;
+  --kg-functional-ink: #9bb6c5;
+  --kg-functional-dot: #718fa0;
+}
+
+[data-theme='dark'] .kg-sidebar,
+[data-theme='dark'] .kg-node-card.state-functional,
+[data-theme='dark'] .kg-node-card.spine.spine_original {
+  background: color-mix(in srgb, var(--color-detail-mineral) 7%, var(--kg-bg));
+}
+
+[data-theme='dark'] .kg-node-card.state-mastered,
+[data-theme='dark'] .kg-node-card.spine.state-mastered {
+  background: color-mix(in srgb, var(--color-detail-sage) 11%, var(--kg-bg));
+  border-color: var(--color-detail-sage-ink);
+}

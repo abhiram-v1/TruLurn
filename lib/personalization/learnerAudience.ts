@@ -39,11 +39,13 @@ export async function deriveLearnerAudience({
   goals: string
   knowledgeLevel?: string | null
   learningPurpose?: string | null
-  sourceProfile?: SourceTeachingProfile | null
+  sourceProfile?: any | null
 }): Promise<LearnerAudienceProfile | null> {
   try {
-    const sourceHint = sourceProfile
-      ? `\nThey uploaded study material profiled as: ${sourceProfile.document_type}, educational level "${sourceProfile.educational_level}", subject "${sourceProfile.subject_domain}".`
+    const isV2 = sourceProfile && 'schema_version' in sourceProfile && sourceProfile.schema_version === 'source-profile-v2'
+    const meta = isV2 ? sourceProfile.metadata : sourceProfile
+    const sourceHint = meta
+      ? `\nThey uploaded study material profiled as: ${meta.document_type}, educational level "${meta.educational_level}", subject "${meta.subject_domain}".`
       : ''
 
     const text = await generateAI({

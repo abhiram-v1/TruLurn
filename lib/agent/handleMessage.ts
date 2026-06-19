@@ -59,6 +59,7 @@ export async function handleMessage(input: HandleMessageInput): Promise<AgentMes
       id: `action-${Date.now()}`,
       content: result.content,
       uiAction: result.uiAction,
+      is_update_graph: false,
     }
   }
 
@@ -79,5 +80,7 @@ export async function handleMessage(input: HandleMessageInput): Promise<AgentMes
     id: result.id,
     content: result.content,
     uiAction: null,
+    is_update_graph: true,
+    graphContext: { topicId, message, source: 'doubt' },
   }
 }

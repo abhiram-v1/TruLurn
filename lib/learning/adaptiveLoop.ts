@@ -6,6 +6,7 @@ import {
   nextApproach,
   type RegenerationAttempt,
 } from './adaptiveSignals'
+import { invalidateCourse } from '@/lib/cache/courseData'
 
 // Reads fresh assessment state for a topic and flags it for review if gaps are found.
 // Must be called after syncLearnerMemoryV2 so skill/concept states are up to date.
@@ -71,6 +72,7 @@ export async function applyAdaptiveFeedback(
           created_at: new Date(),
         }),
       ])
+      invalidateCourse(courseId)
     }
     return { gapFound: false, action: gap.action, reason: gap.reason }
   }
@@ -101,6 +103,7 @@ export async function applyAdaptiveFeedback(
         created_at: new Date(),
       }),
     ])
+    invalidateCourse(courseId)
     return {
       gapFound: true,
       action: 'schedule_recall',
@@ -143,6 +146,7 @@ export async function applyAdaptiveFeedback(
     }),
   ])
 
+  invalidateCourse(courseId)
   return { gapFound: true, action, reason: gap.reason }
 }
 
@@ -174,6 +178,7 @@ export async function recordRegenerationAttempt(
   )
 
   const stop = shouldCircuitBreak(updated)
+  invalidateCourse(courseId)
   return {
     shouldStop: stop,
     nextApproachSuggestion: stop ? null : (nextApproach(updated) as string),

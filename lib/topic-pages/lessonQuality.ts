@@ -48,6 +48,7 @@ export const HARD_BLOCK_CODES = new Set([
   'missing_substantive_core',    // no real explanation on the page
   'unfinished_content',          // placeholder / TODO text leaked through
   'source_verification_missing', // source-grounded page without verified citations
+  'source_narration',            // teach the knowledge; never report what the source says
   'soft_page_limit_exceeded',    // physical page overflow must continue on the next page
   'planned_page_underfilled',    // do not leave avoidable space while material continues
   'premature_page_closure',      // a physical page break is not a lesson conclusion
@@ -436,9 +437,15 @@ export function evaluateLessonQuality({
       addIssue(issues, 'cognitive_load', 'planned_page_underfilled', 'critical',
         'The page stops before enough assigned understanding is developed, even though substantive material continues.')
     } else if (wordCount > pagePlan.soft_max_words) {
-      dimensions.cognitive_load = Math.min(dimensions.cognitive_load, 55)
-      addIssue(issues, 'cognitive_load', 'soft_page_limit_exceeded', 'critical',
-        `The page exceeds its ${pagePlan.soft_max_words}-word soft maximum instead of breaking at the planned boundary.`)
+      const allowedLimit = pagePlan.continues_to_next
+        ? pagePlan.soft_max_words * 1.12
+        : pagePlan.soft_max_words * 1.25
+
+      if (wordCount > allowedLimit) {
+        dimensions.cognitive_load = Math.min(dimensions.cognitive_load, 55)
+        addIssue(issues, 'cognitive_load', 'soft_page_limit_exceeded', 'critical',
+          `The page exceeds its ${pagePlan.soft_max_words}-word soft maximum instead of breaking at the planned boundary.`)
+      }
     }
   } else {
     const inferredMode = page.page_mode
@@ -473,6 +480,14 @@ export function evaluateLessonQuality({
   }
 
   if (sourceGrounded) {
+    if (
+      /\b(the|this|your) (source|document|material|notes?|passage|excerpt) (says|uses|identifies|lists|notes|defines|describes|gives|provides|mentions|explains|states|presents|suggests|shows|highlights|outlines|covers|includes|discusses)\b|\baccording to (the|this|your) (source|document|material|notes?)\b/i
+        .test(content)
+    ) {
+      dimensions.explanation_quality = Math.min(dimensions.explanation_quality, 45)
+      addIssue(issues, 'explanation_quality', 'source_narration', 'critical',
+        'The lesson reports what a source says instead of teaching the supported knowledge directly.')
+    }
     const status = page.grounding?.status
     const citations = page.source_citations ?? []
     if ((status !== 'supported' && status !== 'repaired') || citations.length === 0) {

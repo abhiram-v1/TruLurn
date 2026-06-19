@@ -25,6 +25,7 @@ function serializePage(storedPage: any) {
     example_refs: Array.isArray(storedPage.example_refs) ? storedPage.example_refs : undefined,
     sections: Array.isArray(storedPage.sections) ? storedPage.sections : undefined,
     source_citations: Array.isArray(storedPage.source_citations) ? storedPage.source_citations : undefined,
+    figures: Array.isArray(storedPage.figures) ? storedPage.figures : undefined,
     grounding: storedPage.grounding ?? null,
   }
 }

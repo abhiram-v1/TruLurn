@@ -1,6 +1,5 @@
 export type AISkillName =
   | 'curriculum_builder'
-  | 'map_builder'
   | 'flow_tracker'
   | 'scoped_chat'
   | 'source_learning_page'
@@ -32,7 +31,8 @@ export type CurriculumSkillInput = {
   teachingPersona?: import('@/lib/personas').TeachingPersonaId
   sourceText?: string
   sourceOrderAnalysis?: string
-  sourceProfile?: import('@/lib/course-generation/sourceProfile').SourceTeachingProfile | null
+  sourceProfile?: import('@/lib/course-generation/sourceProfile').SourceProfileEnvelope | import('@/lib/course-generation/sourceProfile').SourceTeachingProfile | null
+  compactCurriculumSource?: import('@/lib/course-generation/sourceCompaction').CompactCurriculumSource | null
   curriculumResearchBrief?: string
 }
 

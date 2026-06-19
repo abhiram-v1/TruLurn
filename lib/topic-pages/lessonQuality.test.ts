@@ -349,3 +349,42 @@ test('rejects sentence-like and generic major headings', () => {
     assert.ok(report.issues.some((issue) => issue.code === 'concept_heading_unclear'))
   }
 })
+
+test('allows a small word limit overflow within the dynamic boundary grace margin', () => {
+  // basePage content word count is 149 words.
+  // With soft_max_words = 135 and continues_to_next = true:
+  // allowedLimit = 135 * 1.12 = 151.2 words. Since 149 <= 151.2, this should be accepted.
+  const continuingReport = evaluateLessonQuality({
+    page: basePage(),
+    topic: { title: 'Systems thinking' },
+    pageNumber: 1,
+    architecture: architecture(),
+    pagePlan: pagePlan({
+      target_words: 100,
+      soft_max_words: 135,
+      continues_from_previous: false,
+      continues_to_next: true,
+    }),
+  })
+
+  assert.equal(continuingReport.accepted, true)
+  assert.ok(!continuingReport.issues.some((issue) => issue.code === 'soft_page_limit_exceeded'))
+
+  // With soft_max_words = 120 and continues_to_next = false:
+  // allowedLimit = 120 * 1.25 = 150 words. Since 149 <= 150, this should be accepted.
+  const finalReport = evaluateLessonQuality({
+    page: basePage(),
+    topic: { title: 'Systems thinking' },
+    pageNumber: 1,
+    architecture: architecture(),
+    pagePlan: pagePlan({
+      target_words: 100,
+      soft_max_words: 120,
+      continues_from_previous: false,
+      continues_to_next: false,
+    }),
+  })
+
+  assert.equal(finalReport.accepted, true)
+  assert.ok(!finalReport.issues.some((issue) => issue.code === 'soft_page_limit_exceeded'))
+})

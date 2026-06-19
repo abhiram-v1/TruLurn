@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { deleteCourseWithLineage } from '@/lib/sources/deletion'
+import { invalidateCourse } from '@/lib/cache/courseData'
 import { normalizeTeachingPersona, TEACHING_PERSONAS } from '@/lib/personas'
 
 // ── PATCH — update mutable course settings ───────────────────────────────────
@@ -62,6 +63,7 @@ export async function PATCH(
       { _id: courseId as any, user_id: userId },
       { $set },
     )
+    invalidateCourse(courseId)
 
     return NextResponse.json({ updated: true, fields: Object.keys($set).filter((k) => k !== 'updated_at') })
   } catch (error) {
@@ -94,6 +96,7 @@ export async function DELETE(
     }
 
     const result = await deleteCourseWithLineage(db, { userId, courseId })
+    invalidateCourse(courseId)
     return NextResponse.json(result, { status: result.deleted ? 200 : 500 })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown course deletion error'

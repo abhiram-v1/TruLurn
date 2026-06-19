@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { TopicInput } from '@/components/setup/TopicInput'
 import { BackButton } from '@/components/navigation/BackButton'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 
 export default function SetupPage({ searchParams }: { searchParams?: { job?: string } }) {
   const initialJobId = searchParams?.job || null
@@ -10,8 +11,9 @@ export default function SetupPage({ searchParams }: { searchParams?: { job?: str
       <header className="topbar">
         <div className="topbar-left">
           <BackButton fallbackHref="/" />
-          <Link className="brand" href="/">
-            TruLurn
+          <Link className="brand" href="/" style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+            <TruLurnLogo size={22} />
+            <span>TruLurn</span>
           </Link>
         </div>
       </header>

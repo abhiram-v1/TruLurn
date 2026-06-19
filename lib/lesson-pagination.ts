@@ -73,6 +73,24 @@ export function paginateLessonMarkdown(
     const nextBlock = blocks[index + 1]
     const blockWeight = block.length + (isTable(block) ? 650 : 0)
 
+    // Calculate total remaining weight from current block to the end
+    let remainingWeight = 0
+    for (let j = index; j < blocks.length; j += 1) {
+      remainingWeight += blocks[j].length + (isTable(blocks[j]) ? 650 : 0)
+    }
+
+    // Dynamic boundary: if the remaining blocks are small enough or if they
+    // fit within a 30% overflow margin of the current page, append them all and finish.
+    const isSmallOverflow = currentLength + remainingWeight <= charLimit * 1.3
+    const isFewContentsLeft = remainingWeight < Math.max(400, charLimit * 0.25)
+
+    if (currentLength && (isSmallOverflow || isFewContentsLeft)) {
+      for (let j = index; j < blocks.length; j += 1) {
+        current.push(blocks[j])
+      }
+      break
+    }
+
     if (currentLength && currentLength + blockWeight > charLimit) {
       commit()
     }

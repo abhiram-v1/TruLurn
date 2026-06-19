@@ -24,4 +24,12 @@ export interface AgentMessage {
   id: string
   content: string
   uiAction: UIAction | null
+  /** True when the interaction contains knowledge-graph-relevant information. */
+  is_update_graph?: boolean
+  /** Context needed by the client to call the graph manager API. */
+  graphContext?: {
+    topicId: string
+    message: string
+    source: 'doubt' | 'feedback' | 'discussion' | 'action'
+  }
 }

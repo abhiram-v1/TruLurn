@@ -4,8 +4,8 @@
 /* ── Banner ── */
 .recall-banner {
   align-items: center;
-  background: var(--color-surface-soft);
-  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-detail-sage) 10%, var(--color-surface-soft));
+  border: 1px solid color-mix(in srgb, var(--color-detail-sage) 32%, var(--color-border));
   border-radius: var(--radius-lg);
   display: flex;
   flex-wrap: wrap;
@@ -23,6 +23,7 @@
 }
 
 .recall-banner-text strong {
+  color: var(--color-detail-sage-ink);
   font-size: var(--text-sm);
   font-weight: 500;
 }
@@ -107,7 +108,7 @@
 
 .recall-custom-delay span {
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--text-xs);
   padding-right: 6px;
 }
 
@@ -146,15 +147,38 @@
 .recall-rest-card {
   align-items: center;
   justify-content: center;
+  position: relative;
   text-align: center;
 }
 
+.recall-rest-close {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  padding: 6px;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.recall-rest-close:hover {
+  background: var(--color-bg-secondary);
+  color: var(--color-text-primary);
+}
+
+
 .recall-rest-icon {
   align-items: center;
-  background: rgba(211, 109, 74, 0.1);
-  border: 1px solid rgba(211, 109, 74, 0.22);
+  background: color-mix(in srgb, var(--color-detail-sage) 12%, var(--color-surface-elevated));
+  border: 1px solid color-mix(in srgb, var(--color-detail-sage) 36%, var(--color-border));
   border-radius: 50%;
-  color: var(--color-accent);
+  color: var(--color-detail-sage-ink);
   display: flex;
   height: 64px;
   justify-content: center;
@@ -163,7 +187,7 @@
 }
 
 .recall-rest-title {
-  font-size: 30px;
+  font-size: var(--text-2xl);
   font-weight: 550;
   line-height: 1.2;
   margin: 2px 0 0;
@@ -208,15 +232,15 @@
 }
 
 .recall-preparation-state {
-  background: var(--color-surface-soft);
-  border: 0.5px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-detail-mineral) 40%, var(--color-surface-soft));
+  border: 0.5px solid color-mix(in srgb, var(--color-detail-slate) 22%, var(--color-border));
   border-radius: var(--radius-md);
   margin-top: 10px;
   padding: 8px 12px;
 }
 
 .recall-preparation-state.ready {
-  color: var(--color-accent);
+  color: var(--color-detail-sage-ink);
 }
 
 .recall-header {
@@ -235,7 +259,7 @@
 }
 
 .recall-headline {
-  font-size: 28px;
+  font-size: var(--text-2xl);
   font-weight: 500;
   line-height: 1.28;
   margin: 0;
@@ -266,7 +290,7 @@
 
 .recall-intro {
   color: var(--color-text-secondary);
-  font-size: 16px;
+  font-size: var(--text-base);
   line-height: 1.6;
   margin: 0;
 }
@@ -279,8 +303,8 @@
 }
 
 .recall-summary-item {
-  background: var(--color-surface-soft);
-  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-detail-mineral) 38%, var(--color-surface-soft));
+  border: 1px solid color-mix(in srgb, var(--color-detail-slate) 20%, var(--color-border));
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
@@ -329,8 +353,8 @@
 }
 
 .recall-type-connection {
-  border-color: var(--state-functional-text);
-  color: var(--state-functional-text);
+  border-color: var(--color-detail-slate);
+  color: var(--color-detail-slate-ink);
 }
 
 .recall-type-application {
@@ -344,13 +368,13 @@
 }
 
 .recall-question {
-  font-size: 20px;
+  font-size: var(--text-lg);
   line-height: 1.65;
   padding: 4px 0 8px;
 }
 
 .recall-question .md-content {
-  font-size: 20px;
+  font-size: var(--text-lg);
   line-height: 1.65;
 }
 
@@ -541,12 +565,12 @@
   }
 
   .recall-headline {
-    font-size: 24px;
+    font-size: var(--text-xl);
   }
 
   .recall-question,
   .recall-question .md-content {
-    font-size: 18px;
+    font-size: var(--text-lg);
   }
 
   .recall-banner {
@@ -565,7 +589,7 @@
   }
 
   .recall-rest-title {
-    font-size: 25px;
+    font-size: var(--text-xl);
   }
 
   .recall-countdown {
@@ -574,9 +598,82 @@
   }
 
   .recall-countdown-inner strong {
-    font-size: 32px;
+    font-size: var(--text-2xl);
+  }
+}
+
+/* ── Quiz invite banner ─────────────────────────────────────────────────────
+   Non-blocking suggestion shown at the end of the last lesson page.
+   "Maybe later" dismisses it; Next topic/Atlas is always accessible. */
+
+.quiz-invite-banner {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-surface-soft));
+  border: 1px solid color-mix(in srgb, var(--color-accent) 22%, var(--color-border));
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  justify-content: space-between;
+  margin: 20px 0 0;
+  padding: 14px 18px;
+}
+
+.quiz-invite-icon {
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.quiz-invite-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quiz-invite-text strong {
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.quiz-invite-text span {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.quiz-invite-actions {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.quiz-invite-dismiss {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
+@media (max-width: 600px) {
+  .quiz-invite-banner {
+    align-items: stretch;
   }
 
+  .quiz-invite-actions {
+    align-items: stretch;
+    flex-basis: 100%;
+  }
+
+  .quiz-invite-actions .button,
+  .quiz-invite-dismiss {
+    justify-content: center;
+  }
+}
+
+@media (max-width: 720px) {
   .settings-recall-controls {
     align-items: stretch;
     min-width: 0;

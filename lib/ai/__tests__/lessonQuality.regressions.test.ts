@@ -70,6 +70,24 @@ describe('Lesson quality regressions — known production failures', () => {
     assert.equal(report.accepted, true, `Clean page rejected with score ${report.overall_score}: ${JSON.stringify(report.issues)}`)
   })
 
+  it('rejects source narration even when it appears after the opening', () => {
+    const page = basePage({
+      content: `Machine learning becomes useful when fixed rules cannot keep up with a changing pattern.
+
+The source says this adaptability is one of its central advantages. A model can update from examples instead of requiring a person to rewrite every rule.
+
+That changes the engineering problem: maintain representative data and evaluation, not an ever-growing rulebook.`,
+      sections: [{ type: 'core', content: `Machine learning becomes useful when fixed rules cannot keep up with a changing pattern.
+
+The source says this adaptability is one of its central advantages. A model can update from examples instead of requiring a person to rewrite every rule.
+
+That changes the engineering problem: maintain representative data and evaluation, not an ever-growing rulebook.` }],
+    })
+    const report = evaluateLessonQuality({ page, topic: baseTopic, pageNumber: 1, sourceGrounded: true })
+    assert.equal(report.accepted, false)
+    assert.ok(report.issues.some((issue) => issue.code === 'source_narration'))
+  })
+
   // ── Throat-clearing openings ────────────────────────────────────────────────
 
   it('rejects a page that opens with "In this page, we will cover"', () => {

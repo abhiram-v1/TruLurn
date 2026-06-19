@@ -5,6 +5,10 @@ import {
   type AIProviderName,
   type ResolvedAIFeatureRoute,
 } from '@/lib/ai/types'
+import {
+  GRAPH_GENERATION_ROUTE_OWNERSHIP,
+  GRAPH_MAINTENANCE_ROUTE_OWNERSHIP,
+} from '@/lib/ai/routeOwnership'
 
 function route(
   purpose: 'primary' | 'agent',
@@ -48,13 +52,41 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
   exam_question_generation: route('primary'),
   exam_strategy: route('agent'),
   flow_tracking: route('agent'),
+  graph_interaction_analyzer: route(
+    'agent',
+    {
+      openai: ['OPENAI_GRAPH_ANALYZER_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
+      gemini: ['GEMINI_GRAPH_ANALYZER_MODEL', 'GEMINI_GRAPH_MODEL'],
+    },
+    { openai: 'gpt-5.4-mini' },
+  ),
+  graph_generation: {
+    capability: 'text',
+    purpose: 'primary',
+    defaultProvider: GRAPH_GENERATION_ROUTE_OWNERSHIP.provider,
+    modelEnvironmentVariables: {
+      gemini: ['GEMINI_GRAPH_GENERATION_MODEL'],
+    },
+    defaultModels: { gemini: GRAPH_GENERATION_ROUTE_OWNERSHIP.model },
+    lockedProvider: GRAPH_GENERATION_ROUTE_OWNERSHIP.provider,
+    lockedModel: GRAPH_GENERATION_ROUTE_OWNERSHIP.model,
+    disableAutomaticFallback: true,
+  },
+  graph_manager: route(
+    'agent',
+    {
+      openai: ['OPENAI_GRAPH_MANAGER_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
+      gemini: ['GEMINI_GRAPH_MANAGER_MODEL', 'GEMINI_GRAPH_MODEL'],
+    },
+    { openai: 'gpt-5.4-mini' },
+  ),
   graph_recommendation: route(
     'agent',
     {
       openai: ['OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
       gemini: ['GEMINI_GRAPH_MODEL'],
     },
-    { gemini: 'gemini-2.5-flash-lite' },
+    { openai: 'gpt-5.4-mini' },
   ),
   learner_audience: route('agent'),
   lesson_research: {
@@ -63,10 +95,6 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
     defaultProvider: 'openai',
     modelEnvironmentVariables: { openai: ['OPENAI_RESEARCH_MODEL', 'OPENAI_AGENT_MODEL'] },
   },
-  map_generation: route('primary', {
-    openai: ['OPENAI_MAP_MODEL', 'OPENAI_PRIMARY_MODEL'],
-    gemini: ['GEMINI_MAP_MODEL', 'GEMINI_MODEL'],
-  }),
   page_analysis: route('agent'),
   prerequisite_gap_analysis: route('agent'),
   quiz_generation: route('primary'),
@@ -99,6 +127,39 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
   topic_plan_analysis: route('agent'),
   topic_transform: route('primary'),
   topic_validation: route('agent'),
+  prompt_enhancement: {
+    ...route('agent', {
+      gemini: ['GEMINI_MODEL'],
+    }, {
+      gemini: 'gemini-2.5-flash-lite',
+    }),
+    defaultProvider: 'gemini',
+  },
+  curriculum_ideas: {
+    ...route('agent', {
+      gemini: ['GEMINI_IDEAS_MODEL', 'GEMINI_MODEL'],
+    }, {
+      gemini: 'gemini-2.5-flash-lite',
+    }),
+    defaultProvider: 'gemini',
+  },
+  curriculum_preview: {
+    ...route('agent', {
+      gemini: ['GEMINI_PREVIEW_MODEL', 'GEMINI_MODEL'],
+    }, {
+      gemini: 'gemini-2.5-flash-lite',
+    }),
+    defaultProvider: 'gemini',
+  },
+}
+
+for (const feature of GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.features) {
+  FEATURE_ROUTES[feature] = {
+    ...FEATURE_ROUTES[feature],
+    defaultProvider: GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider,
+    lockedProvider: GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider,
+    disableAutomaticFallback: true,
+  }
 }
 
 function parseProvider(value: string | undefined, key: string): AIProviderName | undefined {
@@ -140,6 +201,7 @@ export function resolveAIProviderModel(
   includeFeatureOverride = true,
 ) {
   const definition = FEATURE_ROUTES[feature]
+  if (definition.lockedModel) return definition.lockedModel
   const modelKey = featureEnvironmentKey(feature, 'MODEL')
   return (includeFeatureOverride ? process.env[modelKey]?.trim() : undefined)
     || firstEnvironmentValue(definition.modelEnvironmentVariables?.[provider])
@@ -150,17 +212,22 @@ export function resolveAIFeatureRoute(feature: AIFeature): ResolvedAIFeatureRout
   const definition = FEATURE_ROUTES[feature]
   const providerKey = featureEnvironmentKey(feature, 'PROVIDER')
   const fallbackKey = featureEnvironmentKey(feature, 'FALLBACK_PROVIDERS')
-  const configuredProvider = parseProvider(process.env[providerKey], providerKey)
-  const provider = configuredProvider
+  const configuredProvider = definition.lockedProvider
+    ? undefined
+    : parseProvider(process.env[providerKey], providerKey)
+  const provider = definition.lockedProvider
+    ?? configuredProvider
     ?? (definition.defaultProvider === 'global' ? globalProvider() : definition.defaultProvider)
-  const configuredFallbacks = parseFallbackProviders(process.env[fallbackKey], fallbackKey)
+  const configuredFallbacks = definition.disableAutomaticFallback
+    ? []
+    : parseFallbackProviders(process.env[fallbackKey], fallbackKey)
 
   let fallbackProviders = Array.from(new Set(
     configuredFallbacks ?? (configuredProvider ? [] : definition.fallbackProviders ?? []),
   )).filter((fallback) => fallback !== provider)
 
   // Auto-fallback default: failover to the alternative provider if no fallbacks are explicitly set
-  if (fallbackProviders.length === 0) {
+  if (!definition.disableAutomaticFallback && fallbackProviders.length === 0) {
     if (provider === 'openai') {
       fallbackProviders = ['gemini']
     } else if (provider === 'gemini') {

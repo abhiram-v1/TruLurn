@@ -252,5 +252,29 @@ export async function ensureIndexes(db: Db): Promise<void> {
       { user_id: 1, course_id: 1, from_topic_id: 1, to_topic_id: 1 },
       { background: true, unique: true, name: 'user_connections_unique' },
     ),
+    // Source-extracted images: retrieval/listing by course + version cleanup.
+    db.collection('sourceImages').createIndex(
+      { user_id: 1, course_id: 1, source_index: 1, page: 1, order: 1 },
+      { background: true, name: 'source_images_course_order' },
+    ),
+    db.collection('sourceImages').createIndex(
+      { source_version_id: 1 },
+      { background: true, name: 'source_images_version' },
+    ),
+    // Graph manager: per-node confidence/review state (one per user+course+topic).
+    db.collection('graphNodeMeta').createIndex(
+      { user_id: 1, course_id: 1, topic_id: 1 },
+      { background: true, unique: true, name: 'graph_node_meta_unique' },
+    ),
+    // Graph manager: per-edge relationship scores (one per labeled pair).
+    db.collection('graphEdgeScores').createIndex(
+      { user_id: 1, course_id: 1, from_label: 1, to_label: 1 },
+      { background: true, unique: true, name: 'graph_edge_scores_unique' },
+    ),
+    // Graph manager: interaction audit trail.
+    db.collection('graphInteractionLog').createIndex(
+      { user_id: 1, course_id: 1, created_at: -1 },
+      { background: true, name: 'graph_interaction_log_scope' },
+    ),
   ])
 }

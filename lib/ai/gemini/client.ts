@@ -1,5 +1,6 @@
 import { aiFetch } from '@/lib/ai/http'
 import type { AIProviderGenerateInput } from '@/lib/ai/types'
+import { buildGeminiGenerationConfig } from '@/lib/ai/gemini/generationConfig'
 
 type GeminiPart = { text: string }
 
@@ -34,6 +35,7 @@ export async function generateWithGemini({
   auditFeature,
   onUsage,
   responseMimeType = 'application/json',
+  responseSchema,
   signal,
 }: AIProviderGenerateInput): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
@@ -63,11 +65,7 @@ export async function generateWithGemini({
     body: JSON.stringify({
       contents,
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-      generationConfig: {
-        temperature: 0.25,
-        topP: 0.9,
-        responseMimeType,
-      },
+      generationConfig: buildGeminiGenerationConfig({ responseMimeType, responseSchema }),
     }),
   }, { signal })
 

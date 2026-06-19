@@ -1,5 +1,27 @@
 // ── Types shared between the graph API, layout engine, and React components ──
 
+// ── Review / validation states for graph elements ─────────────────────────
+export type GraphElementReviewState =
+  | 'proposed'
+  | 'inferred'
+  | 'observed'
+  | 'confirmed'
+  | 'verified'
+  | 'deprecated'
+  | 'contradicted'
+
+// ── Multi-dimensional edge score (confidence, recency, frequency, etc.) ────
+export interface GraphEdgeScores {
+  confidence: number   // 0–100: certainty that relationship exists
+  recency: number      // 0–100: 100 = observed very recently
+  frequency: number    // 0–100: normalized observation count
+  validation: number   // 0–100: cross-evidence validation level
+  importance: number   // 0–100: pedagogical significance
+  composite: number    // 0–100: weighted aggregate of all scores
+  source: string       // 'quiz' | 'doubt' | 'feedback' | 'discussion' | 'inferred'
+  updatedAt: string    // ISO date string
+}
+
 export type GraphNodeState =
   | 'mastered'
   | 'functional'
@@ -61,6 +83,10 @@ export interface GraphNode {
   /** 0–100. Earned knowledge strength: mastery + recall performance + freshness
    *  + user-made connections. Drives node weight in the personal knowledge view. */
   knowledgeStrength: number
+  /** Review/validation state derived from observed interactions (optional — absent until graph manager runs). */
+  reviewState?: GraphElementReviewState
+  /** 0–100. Confidence score from the interaction-based graph manager (optional). */
+  confidenceScore?: number
 }
 
 export interface GraphEdge {
@@ -74,6 +100,10 @@ export interface GraphEdge {
   note?: string | null
   /** User connections only: the userConnections document id (for deletion). */
   connectionId?: string | null
+  /** Multi-dimensional relationship scores from the graph manager. */
+  scores?: GraphEdgeScores
+  /** Review/validation state for this relationship. */
+  reviewState?: GraphElementReviewState
 }
 
 export interface GraphBranch {

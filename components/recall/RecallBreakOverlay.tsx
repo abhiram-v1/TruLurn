@@ -22,7 +22,13 @@ const TYPE_LABEL: Record<string, string> = {
   application: 'Apply',
 }
 
-export function RecallBreakCountdown({ rest }: { rest: RecallRestState }) {
+export function RecallBreakCountdown({
+  rest,
+  onSkipRest,
+}: {
+  rest: RecallRestState
+  onSkipRest?: () => void
+}) {
   const minutes = Math.floor(rest.remainingSeconds / 60)
   const seconds = rest.remainingSeconds % 60
   const totalSeconds = Math.max(1, rest.durationMinutes * 60)
@@ -31,6 +37,17 @@ export function RecallBreakCountdown({ rest }: { rest: RecallRestState }) {
   return (
     <div className="recall-overlay" role="dialog" aria-modal="true" aria-label="Break countdown">
       <div className="recall-card recall-rest-card">
+        {onSkipRest ? (
+          <button
+            className="recall-rest-close"
+            type="button"
+            aria-label="End break and go to review"
+            title="End break early — takes you to the recall questions"
+            onClick={onSkipRest}
+          >
+            <IconX aria-hidden="true" size={16} stroke={2} />
+          </button>
+        ) : null}
         <div className="recall-rest-icon" aria-hidden="true">
           <IconCoffee size={30} stroke={1.6} />
         </div>
@@ -137,7 +154,7 @@ export function RecallBreakOverlay({
         {phase === 'questions' && current ? (
           <div className="recall-body">
             <p className="recall-intro">
-              Pause for a moment and bring the idea back from memory. Nothing needs to be typed or submitted.
+              Try to answer in your head before moving on.
             </p>
             <div className="recall-question-meta">
               <span className={`recall-type recall-type-${current.type}`}>{TYPE_LABEL[current.type] ?? 'Recall'}</span>

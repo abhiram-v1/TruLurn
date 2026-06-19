@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { getCachedCourse, getCachedGraphData } from '@/lib/cache/courseData'
 import { normalizeGraphTopicHierarchy, transformToGraphData, type RawRecallStats } from '@/lib/graph/transform'
 
 // GET /api/graph/[courseId]?view=knowledge|reference
@@ -23,12 +24,16 @@ export async function GET(
     const view = url.searchParams.get('view') === 'reference' ? 'reference' : 'knowledge'
     const db = await getDb()
 
-    const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
+    const course = await getCachedCourse(db, courseId, userId)
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
 
-    const [topics, branches, topicEdges, examSessions, doubtAgg, userConnections] = await Promise.all([
+    // The graph payload (heavy layout + cascade + critical-path computation) is
+    // cached per course/user/view with a short TTL and invalidated on graph
+    // writes (state updates, connections). Rapid re-renders/pans reuse it.
+    const payload = await getCachedGraphData(courseId, userId, view, async () => {
+    const [topics, branches, topicEdges, examSessions, doubtAgg, userConnections, graphNodeMeta] = await Promise.all([
       db.collection('topics').find({ course_id: courseId }).sort({ position: 1 }).toArray(),
       db.collection('branches').find({ course_id: courseId }).toArray(),
       db.collection('topicEdges').find({ course_id: courseId }).toArray(),
@@ -48,6 +53,11 @@ export async function GET(
       // Learner-created concept connections
       db.collection('userConnections')
         .find({ course_id: courseId, user_id: userId })
+        .toArray(),
+      // Graph manager: per-node confidence + review states from interaction analysis
+      db.collection('graphNodeMeta')
+        .find({ course_id: courseId, user_id: userId })
+        .project({ topic_id: 1, confidence_score: 1, review_state: 1 })
         .toArray(),
     ])
 
@@ -165,7 +175,25 @@ export async function GET(
       recallStatsByTopic,
     })
 
-    return NextResponse.json({
+    // Merge graph-manager confidence + review states onto nodes
+    const nodeMeta = new Map<string, { confidenceScore: number; reviewState: string }>()
+    for (const meta of graphNodeMeta) {
+      nodeMeta.set(String(meta.topic_id), {
+        confidenceScore: Number(meta.confidence_score ?? 50),
+        reviewState: String(meta.review_state ?? 'inferred'),
+      })
+    }
+    if (nodeMeta.size > 0) {
+      for (const node of graphData.nodes) {
+        const meta = nodeMeta.get(node.id)
+        if (meta) {
+          node.confidenceScore = meta.confidenceScore
+          node.reviewState = meta.reviewState as any
+        }
+      }
+    }
+
+    return {
       ...graphData,
       view,
       // Total concepts in the full course — lets the knowledge view show
@@ -175,7 +203,10 @@ export async function GET(
         const childCount = Number((t as any).children_count ?? 0)
         return nodeType !== 'container' && childCount <= 0
       }).length,
+    }
     })
+
+    return NextResponse.json(payload)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     const status = message.includes('sign in') ? 401 : 500

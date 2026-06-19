@@ -83,10 +83,12 @@ export type AIFeature =
   | 'exam_question_generation'
   | 'exam_strategy'
   | 'flow_tracking'
+  | 'graph_interaction_analyzer'
+  | 'graph_generation'
+  | 'graph_manager'
   | 'graph_recommendation'
   | 'learner_audience'
   | 'lesson_research'
-  | 'map_generation'
   | 'page_analysis'
   | 'prerequisite_gap_analysis'
   | 'quiz_generation'
@@ -100,6 +102,9 @@ export type AIFeature =
   | 'topic_plan_analysis'
   | 'topic_transform'
   | 'topic_validation'
+  | 'prompt_enhancement'
+  | 'curriculum_ideas'
+  | 'curriculum_preview'
 
 export type AIFeatureRoute = {
   capability: AICapability
@@ -108,6 +113,11 @@ export type AIFeatureRoute = {
   fallbackProviders?: AIProviderName[]
   modelEnvironmentVariables?: Partial<Record<AIProviderName, string[]>>
   defaultModels?: Partial<Record<AIProviderName, string>>
+  /** Prevent feature-level provider/model overrides for ownership-critical routes. */
+  lockedProvider?: AIProviderName
+  lockedModel?: string
+  /** Prevent the router from adding the alternative provider automatically. */
+  disableAutomaticFallback?: boolean
 }
 
 export type ResolvedAIFeatureRoute = {

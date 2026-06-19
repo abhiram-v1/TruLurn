@@ -2,6 +2,7 @@ import crypto from 'crypto'
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { invalidateCourse } from '@/lib/cache/courseData'
 
 // Learner-created knowledge connections — the edges of the personal graph.
 // POST   /api/graph/[courseId]/connections   { fromTopicId, toTopicId, note? }
@@ -55,6 +56,7 @@ export async function POST(
           { _id: existing._id },
           { $set: { note, updated_at: new Date() } },
         )
+        invalidateCourse(courseId)
       }
       return NextResponse.json({ id: String(existing._id), alreadyExists: true })
     }
@@ -70,6 +72,9 @@ export async function POST(
       created_at: new Date(),
       updated_at: new Date(),
     })
+
+    // New personal-graph edge — refresh the cached graph payload.
+    invalidateCourse(courseId)
 
     return NextResponse.json({ id })
   } catch (error) {
@@ -102,6 +107,7 @@ export async function DELETE(
     if (result.deletedCount === 0) {
       return NextResponse.json({ error: 'Connection not found.' }, { status: 404 })
     }
+    invalidateCourse(params.courseId)
     return NextResponse.json({ deleted: true })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not delete the connection.'

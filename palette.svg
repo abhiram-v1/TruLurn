@@ -1,7 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
-          <!-- Exported from Coolors.co - https://coolors.co/050517-d36d4a-f4e3b2-fdf7ed-d3d5d7 -->
-          <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" viewBox="0 0 500 250" xml:space="preserve">
-            <rect fill="#050517" x="0" y="0" width="100" height="220"/>,<rect fill="#d36d4a" x="100" y="0" width="100" height="220"/>,<rect fill="#f4e3b2" x="200" y="0" width="100" height="220"/>,<rect fill="#fdf7ed" x="300" y="0" width="100" height="220"/>,<rect fill="#d3d5d7" x="400" y="0" width="100" height="220"/>
-            <text x="10" y="235" font-family="Arial" font-size="6" alignment-baseline="middle">Exported from Coolors.co</text>
-            <text x="490" y="235" font-family="Arial" font-size="6" alignment-baseline="middle" text-anchor="end">https://coolors.co/050517-d36d4a-f4e3b2-fdf7ed-d3d5d7</text>
-          </svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280" role="img" aria-labelledby="title description">
+  <title id="title">TruLurn color palette</title>
+  <desc id="description">Five core colors followed by deep slate blue, moss sage, and soft mineral blue supporting colors.</desc>
+
+  <rect width="800" height="280" fill="#FDF7ED"/>
+
+  <g>
+    <rect x="0" y="0" width="100" height="220" fill="#050517"/>
+    <rect x="100" y="0" width="100" height="220" fill="#D36D4A"/>
+    <rect x="200" y="0" width="100" height="220" fill="#F4E3B2"/>
+    <rect x="300" y="0" width="100" height="220" fill="#FDF7ED"/>
+    <rect x="400" y="0" width="100" height="220" fill="#D3D5D7"/>
+    <rect x="500" y="0" width="100" height="220" fill="#496477"/>
+    <rect x="600" y="0" width="100" height="220" fill="#71845D"/>
+    <rect x="700" y="0" width="100" height="220" fill="#DCE8E8"/>
+  </g>
+
+  <g font-family="Arial, sans-serif" font-size="12" font-weight="600">
+    <text x="50" y="242" fill="#050517" text-anchor="middle">Ink</text>
+    <text x="150" y="242" fill="#050517" text-anchor="middle">Terracotta</text>
+    <text x="250" y="242" fill="#050517" text-anchor="middle">Wheat</text>
+    <text x="350" y="242" fill="#050517" text-anchor="middle">Parchment</text>
+    <text x="450" y="242" fill="#050517" text-anchor="middle">Soft Gray</text>
+    <text x="550" y="242" fill="#050517" text-anchor="middle">Slate</text>
+    <text x="650" y="242" fill="#050517" text-anchor="middle">Moss Sage</text>
+    <text x="750" y="242" fill="#050517" text-anchor="middle">Mineral Blue</text>
+  </g>
+
+  <g font-family="Arial, sans-serif" font-size="10" fill="#626774">
+    <text x="50" y="260" text-anchor="middle">#050517</text>
+    <text x="150" y="260" text-anchor="middle">#D36D4A</text>
+    <text x="250" y="260" text-anchor="middle">#F4E3B2</text>
+    <text x="350" y="260" text-anchor="middle">#FDF7ED</text>
+    <text x="450" y="260" text-anchor="middle">#D3D5D7</text>
+    <text x="550" y="260" text-anchor="middle">#496477</text>
+    <text x="650" y="260" text-anchor="middle">#71845D</text>
+    <text x="750" y="260" text-anchor="middle">#DCE8E8</text>
+  </g>
+</svg>

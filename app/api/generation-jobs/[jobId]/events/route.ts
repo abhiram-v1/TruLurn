@@ -5,12 +5,25 @@ import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { validateTopicSuitability } from '@/lib/course-generation/topicValidator'
 import { researchCurriculum, formatResearchBrief } from '@/lib/course-generation/research'
-import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
+import { curriculumBuilderSkill } from '@/lib/ai/skills'
 import { generateAI, parseAIJson } from '@/lib/ai'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
-import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
-import { readIngestedSourceText, resumeSourceIngestionJobs } from '@/lib/sources/ingestion'
+import {
+  analyzeSourceMetadata,
+  analyzeSourceTeachingStyle,
+  type SourceProfileEnvelope,
+  triggerBackgroundStyleAnalysis,
+} from '@/lib/course-generation/sourceProfile'
+import {
+  readIngestedSourceText,
+  resumeSourceExtractionJobs,
+  resumeSourceEmbeddingJobs,
+} from '@/lib/sources/ingestion'
+import {
+  getOrBuildSourceCompaction,
+  formatCompactSourceForPrompt,
+} from '@/lib/course-generation/sourceCompaction'
 import { sanitizeGeneratedMap } from '@/lib/course-generation/generateCourse'
 import {
   enforceSourceGroundedCurriculum,
@@ -18,6 +31,7 @@ import {
 } from '@/lib/course-generation/sourceCurriculumIntegrity'
 import { deriveLearnerAudience } from '@/lib/personalization/learnerAudience'
 import crypto from 'crypto'
+import { generateCourseGraph } from '@/lib/graph-generation'
 
 const UNSUITABLE_MESSAGE =
   'This topic is not suitable for structured course creation. Please enter a subject that can be taught through multiple lessons, such as programming, mathematics, design, business, science, languages, or other professional skills.'
@@ -254,7 +268,10 @@ export async function GET(
         // teaches and which full subject it belongs to. Independent — run in parallel.
         if ((input.mode === 'source_grounded' || input.sourceIngestionJobIds?.length) && !completedStages.includes('extracting_sources')) {
           await updateStage('extracting_sources', 'Studying how your material teaches and inferring source order...', completedStages, undefined, workerRunId)
-          await resumeSourceIngestionJobs(db, input.sourceIngestionJobIds ?? [])
+          await resumeSourceExtractionJobs(db, input.sourceIngestionJobIds ?? [])
+          if (input.sourceIngestionJobIds?.length) {
+            resumeSourceEmbeddingJobs(db, input.sourceIngestionJobIds).catch(console.error)
+          }
           const durableExtraction = input.sourceVersionIds?.length
             ? await readIngestedSourceText(db, userId, input.sourceVersionIds)
             : { sourceText: input.sourceText ?? '', limitations: input.sourceLimitations ?? [] }
@@ -271,11 +288,42 @@ export async function GET(
             throw new Error(`No readable source text is available. ${baseInput.sourceLimitations.join(' ')}`)
           }
           if (input.mode === 'source_grounded') {
-            const [orderedInput, sourceProfile] = await Promise.all([
-              orderSourceGroundedInput(baseInput),
-              analyzeSourceProfile({ goals: baseInput.goals, sourceText: baseInput.sourceText ?? '' }),
-            ])
-            input = { ...orderedInput, sourceProfile }
+            const orderedInput = await orderSourceGroundedInput(baseInput)
+            const compactSource = await getOrBuildSourceCompaction({
+              db,
+              sourceVersionIds: orderedInput.sourceVersionIds ?? [],
+              userId,
+              generationJobId: jobId,
+              sourceTextFallback: orderedInput.sourceText,
+            })
+            
+            const compactOutline = formatCompactSourceForPrompt(compactSource)
+            
+            const metadataProfile = await analyzeSourceMetadata({
+              goals: orderedInput.goals,
+              compactOutline,
+              sourceFingerprint: compactSource.source_fingerprint,
+            })
+            
+            const sourceProfileEnvelope: SourceProfileEnvelope | null = metadataProfile
+              ? {
+                  schema_version: 'source-profile-v2',
+                  source_fingerprint: compactSource.source_fingerprint,
+                  metadata: metadataProfile,
+                  style: null,
+                  style_status: 'pending',
+                  style_attempts: 0,
+                  metadata_generated_at: new Date().toISOString(),
+                  style_generated_at: null,
+                  style_error: null,
+                }
+              : null
+
+            input = {
+              ...orderedInput,
+              sourceProfile: sourceProfileEnvelope,
+              compactCurriculumSource: compactSource,
+            }
           } else {
             input = baseInput
           }
@@ -329,6 +377,18 @@ export async function GET(
         // resumes from this exact point once the curriculum is approved (the approval
         // endpoint sets curriculum_approved + status:running and the client reconnects).
         if (input.previewCurriculum !== false && !currentJob?.curriculum_approved) {
+          if (input.mode === 'source_grounded' && input.sourceProfile && 'schema_version' in input.sourceProfile) {
+            const envelope = input.sourceProfile as SourceProfileEnvelope
+            triggerBackgroundStyleAnalysis({
+              db,
+              userId,
+              generationJobId: jobId,
+              sourceFingerprint: envelope.source_fingerprint,
+              goals: input.goals,
+              sourceText: input.sourceText ?? '',
+              metadata: envelope.metadata,
+            }).catch(console.error)
+          }
           if (!isClosed) {
             const awaitingJob = await updateJobStage(
               db,
@@ -360,8 +420,13 @@ export async function GET(
           await updateStage('building_atlas', 'Mapping prerequisites and dependency connections...', completedStages, undefined, workerRunId)
           let map = currentJob.map
           if (!map) {
-            const mapText = await generateAI({ feature: 'map_generation', ...mapBuilderSkill(currentJob.curriculum) })
-            map = parseAIJson<any>(mapText)
+            const graphResult = await generateCourseGraph({
+              curriculum: currentJob.curriculum,
+              mode: input.mode,
+              sourceText: input.sourceText,
+              generationRevision: Number(currentJob.graph_generation_revision ?? 1),
+            })
+            map = graphResult.map
           }
           sanitizeGeneratedMap(map, currentJob.curriculum)
           if (input.mode === 'source_grounded') {

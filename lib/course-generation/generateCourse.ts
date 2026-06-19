@@ -1,16 +1,19 @@
 import { generateAI, parseAIJson } from '@/lib/ai'
-import { curriculumBuilderSkill, mapBuilderSkill } from '@/lib/ai/skills'
+import { curriculumBuilderSkill } from '@/lib/ai/skills'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { deriveLearnerAudience } from '@/lib/personalization/learnerAudience'
 import { formatResearchBrief, researchCurriculum, type CourseResearchReport } from '@/lib/course-generation/research'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
-import { analyzeSourceProfile } from '@/lib/course-generation/sourceProfile'
+import { analyzeSourceMetadata, triggerBackgroundStyleAnalysis, type SourceProfileEnvelope } from '@/lib/course-generation/sourceProfile'
+import { getOrBuildSourceCompaction, buildSourceCompaction, formatCompactSourceForPrompt } from '@/lib/course-generation/sourceCompaction'
+import { getDb } from '@/lib/db'
 import { validateGraph, type ValidatorTopic, type ValidatorEdge } from '@/lib/course-generation/validateGraph'
 import {
   enforceSourceGroundedCurriculum,
   enforceSourceGroundedMap,
 } from '@/lib/course-generation/sourceCurriculumIntegrity'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
+import { generateCourseGraph } from '@/lib/graph-generation'
 
 // Walk the curriculum tree and collect each topic's AI-emitted prerequisite_strength map.
 function buildStrengthMap(curriculum: any): Map<string, Record<string, string>> {
@@ -75,7 +78,8 @@ export function sanitizeGeneratedMap(map: any, curriculum: any) {
     )
   }
 
-  map.validation_report = result.report
+  map.topology_repair_report = result.report
+  if (!map.provenance) map.validation_report = result.report
 }
 
 export type GeneratedCourseResult = {
@@ -88,11 +92,66 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
   // Ordering rewrites sourceText sequence; profiling reads style + scope. They
   // are independent, so run them in parallel.
   if (input.mode === 'source_grounded' && input.sourceText) {
-    const [orderedInput, sourceProfile] = await Promise.all([
-      orderSourceGroundedInput(input),
-      analyzeSourceProfile({ goals: input.goals, sourceText: input.sourceText }),
-    ])
-    input = { ...orderedInput, sourceProfile }
+    const orderedInput = await orderSourceGroundedInput(input)
+    
+    let db: any = null
+    try {
+      db = await getDb()
+    } catch {}
+
+    let compactSource = null
+    if (orderedInput.sourceVersionIds?.length && db) {
+      compactSource = await getOrBuildSourceCompaction({
+        db,
+        sourceVersionIds: orderedInput.sourceVersionIds,
+        userId: orderedInput.userId,
+        sourceTextFallback: orderedInput.sourceText,
+      })
+    } else {
+      compactSource = await buildSourceCompaction({
+        sourceTextFallback: orderedInput.sourceText,
+      })
+    }
+
+    const compactOutline = formatCompactSourceForPrompt(compactSource)
+
+    const metadataProfile = await analyzeSourceMetadata({
+      goals: orderedInput.goals,
+      compactOutline,
+      sourceFingerprint: compactSource.source_fingerprint,
+    })
+
+    const sourceProfile: SourceProfileEnvelope | null = metadataProfile
+      ? {
+          schema_version: 'source-profile-v2',
+          source_fingerprint: compactSource.source_fingerprint,
+          metadata: metadataProfile,
+          style: null,
+          style_status: 'pending',
+          style_attempts: 0,
+          metadata_generated_at: new Date().toISOString(),
+          style_generated_at: null,
+          style_error: null,
+        }
+      : null
+
+    if (db && sourceProfile) {
+      triggerBackgroundStyleAnalysis({
+        db,
+        userId: orderedInput.userId,
+        generationJobId: 'sync-gen',
+        sourceFingerprint: sourceProfile.source_fingerprint,
+        goals: orderedInput.goals,
+        sourceText: orderedInput.sourceText ?? '',
+        metadata: sourceProfile.metadata,
+      }).catch(console.error)
+    }
+
+    input = {
+      ...orderedInput,
+      sourceProfile,
+      compactCurriculumSource: compactSource,
+    }
   } else {
     input = await orderSourceGroundedInput(input)
   }
@@ -119,17 +178,21 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     })
   }
 
-  const [mapText, learnerAudience] = await Promise.all([
-    generateAI({ feature: 'map_generation', ...mapBuilderSkill(curriculum) }),
+  const [graphResult, learnerAudience] = await Promise.all([
+    generateCourseGraph({
+      curriculum,
+      mode: input.mode,
+      sourceText: input.sourceText,
+    }),
     deriveLearnerAudience({
       goals: input.goals,
       knowledgeLevel: input.knowledgeLevel,
       learningPurpose: input.learningPurpose,
-      sourceProfile: input.sourceProfile,
+      sourceProfile: input.sourceProfile as any,
     }),
   ])
 
-  const map = parseAIJson<any>(mapText)
+  const map = graphResult.map
 
   // Validate + repair the AI-generated graph topology before anything consumes it.
   sanitizeGeneratedMap(map, curriculum)

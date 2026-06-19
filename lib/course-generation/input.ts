@@ -1,5 +1,6 @@
 import type { CourseDepth, CurriculumMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/lib/ai/skills/types'
-import type { SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
+import type { SourceProfileEnvelope, SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
+import type { CompactCurriculumSource } from '@/lib/course-generation/sourceCompaction'
 import { extractSourceTextFromFormData, normalizeCurriculumMode } from '@/lib/ai/sources'
 import type { Db } from 'mongodb'
 import { ingestSourceFilesFromFormData } from '@/lib/sources/ingestion'
@@ -19,7 +20,8 @@ export type CourseGenerationInput = {
   sourceOrderAnalysis?: string
   // Teaching-style + scope-boundary analysis of the uploaded sources.
   // In source-grounded mode the sources are the hard curriculum boundary.
-  sourceProfile?: SourceTeachingProfile | null
+  sourceProfile?: SourceProfileEnvelope | SourceTeachingProfile | null
+  compactCurriculumSource?: CompactCurriculumSource | null
   sourceLimitations: string[]
   sourceDocumentIds?: string[]
   sourceVersionIds?: string[]

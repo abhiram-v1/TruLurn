@@ -130,6 +130,22 @@ export interface SourceCitation {
   char_end: number | null
 }
 
+export interface SourceImageAsset {
+  id: string
+  url: string
+  caption: string
+  figureLabel: string
+  classification: string
+  chartType: string
+  ocrText: string
+  page: number
+  relevance: number
+  width: number | null
+  height: number | null
+  sourceTitle: string | null
+  score?: number
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────
 
 export interface Page {
@@ -159,6 +175,7 @@ export interface Page {
   page_sequence_role?: PageSequenceRole | null
   sections?: LessonSection[]
   source_citations?: SourceCitation[]
+  figures?: SourceImageAsset[]
   grounding?: unknown | null
 }
 
@@ -204,7 +221,7 @@ export interface EvaluationResult {
   false_confidence: boolean
 }
 
-export type ExamMode = 'full_topic' | 'spot_check'
+export type ExamMode = 'full_topic' | 'spot_check' | 'course_checkpoint'
 export type ExamStatus = 'active' | 'completed' | 'abandoned'
 export type ExamTurnStatus = 'queued' | 'shown' | 'answered' | 'evaluated'
 export type ExamTurnSource = 'baseline' | 'followup' | 'spot_check'

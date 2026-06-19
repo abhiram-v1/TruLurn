@@ -1,6 +1,6 @@
 // Pure utility functions shared between graph rendering components.
 
-import type { GraphNodeState } from '@/lib/graph/types'
+import type { GraphElementReviewState, GraphNodeState } from '@/lib/graph/types'
 
 // ── Branch family colour ramps ───────────────────────────────────────────────
 // Each branch family keeps a consistent colour across all its layers.
@@ -99,4 +99,44 @@ export function stateLabel(state: GraphNodeState): string {
 /** Whether a given mastery-state warrants showing the progress bar. */
 export function showProgress(state: GraphNodeState): boolean {
   return state !== 'locked'
+}
+
+// ── Multi-spectrum confidence → color (11-step gradient) ─────────────────
+// Maps a 0–100 confidence score to a color that encodes knowledge certainty.
+// Deep Red (very uncertain) → Magenta (critical, high-confidence core).
+
+export function confidenceToColor(confidence: number): string {
+  if (confidence >= 95) return '#C026D3'  // Magenta  — High Importance + High Confidence
+  if (confidence >= 88) return '#7C3AED'  // Purple   — Critical / Core Knowledge
+  if (confidence >= 80) return '#4F46E5'  // Indigo   — Long-Term Stable
+  if (confidence >= 72) return '#2563EB'  // Blue     — Highly Stable
+  if (confidence >= 63) return '#0891B2'  // Cyan     — Verified Confidence
+  if (confidence >= 54) return '#0D9488'  // Teal     — Strong Confidence
+  if (confidence >= 44) return '#16A34A'  // Green    — High Confidence
+  if (confidence >= 34) return '#65A30D'  // Lime     — Emerging Confidence
+  if (confidence >= 24) return '#CA8A04'  // Yellow   — Moderate Confidence
+  if (confidence >= 14) return '#EA580C'  // Orange   — Low Confidence
+  return '#DC2626'                         // Deep Red — Very Low Confidence
+}
+
+// ── Review state → CSS border-style ──────────────────────────────────────
+
+export function reviewStateToBorderStyle(reviewState?: GraphElementReviewState | string): string {
+  switch (reviewState) {
+    case 'verified':
+    case 'confirmed':
+    case 'observed':    return 'solid'
+    case 'inferred':
+    case 'proposed':    return 'dashed'
+    case 'deprecated':
+    case 'contradicted': return 'dotted'
+    default:            return 'solid'
+  }
+}
+
+// ── Review state → CSS class suffix ──────────────────────────────────────
+
+export function reviewStateClass(reviewState?: GraphElementReviewState | string): string {
+  if (!reviewState) return ''
+  return `review-${reviewState}`
 }

@@ -14,17 +14,22 @@
   --color-danger: #9f3c21;
   --color-warning: #b45309;
   --color-success: #3b6d11;
+  --color-detail-slate: #496477;
+  --color-detail-slate-ink: #3f5b6d;
+  --color-detail-sage: #71845d;
+  --color-detail-sage-ink: #586b47;
+  --color-detail-mineral: #dce8e8;
   --shadow-color: rgba(5, 5, 23, 0.14);
   --shadow-color-strong: rgba(5, 5, 23, 0.22);
   --scrollbar-thumb: rgba(86, 82, 75, 0.28);
   --scrollbar-thumb-hover: rgba(86, 82, 75, 0.48);
 
-  --state-mastered-bg: #EAF3DE;
-  --state-mastered-text: #3B6D11;
+  --state-mastered-bg: #edf2e8;
+  --state-mastered-text: #586b47;
   --state-partial-bg: #FAEEDA;
   --state-partial-text: #854F0B;
-  --state-functional-bg: #E6F1FB;
-  --state-functional-text: #185FA5;
+  --state-functional-bg: #dce8e8;
+  --state-functional-text: #3f5b6d;
   --state-unstable-bg: #FDE8E8;
   --state-unstable-text: #B91C1C;
 
@@ -46,12 +51,12 @@
   --code-string: #7a5c3f;
   --code-inserted: #3b6d11;
 
-  --text-xs: 11px;
-  --text-sm: 13px;
-  --text-base: 15px;
-  --text-lg: 18px;
-  --text-xl: 22px;
-  --text-2xl: 28px;
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
 
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -75,17 +80,22 @@
   --color-danger: #f09a86;
   --color-warning: #e8b56d;
   --color-success: #a7cd83;
+  --color-detail-slate: #496477;
+  --color-detail-slate-ink: #9bb6c5;
+  --color-detail-sage: #71845d;
+  --color-detail-sage-ink: #b1c394;
+  --color-detail-mineral: #dce8e8;
   --shadow-color: rgba(0, 0, 0, 0.38);
   --shadow-color-strong: rgba(0, 0, 0, 0.56);
   --scrollbar-thumb: rgba(213, 202, 190, 0.22);
   --scrollbar-thumb-hover: rgba(213, 202, 190, 0.38);
 
-  --state-mastered-bg: #1d2b19;
-  --state-mastered-text: #a7cd83;
+  --state-mastered-bg: #222b1f;
+  --state-mastered-text: #b1c394;
   --state-partial-bg: #302619;
   --state-partial-text: #e8b56d;
-  --state-functional-bg: #172735;
-  --state-functional-text: #8ebce6;
+  --state-functional-bg: #1c292e;
+  --state-functional-text: #9bb6c5;
   --state-unstable-bg: #351d1d;
   --state-unstable-text: #f09a9a;
 
@@ -158,7 +168,7 @@ a {
 .product-topbar {
   align-items: center;
   background: var(--color-bg-primary);
-  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 3px var(--shadow-color);
   display: grid;
   grid-template-columns: 220px 1fr 220px;
   height: 54px;
@@ -183,8 +193,8 @@ a {
 
 .back-button {
   align-items: center;
-  background: transparent;
-  border: 1px solid var(--color-border);
+  background: rgba(5, 5, 23, 0.04);
+  border: none;
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
   display: inline-flex;
@@ -193,6 +203,7 @@ a {
   gap: 3px;
   height: 28px;
   padding: 0 8px 0 5px;
+  transition: background 150ms ease, color 150ms ease;
 }
 
 .back-button:hover {
@@ -225,38 +236,63 @@ a {
   min-height: 34px;
   padding: 7px 12px;
   white-space: nowrap;
+  border: none;
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
 
 .button {
   background: var(--color-accent);
-  border: 1px solid var(--color-accent);
   color: var(--color-bg-primary);
+  box-shadow: 0 1px 2px rgba(5, 5, 23, 0.05);
 }
 
 .button-subtle {
-  background: transparent;
-  border: 1px solid var(--color-border);
+  background: rgba(5, 5, 23, 0.05);
   color: var(--color-text-primary);
 }
 
 .button-quiet {
   background: transparent;
-  border: 1px solid transparent;
   color: var(--color-text-secondary);
 }
 
-.button:hover,
-.button-subtle:hover,
-.button-quiet:hover {
-  background: var(--color-bg-secondary);
-  border-color: var(--color-border);
+.button:hover {
+  background: #050517;
+  color: #fdf7ed;
+  box-shadow: 0 2px 4px rgba(5, 5, 23, 0.1);
+}
+
+[data-theme='dark'] .button:hover {
+  background: #f4ede4;
+  color: #151311;
+}
+
+.button-subtle:hover {
+  background: rgba(5, 5, 23, 0.09);
   color: var(--color-text-primary);
+}
+
+[data-theme='dark'] .button-subtle {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .button-subtle:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.button-quiet:hover {
+  background: rgba(5, 5, 23, 0.04);
+  color: var(--color-text-primary);
+}
+
+[data-theme='dark'] .button-quiet:hover {
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .bottom-nav {
   align-items: center;
   background: var(--color-bg-primary);
-  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -1px 3px var(--shadow-color);
   bottom: 0;
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -304,4 +340,75 @@ a {
 
 .nav-icon svg {
   display: block;
+}
+
+/* Shared loading feedback -------------------------------------------------- */
+.loading-wheel,
+.navigation-feedback-wheel {
+  animation: trulurn-loading-spin .72s linear infinite;
+  border: 2px solid color-mix(in srgb, var(--color-accent) 22%, transparent);
+  border-radius: 50%;
+  border-top-color: var(--color-accent);
+  box-sizing: border-box;
+  display: inline-block;
+  height: 18px;
+  width: 18px;
+}
+
+.navigation-feedback {
+  left: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: fixed;
+  right: 0;
+  top: 0;
+  transition: opacity .12s ease;
+  z-index: 10000;
+}
+
+.navigation-feedback.is-visible { opacity: 1; }
+
+.navigation-feedback-bar {
+  animation: trulurn-loading-bar 1.1s ease-in-out infinite;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-detail-sage));
+  border-radius: 0 999px 999px 0;
+  display: block;
+  height: 3px;
+  transform-origin: left;
+}
+
+.navigation-feedback-wheel {
+  background: var(--color-bg-primary);
+  box-shadow: 0 2px 12px rgba(5, 5, 23, .12);
+  height: 20px;
+  position: absolute;
+  right: 14px;
+  top: 10px;
+  width: 20px;
+}
+
+.app-loading-screen {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  font-size: var(--text-sm);
+  gap: 10px;
+  justify-content: center;
+  min-height: 45vh;
+}
+
+@keyframes trulurn-loading-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes trulurn-loading-bar {
+  0% { transform: scaleX(.08); opacity: .65; }
+  55% { transform: scaleX(.72); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-wheel,
+  .navigation-feedback-wheel { animation-duration: 1.6s; }
+  .navigation-feedback-bar { animation: none; transform: scaleX(.72); }
 }

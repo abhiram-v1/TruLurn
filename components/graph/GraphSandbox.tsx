@@ -12,7 +12,7 @@ import {
 } from '@tabler/icons-react'
 import { KnowledgeGraph } from './KnowledgeGraph'
 import { GraphMinimap } from './GraphMinimap'
-import { AppIcon } from '@/components/branding/AppIcon'
+import { TruLurnLogo } from '@/components/ui/TruLurnLogo'
 import type { GraphData } from '@/lib/graph/types'
 
 type MapTopic = {
@@ -235,8 +235,8 @@ export function GraphSandbox() {
   return (
     <div className="kg-app gs-app">
       <header className="gs-topbar">
-        <div className="gs-brand">
-          <AppIcon className="kg-brand-mark" size={22} />
+        <div className="gs-brand" style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
+          <TruLurnLogo size={22} />
           <div>
             <strong>Graph generation sandbox</strong>
             <span>Non-persistent Atlas and recursive Traccia testing</span>

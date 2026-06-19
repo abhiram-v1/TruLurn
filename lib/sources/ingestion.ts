@@ -1,6 +1,11 @@
 import crypto from 'crypto'
 import { GridFSBucket, ObjectId, type Db } from 'mongodb'
-import { extractTextFromSourceFile, isRichSource, isTextSource } from '@/lib/ai/sources'
+import {
+  extractTextFromSourceFile,
+  isRichSource,
+  isTextSource,
+  type ExtractedSourceImage,
+} from '@/lib/ai/sources'
 import {
   ACTIVE_EMBEDDING_DIMENSIONS,
   ACTIVE_EMBEDDING_MODEL,
@@ -10,6 +15,7 @@ import {
 } from '@/lib/ai/embeddings'
 
 const SOURCE_OBJECT_BUCKET = 'sourceObjects'
+const SOURCE_IMAGE_BUCKET = 'sourceImageObjects'
 const INGESTION_SCHEMA_VERSION = 'source-ingestion-v1'
 const CHUNKER_VERSION = 'structured-passages-v1'
 const DEFAULT_MAX_SOURCE_BYTES = 25 * 1024 * 1024
@@ -255,14 +261,131 @@ export async function embedSourcePassageById(db: Db, passageId: string) {
   }
 }
 
-export async function processSourceIngestionJob(db: Db, jobId: string) {
-  const job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
-  if (!job) throw new Error(`Source ingestion job ${jobId} was not found.`)
-  if (job.status === 'completed') return
-  if (Number(job.attempts ?? 0) >= Number(job.max_attempts ?? 3)) {
-    throw new Error(`Source ingestion job ${jobId} exhausted its retry budget.`)
+async function uploadImageBytes(
+  db: Db,
+  bytes: Buffer,
+  filename: string,
+  contentType: string,
+  metadata: Record<string, unknown>,
+) {
+  const bucket = new GridFSBucket(db, { bucketName: SOURCE_IMAGE_BUCKET })
+  const upload = bucket.openUploadStream(filename, { contentType, metadata })
+  await new Promise<void>((resolve, reject) => {
+    upload.once('error', reject)
+    upload.once('finish', () => resolve())
+    upload.end(bytes)
+  })
+  return upload.id
+}
+
+/**
+ * Persist extracted source images as first-class assets: bytes in GridFS, metadata
+ * (page, caption, classification, OCR, figure label, nearby context) + a caption
+ * embedding in the `sourceImages` collection for image-aware retrieval. Idempotent
+ * per source version. Best-effort: a failed image never fails the ingestion job.
+ */
+async function storeSourceImages(
+  db: Db,
+  version: any,
+  job: any,
+  images: ExtractedSourceImage[],
+) {
+  if (!images.length) return 0
+  // Idempotent re-run: drop prior assets for this version first.
+  const prior = await db.collection('sourceImages')
+    .find({ source_version_id: String(version._id) })
+    .project({ object_id: 1 })
+    .toArray()
+  if (prior.length) {
+    const bucket = new GridFSBucket(db, { bucketName: SOURCE_IMAGE_BUCKET })
+    await Promise.all(prior.map(async (doc) => {
+      if (!doc.object_id) return
+      try { await bucket.delete(new ObjectId(String(doc.object_id))) } catch { /* already gone */ }
+    }))
+    await db.collection('sourceImages').deleteMany({ source_version_id: String(version._id) })
   }
 
+  let stored = 0
+  for (let index = 0; index < images.length; index += 1) {
+    const image = images[index]
+    if (!image.data) continue // service ran in text-only mode — caption already in text
+    try {
+      const bytes = Buffer.from(image.data, 'base64')
+      const imageId = crypto.randomUUID()
+      const objectId = await uploadImageBytes(
+        db,
+        bytes,
+        `${version.filename ?? 'source'}-p${image.page}-${index}.jpg`,
+        image.mime ?? 'image/jpeg',
+        {
+          user_id: job.user_id,
+          source_version_id: String(version._id),
+          source_image_id: imageId,
+        },
+      )
+
+      // Embed caption + OCR text so the AI can retrieve the right figure by meaning.
+      const captionText = [image.caption, image.ocr_text].filter(Boolean).join('\n').trim()
+      let embedding: number[] | null = null
+      let embeddingStatus: 'ready' | 'failed' | 'skipped' = 'skipped'
+      if (captionText) {
+        try {
+          embedding = await embedText(
+            [`Figure from ${version.filename}`, captionText].filter(Boolean).join('\n'),
+            'RETRIEVAL_DOCUMENT',
+          )
+          embeddingStatus = 'ready'
+        } catch {
+          embeddingStatus = 'failed'
+        }
+      }
+
+      await db.collection('sourceImages').insertOne({
+        _id: imageId as any,
+        user_id: job.user_id,
+        generation_job_id: job.generation_job_id,
+        course_id: version.course_id ?? null,
+        source_document_id: String(version.source_document_id),
+        source_version_id: String(version._id),
+        source_index: version.source_index,
+        source_title: version.filename,
+        page: image.page,
+        order: image.order,
+        caption: image.caption,
+        classification: image.classification,
+        chart_type: image.chart_type,
+        ocr_text: image.ocr_text,
+        relevance: image.relevance,
+        figure_label: image.figure_label,
+        nearby_text: image.nearby_text,
+        content_hash: image.content_hash,
+        width: image.width ?? null,
+        height: image.height ?? null,
+        mime: image.mime ?? 'image/jpeg',
+        object_store: {
+          provider: 'mongodb_gridfs',
+          bucket: SOURCE_IMAGE_BUCKET,
+          object_id: String(objectId),
+        },
+        object_id: String(objectId),
+        embedding,
+        embedding_provider: embedding ? ACTIVE_EMBEDDING_PROVIDER : null,
+        embedding_model: embedding ? ACTIVE_EMBEDDING_MODEL : null,
+        embedding_dimensions: embedding ? ACTIVE_EMBEDDING_DIMENSIONS : null,
+        embedding_version: embedding ? ACTIVE_EMBEDDING_VERSION : null,
+        embedding_status: embeddingStatus,
+        schema_version: INGESTION_SCHEMA_VERSION,
+        created_at: new Date(),
+      })
+      stored += 1
+    } catch (error) {
+      console.warn(`[ingestion] failed to store image ${index} for ${version.filename}:`, error)
+    }
+  }
+  return stored
+}
+
+export async function processSourceExtraction(db: Db, job: any) {
   const now = new Date()
   await db.collection('sourceIngestionJobs').updateOne(
     { _id: job._id },
@@ -346,6 +469,14 @@ export async function processSourceIngestionJob(db: Db, jobId: string) {
     }))
     await db.collection('sourcePassages').insertMany(passageDocs)
 
+    // Persist extracted images as first-class assets (best-effort, never fatal).
+    let imageCount = 0
+    try {
+      imageCount = await storeSourceImages(db, version, job, extracted.images ?? [])
+    } catch (error) {
+      console.warn(`[ingestion] image storage failed for ${version.filename}:`, error)
+    }
+
     await db.collection('sourceDocumentVersions').updateOne(
       { _id: version._id },
       {
@@ -356,21 +487,98 @@ export async function processSourceIngestionJob(db: Db, jobId: string) {
           chunker_version: CHUNKER_VERSION,
           block_count: blocks.length,
           passage_count: passageDocs.length,
+          image_count: imageCount,
           updated_at: new Date(),
         },
       },
     )
+
     await db.collection('sourceIngestionJobs').updateOne(
       { _id: job._id },
-      { $set: { stage: 'embedding', updated_at: new Date() } },
+      {
+        $set: {
+          status: 'running',
+          stage: 'text_ready',
+          lease_expires_at: null,
+          updated_at: new Date(),
+        },
+      },
     )
+  } catch (error) {
+    await Promise.all([
+      db.collection('sourceDocuments').updateOne(
+        { _id: job.source_document_id as any },
+        {
+          $set: {
+            status: 'failed',
+            updated_at: new Date(),
+          },
+        },
+      ),
+      db.collection('sourceDocumentVersions').updateOne(
+        { _id: job.source_version_id as any },
+        {
+          $set: {
+            extraction_status: 'failed',
+            extraction_error: error instanceof Error ? error.message : String(error),
+            updated_at: new Date(),
+          },
+        },
+      ),
+      db.collection('sourceIngestionJobs').updateOne(
+        { _id: job._id },
+        {
+          $set: {
+            status: 'failed',
+            stage: 'parsing',
+            error: error instanceof Error ? error.message : String(error),
+            lease_expires_at: null,
+            updated_at: new Date(),
+          },
+        },
+      ),
+    ])
+    throw error
+  }
+}
+
+export async function processSourceEmbedding(db: Db, job: any) {
+  const now = new Date()
+  await db.collection('sourceIngestionJobs').updateOne(
+    { _id: job._id },
+    {
+      $set: {
+        status: 'running',
+        stage: 'embedding',
+        lease_expires_at: new Date(now.getTime() + 10 * 60 * 1000),
+        error: null,
+        updated_at: now,
+      },
+    },
+  )
+
+  try {
+    const version = await db.collection('sourceDocumentVersions').findOne({
+      _id: job.source_version_id as any,
+      user_id: job.user_id,
+    })
+    if (!version) throw new Error('Source document version is missing.')
+
+    const passages = await db.collection('sourcePassages')
+      .find({ source_version_id: String(version._id) })
+      .toArray()
 
     let failedEmbeddings = 0
     const concurrency = 4
-    for (let offset = 0; offset < passageDocs.length; offset += concurrency) {
-      const batch = passageDocs.slice(offset, offset + concurrency)
+    for (let offset = 0; offset < passages.length; offset += concurrency) {
+      const batch = passages.slice(offset, offset + concurrency)
       const results = await Promise.all(
-        batch.map((passage) => embedSourcePassageById(db, String(passage._id))),
+        batch.map((passage) => {
+          if (passage.embedding_status === 'ready' && passage.embedding_version === ACTIVE_EMBEDDING_VERSION) {
+            return Promise.resolve(true)
+          }
+          return embedSourcePassageById(db, String(passage._id))
+        }),
       )
       failedEmbeddings += results.filter((ready) => !ready).length
     }
@@ -411,38 +619,35 @@ export async function processSourceIngestionJob(db: Db, jobId: string) {
       ),
     ])
   } catch (error) {
-    await Promise.all([
-      db.collection('sourceDocuments').updateOne(
-        { _id: job.source_document_id as any },
-        {
-          $set: {
-            status: 'failed',
-            updated_at: new Date(),
-          },
+    await db.collection('sourceIngestionJobs').updateOne(
+      { _id: job._id },
+      {
+        $set: {
+          status: 'retryable',
+          error: error instanceof Error ? error.message : String(error),
+          lease_expires_at: null,
+          updated_at: new Date(),
         },
-      ),
-      db.collection('sourceDocumentVersions').updateOne(
-        { _id: job.source_version_id as any },
-        {
-          $set: {
-            extraction_status: 'failed',
-            extraction_error: error instanceof Error ? error.message : String(error),
-            updated_at: new Date(),
-          },
-        },
-      ),
-      db.collection('sourceIngestionJobs').updateOne(
-        { _id: job._id },
-        {
-          $set: {
-            status: 'retryable',
-            error: error instanceof Error ? error.message : String(error),
-            lease_expires_at: null,
-            updated_at: new Date(),
-          },
-        },
-      ),
-    ])
+      },
+    )
+    throw error
+  }
+}
+
+export async function processSourceIngestionJob(db: Db, jobId: string) {
+  const job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+  if (!job) throw new Error(`Source ingestion job ${jobId} was not found.`)
+  if (job.status === 'completed') return
+  if (Number(job.attempts ?? 0) >= Number(job.max_attempts ?? 3)) {
+    throw new Error(`Source ingestion job ${jobId} exhausted its retry budget.`)
+  }
+
+  if (job.stage === 'queued' || job.stage === 'parsing' || job.stage === 'chunking') {
+    await processSourceExtraction(db, job)
+  }
+  const updatedJob = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+  if (updatedJob && updatedJob.stage === 'text_ready') {
+    await processSourceEmbedding(db, updatedJob)
   }
 }
 
@@ -557,6 +762,72 @@ export async function ingestSourceFilesFromFormData({
   }
 }
 
+export async function resumeSourceExtractionJobs(db: Db, jobIds: string[]) {
+  for (const jobId of jobIds) {
+    let job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+    const stagesOfExtracted = ['text_ready', 'embedding', 'completed']
+    while (job && !stagesOfExtracted.includes(String(job.stage)) && Number(job.attempts ?? 0) < Number(job.max_attempts ?? 3)) {
+      try {
+        await processSourceExtraction(db, job)
+      } catch (e) {
+        console.error(`[ingestion] processSourceExtraction failed for job ${jobId}:`, e)
+        break
+      }
+      job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+    }
+  }
+}
+
+export async function resumeSourceEmbeddingJobs(db: Db, jobIds: string[]) {
+  for (const jobId of jobIds) {
+    let job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+    while (job && job.status !== 'completed' && job.stage !== 'completed' && Number(job.attempts ?? 0) < Number(job.max_attempts ?? 3)) {
+      try {
+        if (job.stage === 'queued' || job.stage === 'parsing' || job.stage === 'chunking') {
+          await processSourceExtraction(db, job)
+          job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+          continue
+        }
+        await processSourceEmbedding(db, job)
+      } catch (e) {
+        console.error(`[ingestion] processSourceEmbedding failed for job ${jobId}:`, e)
+        break
+      }
+      job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
+    }
+  }
+}
+
+export async function waitForSourceRetrievalReadiness(
+  db: Db,
+  versionIds: string[],
+  options: { timeoutMs?: number } = {},
+) {
+  const timeoutMs = options.timeoutMs ?? 4000
+  const start = Date.now()
+
+  while (Date.now() - start < timeoutMs) {
+    const versions = await db.collection('sourceDocumentVersions')
+      .find({ _id: { $in: versionIds as any[] } })
+      .toArray()
+    const allReady = versions.every(v => v.retrieval_status === 'ready')
+    if (allReady) {
+      return { status: 'ready' as const }
+    }
+    const anyFailed = versions.some(v => v.retrieval_status === 'failed')
+    if (anyFailed) {
+      return { status: 'failed' as const }
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+
+  const versions = await db.collection('sourceDocumentVersions')
+    .find({ _id: { $in: versionIds as any[] } })
+    .toArray()
+  const isPartial = versions.some(v => v.retrieval_status === 'ready')
+  return { status: isPartial ? ('partial' as const) : ('pending' as const) }
+}
+
 export async function resumeSourceIngestionJobs(db: Db, jobIds: string[]) {
   for (const jobId of jobIds) {
     let job = await db.collection('sourceIngestionJobs').findOne({ _id: jobId as any })
@@ -627,6 +898,7 @@ export async function attachIngestedSourcesToCourse({
     ),
     db.collection('sourceBlocks').updateMany(filter, { $set: { course_id: courseId } }),
     db.collection('sourcePassages').updateMany(filter, { $set: { course_id: courseId } }),
+    db.collection('sourceImages').updateMany(filter, { $set: { course_id: courseId } }),
     generationJobId
       ? db.collection('sourceIngestionJobs').updateMany(
           { user_id: userId, generation_job_id: generationJobId },

@@ -7,6 +7,13 @@ import { MissingPageGenerator } from '@/components/learn/MissingPageGenerator'
 import { BottomNav } from '@/components/navigation/BottomNav'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import {
+  getCachedCourse,
+  getCachedCourseTopics,
+  getCachedCourseBranches,
+  invalidateCourse,
+  getCachedTopicPages,
+} from '@/lib/cache/courseData'
 import { computeGlobalPagePosition, sortCourseTopics } from '@/lib/course-pages/globalPageNumbers'
 import { firstTeachableDescendant, isContainerTopic, nextRecommendedTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 
@@ -77,27 +84,28 @@ export default async function LearnTopicPage({
   const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
 
   const topicId = decodeURIComponent(params.topicId)
-  const [course, topic] = await Promise.all([
-    db.collection('courses').findOne({ _id: params.courseId as any, user_id: userId }),
-    db.collection('topics').findOne({
-      _id: topicId as any,
-      course_id: params.courseId,
-    }),
+  // Course structure (course doc, all topics, branches) is read-mostly within a
+  // study session — served from the in-memory cache to avoid re-hitting Mongo on
+  // every navigation. Per-topic pages and chat history stay live (below).
+  const [course, allTopics, courseBranches] = await Promise.all([
+    getCachedCourse(db, params.courseId, userId),
+    getCachedCourseTopics(db, params.courseId),
+    getCachedCourseBranches(db, params.courseId),
   ])
   if (!course) {
     return <div style={{ padding: 40 }}>Course not found.</div>
   }
 
   // Decode the topicId — Next.js Link encodes colons (%3A) in path segments
+  const topic = allTopics.find((t) => String(t._id) === topicId)
   if (!topic) {
     return <div style={{ padding: 40 }}>Topic not found.</div>
   }
 
   if (isContainerTopic(topic)) {
-    const branchTopics = await db.collection('topics')
-      .find({ course_id: params.courseId, branch_id: topic.branch_id })
-      .sort({ sequence_index: 1, position: 1 })
-      .toArray()
+    const branchTopics = allTopics
+      .filter((t) => String(t.branch_id) === String(topic.branch_id))
+      .sort((a, b) => (Number(a.sequence_index ?? 0) - Number(b.sequence_index ?? 0)) || (Number(a.position ?? 0) - Number(b.position ?? 0)))
     const descendant = firstTeachableDescendant(branchTopics as any, topicId)
     if (descendant) {
       // If the container is active but its first leaf is still locked, the map builder
@@ -108,6 +116,9 @@ export default async function LearnTopicPage({
           { _id: String(descendant._id) as any, course_id: params.courseId },
           { $set: { state: 'active', updated_at: new Date() } },
         )
+        // Drop the cached state so the redirected reload sees the activation
+        // (otherwise the cached 'locked' state would persist until TTL).
+        invalidateCourse(params.courseId)
       }
       redirect(`/learn/${params.courseId}/${encodeURIComponent(String(descendant._id))}`)
     }
@@ -126,47 +137,21 @@ export default async function LearnTopicPage({
       { _id: topicId as any, course_id: params.courseId },
       { $set: { state: 'active', updated_at: new Date() } },
     )
+    // Invalidate before redirect so the reload doesn't re-read a cached 'locked'
+    // state and bounce in a redirect loop.
+    invalidateCourse(params.courseId)
     redirect(`/learn/${params.courseId}/${encodeURIComponent(topicId)}`)
   }
 
-  const [branchTopics, courseTopics, courseBranches, allRawPages, messages] = await Promise.all([
-    db.collection('topics')
-      .find({ course_id: params.courseId, branch_id: topic.branch_id })
-      .sort({ sequence_index: 1, position: 1 })
-      .toArray(),
-    db.collection('topics')
-      .find({ course_id: params.courseId })
-      .project({
-        title: 1,
-        state: 1,
-        branch_id: 1,
-        branch_position: 1,
-        position: 1,
-        planned_pages: 1,
-        estimated_pages: 1,
-        total_pages_planned: 1,
-        node_type: 1,
-        children_count: 1,
-        sequence_index: 1,
-        created_at: 1,
-      })
-      .sort({ branch_position: 1, branch_id: 1, sequence_index: 1, position: 1, created_at: 1 })
-      .toArray(),
-    db.collection('branches')
-      .find({ course_id: params.courseId })
-      .project({ _id: 1, branch_key: 1, position: 1, created_at: 1 })
-      .sort({ created_at: 1 })
-      .toArray(),
-    db.collection('pages')
-      .find({ course_id: params.courseId, topic_id: topicId })
-      .sort({ page_number: 1 })
-      .toArray(),
-    db.collection('doubtMessages')
-      .find({ course_id: params.courseId, user_id: userId })
-      .sort({ created_at: -1 })
-      .limit(50)
-      .toArray(),
-  ])
+  // Only per-topic pages are live reads now; course structure
+  // is served from cache above. branchTopics/courseTopics derive from it.
+  // Doubt messages are loaded asynchronously client-side.
+  const allRawPages = await getCachedTopicPages(db, params.courseId, topicId)
+  const messages: any[] = []
+  const branchTopics = allTopics
+    .filter((t) => String(t.branch_id) === String(topic.branch_id))
+    .sort((a, b) => (Number(a.sequence_index ?? 0) - Number(b.sequence_index ?? 0)) || (Number(a.position ?? 0) - Number(b.position ?? 0)))
+  const courseTopics = allTopics
   const orderedCourseTopics = sortCourseTopics(courseTopics, courseBranches)
 
   // 4. Fetch Pages for this topic — deduplicate by page_number (keeps first stored copy
@@ -302,6 +287,7 @@ export default async function LearnTopicPage({
     example_refs: Array.isArray(storedPage.example_refs) ? storedPage.example_refs : undefined,
     sections: Array.isArray(storedPage.sections) ? storedPage.sections : undefined,
     source_citations: Array.isArray(storedPage.source_citations) ? storedPage.source_citations : undefined,
+    figures: Array.isArray(storedPage.figures) ? storedPage.figures : undefined,
     grounding: storedPage.grounding ?? null,
   })
   const serializedPage = serializePage(activePage)
@@ -339,6 +325,10 @@ export default async function LearnTopicPage({
     ? { id: String(nextOpenTopic._id), title: String(nextOpenTopic.title ?? 'Next topic') }
     : null
 
+  const reviewGaps: string[] = Array.isArray(topic.review_gaps)
+    ? topic.review_gaps.map(String).filter(Boolean)
+    : []
+
   return (
     <LearnExperience
       courseId={params.courseId}
@@ -352,6 +342,7 @@ export default async function LearnTopicPage({
       globalPageTotal={globalPage.globalPageTotal}
       initialMessages={serializedMessages}
       nextTopic={serializedNextTopic}
+      reviewGaps={reviewGaps}
     />
   )
 }
