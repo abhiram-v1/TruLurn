@@ -4,11 +4,13 @@ import {
   type AIFeatureRoute,
   type AIProviderName,
   type ResolvedAIFeatureRoute,
-} from '@/lib/ai/types'
+} from './types.ts'
 import {
+  COURSE_PLANNING_ROUTE_OWNERSHIP,
   GRAPH_GENERATION_ROUTE_OWNERSHIP,
   GRAPH_MAINTENANCE_ROUTE_OWNERSHIP,
-} from '@/lib/ai/routeOwnership'
+} from './routeOwnership.ts'
+import { looksLikeValidModelId } from './modelIdHeuristics.ts'
 
 function route(
   purpose: 'primary' | 'agent',
@@ -24,22 +26,98 @@ function route(
   }
 }
 
+export const AI_MODEL_TIERS = {
+  fast: {
+    provider: 'gemini',
+    models: {
+      gemini: 'gemini-3.1-flash-lite',
+      openai: 'gpt-5.4-mini',
+    },
+  },
+  control: {
+    provider: 'openai',
+    models: {
+      openai: 'gpt-5.4-mini',
+      gemini: 'gemini-3.5-flash',
+    },
+  },
+  premium: {
+    provider: 'openai',
+    models: {
+      openai: 'gpt-5.4',
+      gemini: 'gemini-3.5-flash',
+    },
+  },
+} as const
+
+type ModelTier = keyof typeof AI_MODEL_TIERS
+
+const TIER_MODEL_ENVIRONMENT_VARIABLES: Record<
+  ModelTier,
+  AIFeatureRoute['modelEnvironmentVariables']
+> = {
+  fast: {
+    gemini: ['GEMINI_FAST_MODEL'],
+    openai: ['OPENAI_CONTROL_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
+  },
+  control: {
+    openai: ['OPENAI_CONTROL_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
+    gemini: ['GEMINI_CONTROL_MODEL', 'GEMINI_QUALITY_MODEL'],
+  },
+  premium: {
+    openai: ['OPENAI_PREMIUM_MODEL', 'OPENAI_PRIMARY_MODEL'],
+    gemini: ['GEMINI_PREMIUM_MODEL', 'GEMINI_QUALITY_MODEL'],
+  },
+}
+
+function tierRoute(
+  tier: ModelTier,
+  purpose: 'primary' | 'agent',
+  modelEnvironmentVariables?: AIFeatureRoute['modelEnvironmentVariables'],
+): AIFeatureRoute {
+  const definition = AI_MODEL_TIERS[tier]
+  const tierEnvironment = TIER_MODEL_ENVIRONMENT_VARIABLES[tier]
+  return {
+    capability: 'text',
+    purpose,
+    defaultProvider: definition.provider,
+    modelEnvironmentVariables: {
+      openai: [
+        ...(modelEnvironmentVariables?.openai ?? []),
+        ...(tierEnvironment?.openai ?? []),
+      ],
+      gemini: [
+        ...(modelEnvironmentVariables?.gemini ?? []),
+        ...(tierEnvironment?.gemini ?? []),
+      ],
+    },
+    defaultModels: definition.models,
+    // A cross-provider fallback can alter schema and behavior. Enable one only
+    // with an explicit AI_FEATURE_*_FALLBACK_PROVIDERS override after evals.
+    disableAutomaticFallback: true,
+  }
+}
+
 const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
-  agent_action: route('agent'),
-  agent_intent: route('agent'),
-  agent_style: route('agent'),
+  agent_action: tierRoute('fast', 'agent'),
+  agent_intent: tierRoute('fast', 'agent'),
+  agent_style: tierRoute('fast', 'agent'),
   curriculum_generation: route('primary', {
     openai: ['OPENAI_CURRICULUM_MODEL', 'OPENAI_PRIMARY_MODEL'],
     gemini: ['GEMINI_CURRICULUM_MODEL', 'GEMINI_MODEL'],
   }),
   curriculum_research: {
     capability: 'web_search',
-    purpose: 'primary',
+    purpose: 'agent',
     defaultProvider: 'openai',
-    modelEnvironmentVariables: { openai: ['OPENAI_RESEARCH_MODEL'] },
+    modelEnvironmentVariables: {
+      openai: ['OPENAI_RESEARCH_MODEL', 'OPENAI_CONTROL_MODEL', 'OPENAI_AGENT_MODEL'],
+    },
+    defaultModels: { openai: AI_MODEL_TIERS.control.models.openai },
+    disableAutomaticFallback: true,
   },
-  doubt_answer: route('primary'),
-  doubt_classification: route('agent'),
+  doubt_answer: tierRoute('premium', 'primary'),
+  doubt_classification: tierRoute('fast', 'agent'),
   embeddings: {
     capability: 'embeddings',
     defaultProvider: 'global',
@@ -48,10 +126,10 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
       gemini: ['GEMINI_EMBEDDING_MODEL'],
     },
   },
-  exam_evaluation: route('agent'),
-  exam_question_generation: route('primary'),
-  exam_strategy: route('agent'),
-  flow_tracking: route('agent'),
+  exam_evaluation: tierRoute('control', 'agent'),
+  exam_question_generation: tierRoute('premium', 'primary'),
+  exam_strategy: tierRoute('control', 'agent'),
+  flow_tracking: tierRoute('fast', 'agent'),
   graph_interaction_analyzer: route(
     'agent',
     {
@@ -88,69 +166,67 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
     },
     { openai: 'gpt-5.4-mini' },
   ),
-  learner_audience: route('agent'),
+  learner_audience: tierRoute('fast', 'agent'),
   lesson_research: {
     capability: 'web_search',
     purpose: 'agent',
     defaultProvider: 'openai',
-    modelEnvironmentVariables: { openai: ['OPENAI_RESEARCH_MODEL', 'OPENAI_AGENT_MODEL'] },
+    modelEnvironmentVariables: {
+      openai: ['OPENAI_RESEARCH_MODEL', 'OPENAI_CONTROL_MODEL', 'OPENAI_AGENT_MODEL'],
+    },
+    defaultModels: { openai: AI_MODEL_TIERS.control.models.openai },
+    disableAutomaticFallback: true,
   },
-  page_analysis: route('agent'),
-  prerequisite_gap_analysis: route('agent'),
-  quiz_generation: route('primary'),
+  page_analysis: tierRoute('control', 'agent'),
+  prerequisite_gap_analysis: tierRoute('control', 'agent'),
+  quiz_generation: tierRoute('premium', 'primary'),
   recall_interruption: {
-    ...route('agent', {
+    ...tierRoute('fast', 'agent', {
       openai: ['OPENAI_INTERRUPTION_MODEL', 'OPENAI_AGENT_MODEL'],
-      gemini: ['GEMINI_INTERRUPTION_MODEL', 'GEMINI_MODEL'],
+      gemini: ['GEMINI_INTERRUPTION_MODEL'],
     }),
-    defaultProvider: 'gemini',
   },
-  recall_page_generation: route('primary'),
+  recall_page_generation: tierRoute('fast', 'primary'),
   source_learning_page: route('primary'),
-  source_grounding_verification: route('agent', {
+  source_grounding_verification: tierRoute('control', 'agent', {
     openai: ['OPENAI_GROUNDING_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
-    gemini: ['GEMINI_GROUNDING_MODEL', 'GEMINI_MODEL'],
+    gemini: ['GEMINI_GROUNDING_MODEL'],
   }),
   source_ordering: {
-    ...route('agent', {
+    ...tierRoute('fast', 'agent', {
       openai: ['OPENAI_SOURCE_ORDER_MODEL', 'OPENAI_AGENT_MODEL', 'OPENAI_MINI_MODEL'],
-      gemini: ['GEMINI_SOURCE_ORDER_MODEL', 'GEMINI_MODEL'],
+      gemini: ['GEMINI_SOURCE_ORDER_MODEL'],
     }),
-    defaultProvider: 'gemini',
-    fallbackProviders: ['openai'],
   },
-  source_profile: route('agent'),
+  source_profile: tierRoute('fast', 'agent'),
   topic_page_generation: route('primary', {
     openai: ['OPENAI_LESSON_MODEL', 'OPENAI_PRIMARY_MODEL'],
     gemini: ['GEMINI_LESSON_MODEL', 'GEMINI_MODEL'],
   }),
-  topic_plan_analysis: route('agent'),
-  topic_transform: route('primary'),
-  topic_validation: route('agent'),
-  prompt_enhancement: {
-    ...route('agent', {
-      gemini: ['GEMINI_MODEL'],
-    }, {
-      gemini: 'gemini-2.5-flash-lite',
-    }),
-    defaultProvider: 'gemini',
-  },
+  topic_plan_analysis: tierRoute('control', 'agent'),
+  topic_transform: tierRoute('premium', 'primary'),
+  topic_validation: tierRoute('control', 'agent'),
+  prompt_enhancement: tierRoute('fast', 'agent'),
   curriculum_ideas: {
-    ...route('agent', {
-      gemini: ['GEMINI_IDEAS_MODEL', 'GEMINI_MODEL'],
-    }, {
-      gemini: 'gemini-2.5-flash-lite',
+    ...tierRoute('fast', 'agent', {
+      gemini: ['GEMINI_IDEAS_MODEL'],
     }),
-    defaultProvider: 'gemini',
   },
   curriculum_preview: {
-    ...route('agent', {
-      gemini: ['GEMINI_PREVIEW_MODEL', 'GEMINI_MODEL'],
-    }, {
-      gemini: 'gemini-2.5-flash-lite',
+    ...tierRoute('fast', 'agent', {
+      gemini: ['GEMINI_PREVIEW_MODEL'],
     }),
-    defaultProvider: 'gemini',
   },
+}
+
+for (const feature of COURSE_PLANNING_ROUTE_OWNERSHIP.features) {
+  FEATURE_ROUTES[feature] = {
+    ...FEATURE_ROUTES[feature],
+    defaultProvider: COURSE_PLANNING_ROUTE_OWNERSHIP.provider,
+    lockedProvider: COURSE_PLANNING_ROUTE_OWNERSHIP.provider,
+    lockedModel: COURSE_PLANNING_ROUTE_OWNERSHIP.model,
+    disableAutomaticFallback: true,
+  }
 }
 
 for (const feature of GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.features) {
@@ -218,7 +294,7 @@ export function resolveAIFeatureRoute(feature: AIFeature): ResolvedAIFeatureRout
   const provider = definition.lockedProvider
     ?? configuredProvider
     ?? (definition.defaultProvider === 'global' ? globalProvider() : definition.defaultProvider)
-  const configuredFallbacks = definition.disableAutomaticFallback
+  const configuredFallbacks = definition.lockedProvider
     ? []
     : parseFallbackProviders(process.env[fallbackKey], fallbackKey)
 
@@ -252,5 +328,21 @@ export function getAIFeatureEnvironmentKeys(feature: AIFeature) {
     provider: featureEnvironmentKey(feature, 'PROVIDER'),
     fallbackProviders: featureEnvironmentKey(feature, 'FALLBACK_PROVIDERS'),
     model: featureEnvironmentKey(feature, 'MODEL'),
+  }
+}
+
+// Catches the common misconfiguration of pasting one provider's model id into
+// the other provider's environment variable (or a typo'd id). Does not fire
+// when no override is configured — falling through to the provider's own
+// default is a normal, supported state, not a failure.
+export function assertResolvableModel(feature: AIFeature) {
+  const route = resolveAIFeatureRoute(feature)
+  if (!route.model) return
+  if (!looksLikeValidModelId(route.provider, route.model)) {
+    throw new Error(
+      `AI feature "${feature}" resolved provider "${route.provider}" with model "${route.model}", `
+      + `which does not look like a valid ${route.provider} model id. Check the model environment `
+      + `variables for this feature (e.g. ${getAIFeatureEnvironmentKeys(feature).model}).`,
+    )
   }
 }

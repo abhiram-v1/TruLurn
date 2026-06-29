@@ -7,6 +7,7 @@ import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/perso
 import { isContainerTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 import { unlockNextTopics } from '@/lib/db-helpers'
 import { evaluateQuizForGraph } from '@/lib/ai/graphEvaluator'
+import { masteryPercentToLevel } from '@/lib/graph/mastery'
 import { detectPrerequisiteGap } from '@/lib/quiz/prerequisiteGaps'
 import { scheduleTopicReview, cancelTopicReview, recordReviewResult } from '@/lib/review/schedule'
 import { syncLearnerMemoryV2 } from '@/lib/memory/service'
@@ -1331,7 +1332,7 @@ async function finalizeExam(db: Db, session: any) {
         for (const update of graphUpdate.updates) {
           const $set: Record<string, unknown> = { updated_at: new Date() }
           if (update.state !== undefined) $set.state = update.state
-          if (update.mastery !== undefined) $set.understanding_level = Math.round(update.mastery / 20)
+          if (update.mastery !== undefined) $set.understanding_level = masteryPercentToLevel(update.mastery)
           if (update.misconception !== undefined) $set.misconception = update.misconception
           if (update.suggested !== undefined) $set.suggested = update.suggested
           topicBulkOps.push({ updateOne: { filter: { _id: update.topicId as any, course_id: session.course_id }, update: { $set } } })
@@ -1377,6 +1378,10 @@ async function finalizeExam(db: Db, session: any) {
     total_questions: evaluations.length,
     strong_concepts: Array.from(new Set(strongConcepts)),
     review_concepts: Array.from(new Set(reviewConcepts)),
+    // Rolled up from each turn's evaluation so the graph route (and anything
+    // else reading the session summary) can detect false confidence without
+    // re-deriving it from individual turns.
+    false_confidence: evaluations.some((item) => item.evaluation.false_confidence),
     student_summary: isCourseCheckpoint
       ? (passed
           ? 'Your recall across the course looks solid. Keep the momentum going.'

@@ -3,6 +3,9 @@ import type { Db } from 'mongodb'
 
 export type CompactSourceSection = {
   source_id: string
+  // Stable short reference (e.g. "s1:3" = source 1, section 3) used for
+  // traceable curriculum citations in place of fragile free-text anchors.
+  id: string
   heading_path: string[]
   ordinal: number
   opening_excerpt: string
@@ -33,6 +36,9 @@ export type CompactCurriculumSource = {
     represented_heading_count: number
     omitted_sections: string[]
     valid: boolean
+    budget_chars: number
+    within_budget: boolean
+    trimmed_section_count: number
   }
 }
 
@@ -142,8 +148,8 @@ export function formatCompactSourceForPrompt(compact: CompactCurriculumSource): 
     result.push(`=== Source: ${src.title} ===`)
     for (const section of src.sections) {
       const path = section.heading_path.join(' > ') || 'Root Section'
-      result.push(`\n## Section: ${path}`)
-      
+      result.push(`\n## Section [${section.id}]: ${path}`)
+
       if (section.opening_excerpt) {
         result.push(`Excerpt: ${section.opening_excerpt}`)
       }
@@ -169,6 +175,79 @@ export function formatCompactSourceForPrompt(compact: CompactCurriculumSource): 
   return result.join('\n')
 }
 
+// Curriculum-evidence projection: the fuller, budget-bounded source evidence
+// used for curriculum generation. Carries stable section IDs for citation.
+export const formatCurriculumEvidence = formatCompactSourceForPrompt
+
+export type CompactSectionLookup = {
+  section: CompactSourceSection
+  sourceNumber: number
+  sourceTitle: string
+}
+
+// Index every section by its stable id (e.g. "s1:3") for O(1) citation
+// validation — replaces fuzzy text matching against raw source content.
+export function indexCompactSections(
+  compact: CompactCurriculumSource | null | undefined,
+): Map<string, CompactSectionLookup> {
+  const index = new Map<string, CompactSectionLookup>()
+  if (!compact) return index
+  compact.sources.forEach((source, sourceIndex) => {
+    for (const section of source.sections) {
+      index.set(section.id, { section, sourceNumber: sourceIndex + 1, sourceTitle: source.title })
+    }
+  })
+  return index
+}
+
+// Derives a human-readable anchor ("Source 2 — Locking Protocols") from the
+// first ref that resolves to a real section. Returns '' when no ref is valid
+// — callers must not fabricate a fallback anchor for unsupported evidence.
+export function deriveSourceAnchor(
+  compact: CompactCurriculumSource | null | undefined,
+  refs: unknown,
+  index: Map<string, CompactSectionLookup> = indexCompactSections(compact),
+): string {
+  if (!Array.isArray(refs)) return ''
+  for (const ref of refs) {
+    const hit = index.get(String(ref))
+    if (hit) {
+      const path = hit.section.heading_path.join(' > ') || hit.sourceTitle
+      return `Source ${hit.sourceNumber} — ${path}`
+    }
+  }
+  return ''
+}
+
+// Profile-outline projection: a slim headings-and-signal view used by the
+// source-profiling stage, capped well below the curriculum-evidence budget.
+// Keeps section IDs + heading paths + one high-signal line per section.
+export function formatProfileOutline(
+  compact: CompactCurriculumSource,
+  maxChars = 8000,
+): string {
+  const lines: string[] = []
+
+  for (const src of compact.sources) {
+    lines.push(`=== Source: ${src.title} ===`)
+    for (const section of src.sections) {
+      const path = section.heading_path.join(' > ') || 'Root Section'
+      const signal =
+        section.key_definitions[0]
+        || section.learning_objectives[0]
+        || section.opening_excerpt
+      const signalText = signal
+        ? ` — ${signal.replace(/\s+/g, ' ').trim().slice(0, 140)}`
+        : ''
+      lines.push(`[${section.id}] ${path}${signalText}`)
+    }
+  }
+
+  const out = lines.join('\n')
+  if (out.length <= maxChars) return out
+  return out.slice(0, maxChars - 1).trimEnd() + '…'
+}
+
 // Detect definitions, objectives, etc.
 function extractDefinitions(content: string): string[] {
   const defRegex = /\b(is defined as|refers to|means|is a type of|describes)\b/i
@@ -182,6 +261,103 @@ function extractObjectives(content: string): string[] {
   return content.split('\n')
     .map(line => line.trim())
     .filter(line => line.length > 15 && objRegex.test(line))
+}
+
+// Serialized size of a section's evidence, matching the prompt projection.
+// Kept in sync with how compact_char_count is computed.
+function sectionCompactSize(sec: CompactSourceSection): number {
+  return sec.opening_excerpt.length
+    + sec.key_definitions.join('').length
+    + sec.enumerations.join('').length
+    + sec.learning_objectives.join('').length
+    + sec.code_samples.join('').length
+    + sec.table_summaries.join('').length
+}
+
+// Reduce a section to at most `budget` chars, keeping the highest-value
+// evidence (a definition-aware excerpt, then definitions) and shedding
+// lower-value arrays first. The excerpt is the elastic field that absorbs
+// the remaining budget. Returns true if anything was trimmed.
+function clampSectionToBudget(sec: CompactSourceSection, budget: number): boolean {
+  if (sectionCompactSize(sec) <= budget) return false
+
+  const keepWhileFits = (items: string[], remaining: number): { kept: string[]; used: number } => {
+    const kept: string[] = []
+    let used = 0
+    for (const item of items) {
+      if (used + item.length > remaining) continue
+      kept.push(item)
+      used += item.length
+    }
+    return { kept, used }
+  }
+
+  let remaining = Math.max(0, budget)
+
+  // Reserve room for definitions so a long excerpt cannot crowd them out.
+  const defsSize = sec.key_definitions.join('').length
+  const reserve = Math.min(defsSize, Math.floor(remaining / 2))
+  const excerptBudget = Math.max(0, remaining - reserve)
+  if (sec.opening_excerpt.length > excerptBudget) {
+    sec.opening_excerpt = excerptBudget > 1
+      ? sec.opening_excerpt.slice(0, excerptBudget - 1).trimEnd() + '…'
+      : ''
+  }
+  remaining -= sec.opening_excerpt.length
+
+  // Shed remaining evidence in ascending order of curriculum value.
+  for (const field of [
+    'key_definitions',
+    'learning_objectives',
+    'enumerations',
+    'code_samples',
+    'table_summaries',
+  ] as const) {
+    const result = keepWhileFits(sec[field], remaining)
+    sec[field] = result.kept
+    remaining -= result.used
+  }
+
+  return true
+}
+
+// Globally enforce the compaction budget with max-min fair allocation:
+// process sections from smallest to largest so small sections keep their
+// content while large sections share the remaining budget equally. This
+// prevents a few large sections from consuming the entire budget and
+// guarantees the total stays at or under targetChars.
+function enforceCompactionBudget(
+  sources: CompactCurriculumSource['sources'],
+  targetChars: number,
+): { totalChars: number; trimmedSectionCount: number } {
+  const allSections = sources.flatMap((s) => s.sections)
+  let totalChars = allSections.reduce((acc, s) => acc + sectionCompactSize(s), 0)
+  if (totalChars <= targetChars) {
+    return { totalChars, trimmedSectionCount: 0 }
+  }
+
+  const ordered = [...allSections].sort(
+    (a, b) => sectionCompactSize(a) - sectionCompactSize(b),
+  )
+  let remainingBudget = targetChars
+  let remainingCount = ordered.length
+  let trimmedSectionCount = 0
+
+  for (const sec of ordered) {
+    const fairShare = Math.floor(remainingBudget / Math.max(1, remainingCount))
+    const size = sectionCompactSize(sec)
+    if (size <= fairShare) {
+      remainingBudget -= size
+    } else {
+      clampSectionToBudget(sec, fairShare)
+      remainingBudget -= sectionCompactSize(sec)
+      trimmedSectionCount += 1
+    }
+    remainingCount -= 1
+  }
+
+  totalChars = allSections.reduce((acc, s) => acc + sectionCompactSize(s), 0)
+  return { totalChars, trimmedSectionCount }
 }
 
 /**
@@ -198,7 +374,7 @@ export async function buildSourceCompaction({
   sourceTextFallback?: string
   sourceTitles?: string[]
 }): Promise<CompactCurriculumSource> {
-  const COMPACTION_VERSION = 'v1'
+  const COMPACTION_VERSION = 'v1.1'
   let fingerprint = ''
   let originalCharCount = 0
 
@@ -341,6 +517,9 @@ export async function buildSourceCompaction({
       
       const secRecord: CompactSourceSection = {
         source_id: src.id,
+        // 1-based source/section reference; sources are pushed in order, so the
+        // current source's number is the count already finalized plus one.
+        id: `s${compactedSources.length + 1}:${secOrdinal + 1}`,
         heading_path: path,
         ordinal: secOrdinal++,
         opening_excerpt: openingExcerpt,
@@ -364,14 +543,6 @@ export async function buildSourceCompaction({
         sections.push(secRecord)
         representedSourceIds.add(src.id)
         if (path.length) representedHeadingSet.add(pathKey)
-        
-        // Count characters
-        totalCompactChars += secRecord.opening_excerpt.length + 
-          secRecord.key_definitions.join('').length +
-          secRecord.enumerations.join('').length +
-          secRecord.learning_objectives.join('').length +
-          secRecord.code_samples.join('').length +
-          secRecord.table_summaries.join('').length
       } else {
         omittedSections.push(`${src.title}: ${pathKey || 'Root Section'}`)
       }
@@ -385,9 +556,26 @@ export async function buildSourceCompaction({
     })
   }
 
+  // Enforce the global compaction budget. Heuristic per-section slicing alone
+  // leaves many-section documents unbounded; this caps the projection at
+  // targetChars with fair allocation across all sections.
+  let trimmedSectionCount = 0
+  if (mode !== 'full' && targetChars > 0) {
+    const enforced = enforceCompactionBudget(compactedSources, targetChars)
+    totalCompactChars = enforced.totalChars
+    trimmedSectionCount = enforced.trimmedSectionCount
+  } else {
+    totalCompactChars = compactedSources.reduce(
+      (acc, s) => acc + s.sections.reduce((a, sec) => a + sectionCompactSize(sec), 0),
+      0,
+    )
+  }
+
   // Coverage validation
-  const valid = representedSourceIds.size === sourcesData.length && 
+  const valid = representedSourceIds.size === sourcesData.length &&
     omittedSections.length === 0
+
+  const withinBudget = mode === 'full' || targetChars <= 0 || totalCompactChars <= targetChars
 
   const coverageReport = {
     source_count: sourcesData.length,
@@ -396,6 +584,9 @@ export async function buildSourceCompaction({
     represented_heading_count: representedHeadingSet.size,
     omitted_sections: omittedSections,
     valid,
+    budget_chars: targetChars,
+    within_budget: withinBudget,
+    trimmed_section_count: trimmedSectionCount,
   }
 
   return {
@@ -424,7 +615,7 @@ export async function getOrBuildSourceCompaction({
   sourceTextFallback?: string
   sourceTitles?: string[]
 }): Promise<CompactCurriculumSource> {
-  const COMPACTION_VERSION = 'v1'
+  const COMPACTION_VERSION = 'v1.1'
   const sortedIds = [...sourceVersionIds].sort()
   const cacheKey = crypto.createHash('sha256')
     .update(sortedIds.join(',') + '_' + COMPACTION_VERSION)

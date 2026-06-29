@@ -51,7 +51,7 @@ export const APP_KNOWLEDGE: AppKnowledgeEntry[] = [
     summary: 'The agent is the primary conversational intelligence inside a lesson. It explains concepts, reasons through problems, uses the current course position and assessed learner state, and can execute clear lesson actions.',
     details: [
       'For explanations, it can use the current page, earlier course content, uploaded source evidence, learner questions, quiz results, misconceptions, preferences, and app product knowledge when relevant.',
-      'It can also handle explicit actions such as opening a quiz, moving between topics, regenerating a page with a different approach, generating a custom page, or reporting the active teaching persona.',
+      'It can also handle explicit actions such as opening a quiz, moving between topics, regenerating a page with a different approach, or generating a custom page.',
       'Assistant answers are not treated as factual evidence for later retrieval. Learner-authored questions may be retrieved to understand confusion, but not as proof.',
     ],
     related: ['lesson-pages', 'learner-memory', 'quizzes-exams', 'source-based-learning'],
@@ -194,12 +194,12 @@ export const APP_KNOWLEDGE: AppKnowledgeEntry[] = [
   {
     id: 'course-setup',
     title: 'Course setup',
-    aliases: ['setup', 'create course', 'course options', 'knowledge level', 'learning purpose', 'course depth', 'teaching persona'],
-    summary: 'Course setup defines the source mode, progression policy, depth, learner knowledge level, learning purpose, active teaching persona, and recall-break preference.',
+    aliases: ['setup', 'create course', 'course options', 'knowledge level', 'learning purpose', 'course depth', 'teaching style'],
+    summary: 'Course setup defines the source mode, progression policy, depth, learner knowledge level, learning purpose, and recall-break preference.',
     details: [
       'Depth controls overall coverage: Overview focuses on core concepts, Standard balances coverage and examples, and Mastery adds deeper reasoning and edge cases.',
       'Knowledge level changes assumptions and framing: Beginner builds intuition first, Intermediate skips basics and emphasizes connections, and Expert prioritizes formal models, derivations, tradeoffs, and research context.',
-      'Purpose emphasizes exploration, practical application, or rigorous research. The learner can choose Immersive Builder or Investigator as the course teaching persona.',
+      'Purpose emphasizes exploration, practical application, or rigorous research. Lessons use one shared warm, direct teaching style.',
     ],
     related: ['progression-modes', 'teaching-personalization', 'recall-breaks'],
   },
@@ -218,13 +218,13 @@ export const APP_KNOWLEDGE: AppKnowledgeEntry[] = [
   {
     id: 'teaching-personalization',
     title: 'Teaching personalization',
-    aliases: ['teaching persona', 'immersive builder', 'investigator', 'personalization', 'lesson behavior', 'explanation approach'],
-    summary: 'The selected teaching persona is the single teaching-behavior authority. Learner level, purpose, audience, source coverage, and assessed needs calibrate it without becoming competing style systems.',
+    aliases: ['teaching style', 'personalization', 'lesson behavior', 'explanation approach'],
+    summary: 'Lessons use one restrained professor-like teaching style, calibrated by learner level, purpose, audience, source coverage, and assessed needs.',
     details: [
-      'Immersive Builder moves from meaning to precision and then to something usable, while choosing different paths for major concepts, technical definitions, continuations, support ideas, and mathematics.',
-      'Investigator starts from an anomaly, failure, evidence, or precise definition as appropriate; it tests tempting explanations and reveals the mechanism that resolves the question.',
-      'Personalization may use learner audience, knowledge level, skill state, misconceptions, and lesson feedback as evidence. Those signals do not replace the persona or rewrite factual evidence.',
-      'Existing pages remain unchanged until regenerated; new and regenerated pages use the active persona.',
+      'The lesson begins directly inside the concept without greetings, classroom role-play, praise, or theatrical questions.',
+      'It preserves formal definitions and field terminology while adding intuition, mechanism, a concrete example, and an important limitation when relevant.',
+      'Personalization may use learner audience, knowledge level, skill state, misconceptions, and lesson feedback as evidence without changing the factual evidence base.',
+      'Existing pages remain unchanged until regenerated; new and regenerated pages use the shared teaching style.',
     ],
     related: ['learner-memory', 'course-setup', 'agent-chat'],
   },
@@ -429,7 +429,7 @@ async function liveProductState(
         `depth=${course.course_depth ?? 'standard'}`,
         `knowledge level=${course.knowledge_level ?? 'beginner'}`,
         `purpose=${course.learning_purpose ?? 'practitioner'}`,
-        `teaching persona=${course.teaching_persona ?? 'immersive_builder'}`,
+        'teaching style=warm, direct, and academically precise',
       ].join('; '))
     }
   }

@@ -322,16 +322,76 @@ function computeRawPath(topic: any, rawById: Map<string, any>) {
   return path.length ? path : [topic]
 }
 
+/**
+ * Defense-in-depth evidence gate for already-built persistence-shaped topics.
+ * Even though enforceSourceGroundedCurriculum/enforceSourceGroundedMap already
+ * validate and drop evidence-less topics upstream, persistence is the final
+ * boundary before this becomes a real course — never trust it blindly. A
+ * teachable topic with zero resolvable `source_refs` is dropped here too,
+ * rather than persisted with source_coverage stamped "covered." Containers
+ * are exempt: they are organizational, and their evidence lives on teachable
+ * descendants.
+ */
+export function dropTeachableTopicsWithoutEvidence<T extends { node_type: string; source_refs: string[]; title?: string; _id?: unknown }>(
+  topics: T[],
+): { topics: T[]; dropped: string[] } {
+  const dropped: string[] = []
+  const kept = topics.filter((topic) => {
+    if (topic.node_type === 'container') return true
+    if (Array.isArray(topic.source_refs) && topic.source_refs.length > 0) return true
+    dropped.push(String(topic.title ?? topic._id))
+    return false
+  })
+  return { topics: kept, dropped }
+}
+
 export async function persistGeneratedCourse(input: PersistGeneratedCourseInput): Promise<PersistedGeneratedCourse> {
   if (input.mode === 'source_grounded') {
     input.curriculum = enforceSourceGroundedCurriculum(input.curriculum, {
       sourceText: input.sourceText,
       sourceProfile: input.sourceProfile,
+      compactCurriculumSource: input.compactCurriculumSource,
     })
     enforceSourceGroundedMap(input.curriculum, input.map)
   }
 
   const db = await getDb()
+
+  // Idempotency: a prior attempt for this exact generation job may have
+  // already persisted a course before the job doc itself was updated with
+  // course_id (e.g. the process crashed in that exact window) — the
+  // generation job's own retry would otherwise call this function again and
+  // create a second, orphaned course. A course already fully "ready" is
+  // reused as-is; one still stuck "generating" never finished, so it (and
+  // anything written for it) is cleared and persisted fresh below rather than
+  // guessing how to resume an unknown partial state.
+  if (input.generationJobId) {
+    const existingCourse = await db.collection('courses').findOne({
+      generation_job_id: input.generationJobId,
+      user_id: input.userId,
+    })
+    if (existingCourse?.status === 'ready') {
+      const firstTopic = await db.collection('topics').findOne(
+        { course_id: String(existingCourse._id), state: 'active', node_type: { $ne: 'container' } },
+        { projection: { _id: 1 } },
+      )
+      if (firstTopic) {
+        return { courseId: String(existingCourse._id), firstTopicId: String(firstTopic._id) }
+      }
+    } else if (existingCourse) {
+      const staleCourseId = String(existingCourse._id)
+      await Promise.all([
+        db.collection('courses').deleteOne({ _id: existingCourse._id }),
+        db.collection('topics').deleteMany({ course_id: staleCourseId }),
+        db.collection('branches').deleteMany({ course_id: staleCourseId }),
+        db.collection('topicEdges').deleteMany({ course_id: staleCourseId }),
+        db.collection('curricula').deleteOne({ _id: existingCourse._id }),
+        db.collection('courseSummaries').deleteMany({ course_id: staleCourseId }),
+        db.collection('topicSummaries').deleteMany({ course_id: staleCourseId }),
+      ])
+    }
+  }
+
   const courseId = crypto.randomUUID()
   const branches = Array.isArray(input.map?.branches) ? input.map.branches : []
   const topics = Array.isArray(input.map?.topics) ? input.map.topics : []
@@ -391,7 +451,13 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     structure_reasoning: courseSummary.structure_reasoning,
     branch_count: courseSummary.branch_count,
     topic_count: courseSummary.topic_count,
-    status: 'ready',
+    // Starts "generating" and only flips to "ready" once every structural
+    // collection (branches/topics/edges/curricula/summaries) below has been
+    // written — never insert this as "ready" first. A crash partway through
+    // used to leave a "ready" course with zero topics, indistinguishable from
+    // a real one until a learner opened it.
+    status: 'generating',
+    generation_job_id: input.generationJobId ?? null,
     validation_report: (input.map as any)?.validation_report ?? null,
     graph_schema_version: graphProvenance?.schema_version ?? 'legacy-v1',
     graph_generation_provenance: graphProvenance,
@@ -399,6 +465,10 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     source_curriculum_validation: input.mode === 'source_grounded'
       ? (input.curriculum as any)?.source_validation_report ?? null
       : null,
+    source_curriculum_model_repair: input.mode === 'source_grounded'
+      ? (input.curriculum as any)?.source_model_repair_report ?? null
+      : null,
+    curriculum_rollout: (input.curriculum as any)?.curriculum_rollout ?? null,
     created_at: new Date(),
     updated_at: new Date(),
   })
@@ -423,7 +493,7 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   }
 
   // Build all topics as locked first, then activate exactly one below.
-  const topicsToInsert = topics.map((topic: any, index: number) => {
+  let topicsToInsert = topics.map((topic: any, index: number) => {
     const topicId = idMap.get(topic.id) ?? makeStableNodeId(courseId, topic.id || crypto.randomUUID())
     const curriculumTopic = findCurriculumTopic(input.curriculum, topic.id)
     const description = curriculumTopic?.description ?? topic.description ?? null
@@ -458,10 +528,15 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     const spineLevel = Number.isFinite(curriculumTopic?.spine_level ?? topic.spine_level)
       ? Number(curriculumTopic?.spine_level ?? topic.spine_level)
       : 0
+    const sourceRefs = Array.isArray(topic.source_refs) ? topic.source_refs.map(String) : []
     // Source-grounded canonical topics have already passed the hard curriculum
     // boundary validator. Legacy "inferred" coverage is never persisted here.
+    // Only stamp "covered" when the topic actually cites resolvable evidence —
+    // blanket-stamping every source-grounded topic regardless of source_refs
+    // let partial uploaded material silently present itself as a fully
+    // covered course.
     const sourceCoverage = input.mode === 'source_grounded'
-      ? 'covered'
+      ? (sourceRefs.length > 0 ? 'covered' : null)
       : ['covered', 'inferred'].includes(String(curriculumTopic?.source_coverage ?? topic.source_coverage))
         ? String(curriculumTopic?.source_coverage ?? topic.source_coverage)
         : null
@@ -521,13 +596,28 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       source_coverage: sourceCoverage,
       concept_group: conceptGroup,
       source_anchor: sourceAnchor,
-      source_refs: Array.isArray(topic.source_refs) ? topic.source_refs.map(String) : [],
+      source_refs: sourceRefs,
       generation_origin: graphProvenance ? 'generated' : 'legacy',
       generation_revision: Number(graphProvenance?.generation_revision ?? 0),
       created_at: new Date(),
       updated_at: new Date(),
     }
   })
+
+  if (input.mode === 'source_grounded') {
+    const { topics: gated, dropped } = dropTeachableTopicsWithoutEvidence(topicsToInsert)
+    if (dropped.length) {
+      console.warn(
+        `[persistGeneratedCourse] Dropped ${dropped.length} source-grounded topic(s) with no resolvable evidence: ${dropped.join(', ')}`,
+      )
+    }
+    if (!gated.some((topic: any) => topic.node_type !== 'container')) {
+      throw new Error(
+        'Every topic in this source-grounded course lacked resolvable source evidence after the evidence gate. Refusing to persist an evidence-free course.',
+      )
+    }
+    topicsToInsert = gated
+  }
 
   // Exactly one LEAF topic starts active: the mapBuilder's designated active topic in the
   // first branch, but only if it is a teachable leaf. Containers cannot be "active" in the
@@ -633,10 +723,15 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
   })
 
   const edgeKeys = new Set<string>()
-  const edgesToInsert = structuralEdges.map((edge: any) => {
+  const edgesToInsert = structuralEdges
+    // Hierarchy edges duplicate parent_id/path_ids, already stored on every
+    // topic and used directly by the layout — no render layer has ever
+    // displayed this edge type, so persisting it was pure dead weight.
+    .filter((edge: any) => String(edge.edge_type) !== 'hierarchy')
+    .map((edge: any) => {
     const from = idMap.get(edge.from_topic_id) ?? edge.from_topic_id
     const to = idMap.get(edge.to_topic_id) ?? edge.to_topic_id
-    const edgeType = ['hierarchy', 'prerequisite', 'recommended', 'semantic'].includes(String(edge.edge_type))
+    const edgeType = ['prerequisite', 'recommended', 'semantic'].includes(String(edge.edge_type))
       ? String(edge.edge_type)
       : 'semantic'
     edgeKeys.add(`${from}::${to}::${edgeType}`)
@@ -703,6 +798,15 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
     }
   }
 
+  // Sequence edges are intentionally source-grounded only. AI-teacher courses
+  // used to get an equivalent auto-generated edge for every pair of
+  // neighboring topics (reason text `Study "X" before "Y".`) — that was
+  // deliberately removed; app/api/graph/[courseId]/route.ts still filters out
+  // any leftover ones from old data (`isLegacyManufacturedSequence`). Source
+  // mode keeps this because there's a real, citable fact to encode (the
+  // material's own order); for AI-teacher mode it amounted to manufacturing a
+  // learning chain for every neighboring pair regardless of any real
+  // dependency, so it stays on prerequisites + recommended only.
   if (input.mode === 'source_grounded') {
     const teachableByBranch = new Map<string, Array<(typeof topicsToInsert)[number]>>()
     for (const topic of topicsToInsert) {
@@ -784,6 +888,14 @@ export async function persistGeneratedCourse(input: PersistGeneratedCourseInput)
       key_concepts: [],
       created_at: new Date(),
     }))
+  )
+
+  // Every structural collection above succeeded — the course is now genuinely
+  // navigable. Source-text chunking below is best-effort (embedding failures
+  // are already caught per-chunk) and intentionally does not gate this flip.
+  await db.collection('courses').updateOne(
+    { _id: courseId as any },
+    { $set: { status: 'ready', updated_at: new Date() } },
   )
 
   // Chunk and store source text so lesson generation and the doubt agent can

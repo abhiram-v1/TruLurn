@@ -18,12 +18,14 @@
     "benchmark:latency": "node scripts/benchmark-runtime-latency.mjs",
     "benchmark:lesson-quality": "node --experimental-strip-types scripts/benchmark-lesson-quality.mjs",
     "benchmark:lesson-quality:baseline": "node --experimental-strip-types scripts/benchmark-lesson-quality.mjs --baseline",
+    "benchmark:curriculum-quality": "node --experimental-strip-types scripts/benchmark-curriculum-quality.mjs",
+    "benchmark:curriculum-quality:baseline": "node --experimental-strip-types scripts/benchmark-curriculum-quality.mjs --baseline",
     "check:latency": "node scripts/check-latency-budgets.mjs",
     "eval:retrieval": "node scripts/evaluate-retrieval.mjs",
     "verify:embedding-sync": "node scripts/verify-embedding-sync.mjs",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --experimental-strip-types --test \"lib/**/*.test.ts\""
+    "test": "node --experimental-strip-types --import ./scripts/test-alias-loader.mjs --test \"lib/**/*.test.ts\""
   },
   "dependencies": {
     "@codemirror/lang-cpp": "^6.0.3",

@@ -213,7 +213,9 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
   const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel>('intermediate')
   const [learningPurpose, setLearningPurpose] = useState<LearningPurpose>('practitioner')
-  const [teachingPersona, setTeachingPersona] = useState<TeachingPersonaId>('immersive_builder')
+  // Persist the legacy value for stored-course compatibility. Lesson writing
+  // now uses one shared minimal teaching directive.
+  const teachingPersona: TeachingPersonaId = 'immersive_builder'
   const [recallBreakMode, setRecallBreakMode] = useState<RecallBreakMode>('auto')
   const [recallBreakDuration, setRecallBreakDuration] = useState(10)
   const [previewCurriculum, setPreviewCurriculum] = useState(true)
@@ -310,7 +312,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
             level: knowledgeLevel,
             purpose: learningPurpose,
             learningControl,
-            persona: teachingPersona,
           }),
         })
         if (!active) return
@@ -320,7 +321,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       if (active) setPreviewLoading(false)
     }, 1400)
     return () => { active = false; clearTimeout(timer) }
-  }, [description, mode, courseDepth, knowledgeLevel, learningPurpose, learningControl, teachingPersona, isStreaming])
+  }, [description, mode, courseDepth, knowledgeLevel, learningPurpose, learningControl, isStreaming])
 
   /** Click an idea spark → drop its ready-structured goal into the box (typed in). */
   function pickIdea(idea: CurriculumIdea) {
@@ -699,25 +700,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
         </Block>
 
         {/* ── Teaching persona ── */}
-        <Block title="Teaching persona" hint="How lessons are delivered">
-          <div className="cb-persona-grid">
-            {PERSONA_OPTIONS.map(({ value, title, copy, example }) => (
-              <button
-                key={value}
-                type="button"
-                className={`cb-source-card${teachingPersona === value ? ' selected' : ''}`}
-                onClick={() => setTeachingPersona(value)}
-                aria-pressed={teachingPersona === value}
-              >
-                <span className="cb-sc-check"><IcCheckSm width={9} height={9} /></span>
-                <span className="cb-sc-title">{title}</span>
-                <span className="cb-sc-copy">{copy}</span>
-                <span className="cb-sc-example">{example}</span>
-              </button>
-            ))}
-          </div>
-        </Block>
-
         {/* ── Recall breaks ── */}
         <Block title="Recall breaks" hint="Retrieval beats re-reading">
           <div className="cb-recall-grid">
@@ -822,14 +804,14 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
           {/* ── Settings blueprint ── */}
           <div className="cb-aside-card">
             <div className="cb-aside-title">Your course blueprint</div>
-            <p className="cb-aside-lead">{getCourseFeel(teachingPersona, courseDepth, knowledgeLevel)}</p>
+            <p className="cb-aside-lead">Lessons teach directly with precise definitions, clear intuition, concrete examples, and compact memory summaries.</p>
             <dl className="cb-blueprint">
               <div><dt>Source</dt><dd>{sourceLabel}</dd></div>
               <div><dt>Progression</dt><dd>{PATH_LABEL[learningControl]}</dd></div>
               <div><dt>Detail</dt><dd>{DEPTH_LABEL[courseDepth]}</dd></div>
               <div><dt>Knowledge</dt><dd>{levelLabel}</dd></div>
               <div><dt>Focus</dt><dd>{PURPOSE_LABEL[learningPurpose]}</dd></div>
-              <div><dt>Persona</dt><dd>{PERSONA_LABEL[teachingPersona]}</dd></div>
+              <div><dt>Teaching</dt><dd>Warm and direct</dd></div>
               <div><dt>Recall</dt><dd>{RECALL_LABEL[recallBreakMode]}</dd></div>
             </dl>
           </div>

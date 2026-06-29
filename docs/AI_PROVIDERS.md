@@ -6,7 +6,8 @@ application code. Feature code calls `generateAI`, `generateAIResult`, or
 
 ## Configuration
 
-`AI_PROVIDER` is the global default:
+`AI_PROVIDER` is the fallback default for features that have not been assigned
+an explicit task tier:
 
 ```env
 AI_PROVIDER=openai
@@ -35,8 +36,63 @@ AI_FEATURE_<FEATURE_NAME>_FALLBACK_PROVIDERS
 ```
 
 Fallback providers are comma-separated and are attempted only when explicitly
-configured by the route or environment. Models are resolved per provider, so a
+configured by the route or environment. Tiered routes do not automatically
+cross providers because that can change output behavior and schema reliability.
+Models are resolved per provider, so a
 Gemini model name is never passed to an OpenAI fallback, or vice versa.
+
+## Task Tiers
+
+Supporting AI tasks use three explicit tiers:
+
+| Tier | Default | Intended work |
+| --- | --- | --- |
+| FAST | `gemini-3.1-flash-lite` | classification, extraction, compact recall, lightweight suggestions |
+| CONTROL | `gpt-5.4-mini` | planning, verification, evaluation, graph control |
+| PREMIUM | `gpt-5.4` | learner-facing reasoning, difficult transformations, assessment generation |
+
+Tier environment defaults:
+
+```env
+GEMINI_FAST_MODEL=gemini-3.1-flash-lite
+GEMINI_QUALITY_MODEL=gemini-3.5-flash
+OPENAI_CONTROL_MODEL=gpt-5.4-mini
+OPENAI_PREMIUM_MODEL=gpt-5.4
+```
+
+Lesson generation, embeddings, web research, and locked graph generation retain
+their specialized routes rather than inheriting these supporting-task tiers.
+
+## Gemini Thinking
+
+Gemini generation only sends `thinkingConfig` when a feature passes
+`reasoningEffort`; ordinary Gemini calls keep their previous config. Lesson page
+generation gets its initial effort primarily from GPT-5.4 planner
+recommendations in the learning-architecture brief (`reasoning_need`). The
+planner recommends importance, difficulty, teaching depth, formal-definition
+need, misconception risk, and how the page bridges prior and future concepts.
+
+Those recommendations are not hard instructions to the lesson writer. Gemini is
+prompted to verify them against live source evidence, prior pages, page
+boundaries, continuation flags, and useful token budget. It can compress or
+deepen the final explanation inside the locked page scope and records that
+writer-side judgement in the page assessment. Generic page-shape heuristics are
+only a compatibility fallback for older cached plans that do not yet include the
+metadata.
+
+The Gemini adapter maps that provider-neutral effort to Gemini-native controls:
+
+- Gemini 3.x / 3.5 models use `thinkingLevel`.
+- Gemini 2.5 models use `thinkingBudget`; substantive efforts use dynamic
+  thinking (`-1`) so Gemini decides the internal reasoning budget.
+
+## Course Planning Ownership
+
+Course preview, full curriculum generation, and topic lesson preparation are
+fixed to OpenAI `gpt-5.4` with no cross-provider fallback. These stages decide
+scope, sequencing, page count, and coverage, so they share one planning model.
+Lesson prose generation remains independently routed and is not changed by this
+ownership rule.
 
 ## Feature Names
 
@@ -57,9 +113,9 @@ exam_question_generation
 exam_strategy
 flow_tracking
 graph_recommendation
+graph_interaction_analyzer
+graph_manager
 lesson_research
-lesson_style_analysis
-lesson_style_selection
 graph_generation
 page_analysis
 prerequisite_gap_analysis
@@ -67,6 +123,7 @@ quiz_generation
 recall_interruption
 recall_page_generation
 source_learning_page
+source_grounding_verification
 source_ordering
 source_profile
 topic_page_generation

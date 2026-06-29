@@ -1,6 +1,8 @@
 // Transform raw MongoDB documents into the GraphData shape the renderer expects.
 
-import { computeLayout, type RawNode as LayoutRawNode } from './layout'
+import { computeLayout, type RawNode as LayoutRawNode } from './layout.ts'
+import { dependencyAdjacency, isHardPrerequisite, longestDependencyPath } from './edges.ts'
+import { levelToMasteryPercent } from './mastery.ts'
 import type {
   GraphData,
   GraphNode,
@@ -29,10 +31,7 @@ function toGraphState(state: string): GraphNodeState {
 }
 
 /** Map understanding_level (1–5) → mastery percentage (0–100). */
-function toMastery(level: number | null | undefined): number {
-  if (!level) return 0
-  return Math.min(100, Math.round(level * 20))
-}
+const toMastery = levelToMasteryPercent
 
 /** Derive a visual importance tier from the topic's position in its branch.
  *  First topic → 3 (large), next few → 2, rest → 1. */
@@ -52,7 +51,7 @@ function toDifficulty(estimatedPages: number | null | undefined): number {
 }
 
 /** Map branch state → css color hint for the sidebar dot. */
-function toBranchColor(state: string, mastered: number, total: number): string {
+function toBranchColor(state: string, mastered: number): string {
   if (state === 'mastered') return 'mastered'
   if (state === 'in_progress') return mastered > 0 ? 'partial' : 'active'
   return 'locked'
@@ -207,13 +206,16 @@ function computeVulnerabilityRisks(
   const risk = new Map<string, number>()
   for (const id of ids) risk.set(id, ownRisk(stateMap.get(id) ?? 'locked'))
 
-  // Topological BFS — propagate from highest-risk sources outward
+  // Relaxation queue — re-process a node every time its risk value actually
+  // increases, not just the first time it's dequeued. A `visited` set that
+  // blocks reprocessing forever would let a node propagate a stale, too-low
+  // value once and then freeze — a later-discovered higher-risk path into the
+  // same node would update its OWN value but never get the chance to
+  // propagate the increase further downstream. The 0.78 per-hop decay
+  // guarantees this still terminates even if a prerequisite cycle exists.
   const queue = [...ids].filter((id) => (risk.get(id) ?? 0) > 0)
-  const visited = new Set<string>()
   while (queue.length) {
     const id = queue.shift()!
-    if (visited.has(id)) continue
-    visited.add(id)
     const myRisk = risk.get(id) ?? 0
     if (myRisk <= 2) continue
     for (const next of fwdAdj.get(id) ?? []) {
@@ -268,6 +270,13 @@ function computeDecayScore(state: string, lastActivityAt: Date | null): number {
 
 // ── Progress engine ────────────────────────────────────────────────────────
 
+// NOT the same axis as toMastery/levelToMasteryPercent (node.mastery, derived
+// from the granular 1-5 understanding_level). This is a deliberately coarser,
+// state-bucket score used only for branch/course AVERAGES — a 'functional'
+// topic contributes a flat 70 here regardless of whether its own
+// understanding_level is 3 (60%) or 4 (80%), so a single regrade doesn't
+// jolt the aggregate. The two can legitimately disagree for the same topic;
+// that's intentional, not a bug to reconcile.
 /** Weighted mastery contribution per state (0–100 scale). */
 const MASTERY_WEIGHTS: Record<GraphNodeState, number> = {
   mastered:   100,
@@ -401,6 +410,13 @@ export function transformToGraphData(params: {
     const prereqStrength = edgeType === 'prerequisite' ? (prereqStrengthByEdge.get(key) ?? null) : null
     const existing = edgeByPair.get(key)
     if (existing && (edgePriority[existing.edgeType] ?? 0) >= (edgePriority[edgeType] ?? 0)) return
+    // Dedup is keyed by direction (`from::to`), so an edge and its reverse
+    // (`to::from`) were previously treated as unrelated and both survived —
+    // rendering two opposite-pointing arrows between the same pair. Keep only
+    // the higher-priority direction; an equal-or-higher-priority reverse edge
+    // wins and this insert is dropped.
+    const reverse = edgeByPair.get(`${to}::${from}`)
+    if (reverse && (edgePriority[reverse.edgeType] ?? 0) >= (edgePriority[edgeType] ?? 0)) return
     edgeByPair.set(key, { from, to, strength, critical, edgeType, prereqStrength })
   }
 
@@ -425,28 +441,15 @@ export function transformToGraphData(params: {
   const rawEdges = [...edgeByPair.values()]
 
   // ── Build forward adjacency for intelligence metrics ──
-  // ONLY true dependency edges (prerequisite + sequence). Recommended/semantic
-  // links are associations, not dependencies — including them inflates
-  // downstreamImpact ("N concepts depend on this") and cascades vulnerability
-  // risk onto nodes that don't actually build on the weak concept.
+  // ONLY hard prerequisite edges are a dependency (see lib/graph/edges.ts).
+  // `sequence` records study/upload order, not "must understand first" —
+  // counting it here previously inflated downstreamImpact ("N concepts depend
+  // on this") and cascaded vulnerability risk onto nodes that merely come
+  // later, not nodes that actually build on the weak concept. rawEdges already
+  // includes every topic.prerequisites entry (added above), so no separate merge is needed.
   const stateMap = new Map(topics.map((t) => [String(t._id), String(t.state ?? 'locked')]))
-  const fwdAdj = new Map<string, string[]>()
-  for (const t of topics) fwdAdj.set(String(t._id), [])
-  for (const e of rawEdges) {
-    if (e.edgeType !== 'prerequisite' && e.edgeType !== 'sequence') continue
-    fwdAdj.get(e.from)?.push(e.to)
-  }
-  // Also include prerequisite relationships from topics themselves
-  for (const t of topics) {
-    const id = String(t._id)
-    for (const prereqId of t.prerequisites ?? []) {
-      const pid = String(prereqId)
-      if (!fwdAdj.has(pid)) fwdAdj.set(pid, [])
-      if (!fwdAdj.get(pid)!.includes(id)) fwdAdj.get(pid)!.push(id)
-    }
-  }
-
   const topicIds = topics.map((t) => String(t._id))
+  const fwdAdj = dependencyAdjacency(rawEdges, topicIds)
   const vulnerabilityRisks = computeVulnerabilityRisks(topicIds, stateMap, fwdAdj)
   const downstreamImpacts  = computeDownstreamImpact(topicIds, stateMap, fwdAdj)
 
@@ -540,7 +543,12 @@ export function transformToGraphData(params: {
       ? Math.round((recall.hits / recall.attempts) * 100)
       : base
     const connBoost = Math.min(12, (userConnCountByTopic.get(id) ?? 0) * 4)
-    const strength = 0.5 * base + 0.3 * recallScore + 0.2 * decayScore + connBoost
+    // decayScore (freshness) only means something once a node has actually been
+    // studied — computeDecayScore returns a flat 100 for every other state,
+    // which previously inflated locked/active nodes with phantom "freshness"
+    // they never earned.
+    const decayApplies = state === 'mastered' || state === 'functional' || state === 'partial'
+    const strength = 0.5 * base + 0.3 * recallScore + (decayApplies ? 0.2 * decayScore : 0) + connBoost
     return Math.max(0, Math.min(100, Math.round(strength)))
   }
 
@@ -601,7 +609,49 @@ export function transformToGraphData(params: {
 
   // ── Graph edges ──
   const nodeIds = new Set(nodes.map((n) => n.id))
-  const edges: GraphEdge[] = rawEdges.filter(
+
+  // A box-container (organizational, not rendered as a card) can still be an
+  // edge endpoint if the AI referenced it as a prerequisite/dependency. Rather
+  // than silently dropping that relationship when the filter below requires
+  // both endpoints to be rendered nodes, redirect it to the container's
+  // nearest teachable descendant (tree order). A container with no teachable
+  // descendant at all has nothing sensible to redirect to, and the edge is
+  // dropped, same as before.
+  const childrenByParent = new Map<string, string[]>()
+  for (const t of topics) {
+    const parentId = t.parent_id ? String(t.parent_id) : null
+    if (!parentId) continue
+    if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, [])
+    childrenByParent.get(parentId)!.push(String(t._id))
+  }
+  const descendantCache = new Map<string, string | null>()
+  function nearestTeachableDescendant(id: string, seen = new Set<string>()): string | null {
+    if (seen.has(id)) return null // guards against a cyclic parent_id
+    if (descendantCache.has(id)) return descendantCache.get(id)!
+    seen.add(id)
+    let resolved: string | null = null
+    for (const childId of childrenByParent.get(id) ?? []) {
+      if (positions.get(childId)) { resolved = childId; break }
+      const fromChild = nearestTeachableDescendant(childId, seen)
+      if (fromChild) { resolved = fromChild; break }
+    }
+    descendantCache.set(id, resolved)
+    return resolved
+  }
+  function redirectToRenderedNode(id: string): string | null {
+    if (positions.get(id)) return id // already a rendered node (leaf or spine container)
+    return nearestTeachableDescendant(id)
+  }
+  const reparentedEdges = rawEdges
+    .map((e) => {
+      const from = redirectToRenderedNode(e.from)
+      const to = redirectToRenderedNode(e.to)
+      if (!from || !to || from === to) return null
+      return from === e.from && to === e.to ? e : { ...e, from, to }
+    })
+    .filter((e): e is typeof rawEdges[number] => e !== null)
+
+  const edges: GraphEdge[] = reparentedEdges.filter(
     (e) => nodeIds.has(e.from) && nodeIds.has(e.to),
   )
 
@@ -644,7 +694,7 @@ export function transformToGraphData(params: {
       description: b.description ?? b.title,
       topicCount: total,
       mastered,
-      color: toBranchColor(b.state, mastered, total),
+      color: toBranchColor(b.state, mastered),
       active: b.state === 'in_progress',
       masteryScore: weightedMastery(branchNodes),
     }
@@ -664,55 +714,22 @@ export function transformToGraphData(params: {
   const isolatedCount = teachableNodes.length - connectedCount
 
   // ── Next Best Node + suggested flag override ──
-  const nextBestNodeId = pickNextBestNode(teachableNodes, evidenceEdges)
+  // "All prerequisites solid" must mean hard prerequisites only — a sequence
+  // edge (study order) satisfied does not mean a dependency is satisfied.
+  const unlockDependencyEdges = evidenceEdges.filter(isHardPrerequisite)
+  const nextBestNodeId = pickNextBestNode(teachableNodes, unlockDependencyEdges)
   // Clear all DB-sourced suggested flags and set only the computed winner
   for (const n of nodes) {
     n.suggested = n.id === nextBestNodeId
   }
 
   // ── Critical path — the longest HARD-prerequisite chain (the learning spine) ──
-  // Longest-path DP over the hard-prereq DAG, in topological order. Returns the
-  // ordered node ids of the backbone; empty when the course has no hard prereqs.
-  const criticalPath = ((): string[] => {
-    const adj = new Map<string, string[]>()
-    const indeg = new Map<string, number>()
-    for (const n of teachableNodes) { adj.set(n.id, []); indeg.set(n.id, 0) }
-    for (const e of edges) {
-      if (e.edgeType !== 'prerequisite' || e.prereqStrength === 'soft') continue
-      if (!adj.has(e.from) || !adj.has(e.to) || e.from === e.to) continue
-      adj.get(e.from)!.push(e.to)
-      indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1)
-    }
-    const dp = new Map<string, number>()       // longest chain length ending at node
-    const parent = new Map<string, string | null>()
-    const queue: string[] = []
-    for (const n of teachableNodes) {
-      dp.set(n.id, 0); parent.set(n.id, null)
-      if ((indeg.get(n.id) ?? 0) === 0) queue.push(n.id)
-    }
-    const seen = new Set<string>()
-    while (queue.length) {
-      const id = queue.shift()!
-      if (seen.has(id)) continue
-      seen.add(id)
-      for (const to of adj.get(id) ?? []) {
-        if ((dp.get(id)! + 1) > (dp.get(to) ?? 0)) {
-          dp.set(to, dp.get(id)! + 1)
-          parent.set(to, id)
-        }
-        indeg.set(to, (indeg.get(to) ?? 1) - 1)
-        if ((indeg.get(to) ?? 0) === 0) queue.push(to)
-      }
-    }
-    let endId: string | null = null
-    let best = 0
-    for (const [id, len] of dp) if (len > best) { best = len; endId = id }
-    if (!endId || best === 0) return []
-    const path: string[] = []
-    let cur: string | null = endId
-    while (cur) { path.unshift(cur); cur = parent.get(cur) ?? null }
-    return path
-  })()
+  // Restricted to edges between two teachable nodes, matching how the spine is
+  // meant to read (a chain of learning units, not containers).
+  const criticalPath = longestDependencyPath(
+    teachableNodes.map((n) => n.id),
+    edges.filter((e) => teachableNodeIds.has(e.from) && teachableNodeIds.has(e.to)),
+  )
 
   const course: GraphCourse = {
     id: courseId,

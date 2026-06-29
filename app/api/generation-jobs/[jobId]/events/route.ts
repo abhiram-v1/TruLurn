@@ -4,9 +4,7 @@ export const maxDuration = 300
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { validateTopicSuitability } from '@/lib/course-generation/topicValidator'
-import { researchCurriculum, formatResearchBrief } from '@/lib/course-generation/research'
-import { curriculumBuilderSkill } from '@/lib/ai/skills'
-import { generateAI, parseAIJson } from '@/lib/ai'
+import { researchCurriculum } from '@/lib/course-generation/research'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
 import {
@@ -22,11 +20,14 @@ import {
 } from '@/lib/sources/ingestion'
 import {
   getOrBuildSourceCompaction,
-  formatCompactSourceForPrompt,
+  formatProfileOutline,
 } from '@/lib/course-generation/sourceCompaction'
 import { sanitizeGeneratedMap } from '@/lib/course-generation/generateCourse'
 import {
-  enforceSourceGroundedCurriculum,
+  finalizeCurriculum,
+  generateCurriculum,
+} from '@/lib/course-generation/curriculumOrchestration'
+import {
   enforceSourceGroundedMap,
 } from '@/lib/course-generation/sourceCurriculumIntegrity'
 import { deriveLearnerAudience } from '@/lib/personalization/learnerAudience'
@@ -297,8 +298,9 @@ export async function GET(
               sourceTextFallback: orderedInput.sourceText,
             })
             
-            const compactOutline = formatCompactSourceForPrompt(compactSource)
-            
+            // Profiling only needs a slim headings-and-signal outline.
+            const compactOutline = formatProfileOutline(compactSource)
+
             const metadataProfile = await analyzeSourceMetadata({
               goals: orderedInput.goals,
               compactOutline,
@@ -353,18 +355,9 @@ export async function GET(
           await updateStage('building_curriculum', 'Generating branch structures, topics, and milestones...', completedStages, undefined, workerRunId)
           let curriculum = currentJob.curriculum
           if (!curriculum) {
-            const curriculumPrompt = curriculumBuilderSkill({
-              ...input,
-              curriculumResearchBrief: formatResearchBrief(currentJob.researchReport || null),
-            })
-            const curriculumText = await generateAI({ feature: 'curriculum_generation', ...curriculumPrompt })
-            curriculum = parseAIJson<any>(curriculumText)
-          }
-          if (input.mode === 'source_grounded') {
-            curriculum = enforceSourceGroundedCurriculum(curriculum, {
-              sourceText: input.sourceText,
-              sourceProfile: input.sourceProfile,
-            })
+            curriculum = await generateCurriculum(input, currentJob.researchReport || null)
+          } else {
+            curriculum = finalizeCurriculum(curriculum, input)
           }
           completedStages.push('building_curriculum')
           await updateStage('building_curriculum', 'Curriculum built successfully.', completedStages, { curriculum }, workerRunId)

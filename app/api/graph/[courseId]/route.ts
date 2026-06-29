@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { getCachedCourse, getCachedGraphData } from '@/lib/cache/courseData'
 import { normalizeGraphTopicHierarchy, transformToGraphData, type RawRecallStats } from '@/lib/graph/transform'
+import { detectFalseConfidence } from '@/lib/graph/falseConfidence'
 
 // GET /api/graph/[courseId]?view=knowledge|reference
 //
@@ -66,20 +67,9 @@ export async function GET(
     for (const session of examSessions) {
       const tid = String(session.topic_id)
       if (lastExamByTopic.has(tid)) continue // already have the most recent (sorted desc)
-      const summary = session.summary as any
-      const hasFalseConf = Boolean(
-        summary?.passed &&
-        Array.isArray(summary?.review_concepts) &&
-        summary.review_concepts.length > 0 &&
-        !summary.passed, // passed but flagged — check both flags
-      ) || Boolean(
-        session.summary &&
-        typeof session.summary === 'object' &&
-        (session.summary as any).false_confidence,
-      )
       lastExamByTopic.set(tid, {
         completedAt: session.completed_at instanceof Date ? session.completed_at : new Date(session.completed_at ?? 0),
-        falseConfidence: hasFalseConf,
+        falseConfidence: detectFalseConfidence(session.summary),
       })
     }
 
@@ -137,10 +127,15 @@ export async function GET(
     const GRAPH_EDGE_TYPES = new Set(['sequence', 'prerequisite', 'recommended', 'semantic'])
     const graphEdges = topicEdges.filter((edge) => {
       if (!GRAPH_EDGE_TYPES.has(String(edge.edge_type ?? 'semantic'))) return false
+      // Sequence edges are source-grounded only (see mongoPersistence.ts) — any
+      // edge_type 'sequence' on a non-source course predates that, from when
+      // AI-teacher courses still got one manufactured for every neighboring
+      // topic pair. Use the edge's own provenance flag rather than matching
+      // the old generator's reason text, which is fragile to any rephrasing.
       const isLegacyManufacturedSequence =
         String(edge.edge_type) === 'sequence'
         && String(course.mode ?? '') !== 'source_grounded'
-        && /^Study ".+" before ".+"\.$/.test(String(edge.reason ?? ''))
+        && String((edge as any).generation_origin ?? 'legacy') !== 'generated'
       if (isLegacyManufacturedSequence) return false
       return graphTopicIds.has(String(edge.from_topic_id)) && graphTopicIds.has(String(edge.to_topic_id))
     })
@@ -175,12 +170,18 @@ export async function GET(
       recallStatsByTopic,
     })
 
-    // Merge graph-manager confidence + review states onto nodes
+    // Merge graph-manager confidence + review states onto nodes. A node
+    // outside graphNodeMeta has never been touched by the manager and stays
+    // undefined (no score) on the node object below — it must not look like a
+    // real mid-confidence measurement it never earned. The same now applies
+    // to a stored document that's somehow missing these fields: skip it
+    // rather than fabricate a value for it.
     const nodeMeta = new Map<string, { confidenceScore: number; reviewState: string }>()
     for (const meta of graphNodeMeta) {
+      if (meta.confidence_score == null || meta.review_state == null) continue
       nodeMeta.set(String(meta.topic_id), {
-        confidenceScore: Number(meta.confidence_score ?? 50),
-        reviewState: String(meta.review_state ?? 'inferred'),
+        confidenceScore: Number(meta.confidence_score),
+        reviewState: String(meta.review_state),
       })
     }
     if (nodeMeta.size > 0) {

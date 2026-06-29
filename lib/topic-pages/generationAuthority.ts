@@ -188,7 +188,7 @@ export function formatGenerationAuthority(contract: GenerationAuthorityContract)
 - TOPIC PLAN owns sequence and shape: page ${contract.sequence.page_number} of ${contract.sequence.page_count}, content_kind "${contract.sequence.content_kind}", page_mode "${contract.sequence.page_mode}", target_length "${contract.sequence.target_length}", role "${contract.sequence.page_sequence_role}".
 - PHYSICAL PAGE SPAN: begin at "${contract.sequence.start_boundary}" and reach "${contract.sequence.end_boundary}".
 - CONCEPT FLOW: ${contract.sequence.concepts.join(' -> ') || 'follow the planned span'}.
-- LENGTH BUDGET: ${contract.sequence.target_words} words is an upper planning budget, not a quota; ${contract.sequence.soft_max_words} is the soft maximum for finishing a nearly complete thought.
+- LENGTH BUDGET: ${contract.sequence.target_words} words is the expected teaching budget for this span, not a padding quota; ${contract.sequence.soft_max_words} is the soft maximum for finishing a nearly complete thought.
 - CONTINUITY: continues from previous=${contract.sequence.continues_from_previous}; continues to next=${contract.sequence.continues_to_next}; preferred break=${contract.sequence.break_preference}. ${contract.sequence.break_reason}
 - PAGE BRIEF owns the learning objective: ${contract.objective.target_understanding}
 - LESSON WRITER owns only wording, examples, representation, optional section usage, and tone.

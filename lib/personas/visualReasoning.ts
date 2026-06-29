@@ -1,21 +1,16 @@
 import type { PersonaSurface } from './types'
 
-const SHARED = `VISUAL REASONING:
-- Decide whether a chart would make the relationship easier to understand than prose, math, code, or a table.
-- Use charts for meaningful quantitative shape: trends, distributions, comparisons, correlations, tradeoffs, growth rates, and changing quantities.
-- Do not add decorative charts. A visual must carry explanatory, diagnostic, assessment, or recall work.
-- Explain what the learner should notice and why it matters; never drop in a chart without interpretation.
-- Never invent measured data. Clearly label pedagogical values as illustrative.
-- Apply subject-specific visual rules only when supplied by the active course skill context.`
-
 const SURFACE_RULES: Record<PersonaSurface, string> = {
-  lesson: 'Use a chart when the learning architecture requests one or when quantitative shape is essential to the assigned understanding.',
-  agent: 'Generate a chart when the learner asks to visualize something or when a visual would materially resolve the question or confusion.',
-  quiz: 'Use a chart only when interpreting visual evidence is itself part of the skill being tested. Do not let it reveal the answer.',
-  recall: 'Use a chart only when reconstructing or interpreting a recently learned quantitative relationship is the memory target.',
+  lesson: 'Use one when quantitative shape is essential or the learning architecture requests it.',
+  agent: 'Use one when requested or when it materially resolves the learner’s question.',
+  quiz: 'Use one only when interpreting visual evidence is the tested skill; never reveal the answer.',
+  recall: 'Use one only when reconstructing a learned quantitative relationship is the memory target.',
 }
 
 export function buildPersonaVisualReasoningDirective(surface: PersonaSurface) {
-  return `${SHARED}
+  return `VISUAL REASONING:
+- Prefer prose, math, code, or a table unless a chart materially clarifies a trend, distribution, comparison, correlation, tradeoff, or changing quantity.
+- Every visual must do teaching work. Explain what to inspect and why it matters; label invented pedagogical values as illustrative.
+- Follow the active course skill context and its visual rules when supplied.
 ${SURFACE_RULES[surface]}`
 }

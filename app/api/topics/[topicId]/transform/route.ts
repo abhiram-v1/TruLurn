@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { generateAI } from '@/lib/ai'
 import { getRequiredUserId } from '@/lib/server/currentUser'
-import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
+import { buildPersonaDirective } from '@/lib/personas'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 
@@ -93,7 +93,6 @@ export async function POST(
       system: [
         SYSTEM[typedAction],
         buildPersonaDirective({
-          persona: resolveCourseTeachingPersona(course),
           surface: 'lesson',
           lesson: {
             contentKind: 'section',

@@ -4,6 +4,7 @@ import {
   buildImmersiveBuilderDirective,
   selectImmersiveBuilderPageType,
 } from './immersiveBuilder.ts'
+import { buildPersonaDirective } from './index.ts'
 
 test('selects an adaptive lesson path instead of one fixed arc', () => {
   assert.equal(selectImmersiveBuilderPageType({
@@ -24,8 +25,9 @@ test('selects an adaptive lesson path instead of one fixed arc', () => {
   }), 'mathematical')
 })
 
-test('lesson directives combine intellectual energy with academic mastery', () => {
-  const directive = buildImmersiveBuilderDirective({
+test('lesson writing uses the shared minimal teaching directive instead of a persona', () => {
+  const directive = buildPersonaDirective({
+    persona: 'immersive_builder',
     surface: 'lesson',
     lesson: {
       contentKind: 'full_page',
@@ -34,27 +36,18 @@ test('lesson directives combine intellectual energy with academic mastery', () =
       topicDepth: 'critical',
     },
   })
-  assert.match(directive, /genuine intellectual excitement/i)
-  assert.match(directive, /canonical term/i)
-  assert.match(directive, /academically reliable definition/i)
-  assert.match(directive, /"Remember" or "TL;DR"/i)
-  assert.match(directive, /formal definition and the few points worth retaining/i)
-  assert.doesNotMatch(directive, /Exam and interview ready/i)
-  assert.match(directive, /at most two short opening paragraphs/i)
-  assert.match(directive, /within roughly the first 150 words/i)
-  assert.match(directive, /> \*\*Definition:\*\*/i)
-  assert.match(directive, /Do not follow it with a glossary-style bullet list/i)
-  assert.match(directive, /> \*\*Remember:\*\*/i)
-  assert.match(directive, /worked example/i)
-  assert.match(directive, /without wandering into a broader syllabus/i)
-  assert.ok(directive.length < 6500)
+  assert.match(directive, /warm professor who is genuinely interested/i)
+  assert.match(directive, /canonical terminology/i)
+  assert.match(directive, /formal meaning/i)
+  assert.match(directive, /Do not greet the learner/i)
+  assert.doesNotMatch(directive, /Immersive Builder|PAGE PATH/i)
+  assert.ok(directive.length < 1000)
 })
 
 test('agent, quiz, and recall share the same persona philosophy', () => {
   for (const surface of ['agent', 'quiz', 'recall'] as const) {
     const directive = buildImmersiveBuilderDirective({ surface })
     assert.match(directive, /Immersive Builder/)
-    assert.match(directive, /awaken interest, build understanding, establish precision/i)
-    assert.match(directive, /authentic vocabulary/i)
+    assert.match(directive, /awaken interest/i)
   }
 })

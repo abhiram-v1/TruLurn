@@ -12,12 +12,15 @@ type OpenAIGenerateInput = {
   onUsage?: (usage: AIProviderUsage) => void
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
   signal?: AbortSignal
+  timeoutMs?: number
   responseMimeType?: 'application/json' | 'text/plain'
   // When provided, uses json_schema structured output instead of json_object mode.
-  // More reliable than json_object — enforces exact shape regardless of prompt length.
+  // Only `strict: true` actually constrains decoding to the schema; `strict: false`
+  // (the default) is a hint with the same reliability as json_object mode.
   responseSchema?: {
     name: string
     schema: Record<string, unknown>
+    strict?: boolean
   }
 }
 
@@ -180,14 +183,12 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
   }
 
   if (input.responseSchema) {
-    // json_schema mode: hard-enforces the exact response shape. More reliable than
-    // json_object for long prompts or models that don't follow format instructions well.
     body.text = {
       format: {
         type: 'json_schema',
         name: input.responseSchema.name,
         schema: input.responseSchema.schema,
-        strict: false, // strict=true requires all fields, false allows optional nullable fields
+        strict: input.responseSchema.strict ?? false,
       },
     }
   } else if (input.responseMimeType === 'application/json') {
@@ -208,7 +209,7 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
-  }, { signal: input.signal })
+  }, { signal: input.signal, timeoutMs: input.timeoutMs })
 
   const data = (await response.json()) as OpenAIResponse
 

@@ -8,6 +8,8 @@ export type AIReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' |
 export type AIResponseSchema = {
   name: string
   schema: Record<string, unknown>
+  /** OpenAI only: enables constrained decoding so output is guaranteed to match `schema`. Defaults to false (schema is a hint, not enforced). */
+  strict?: boolean
 }
 
 export type AIProviderUsage = {
@@ -31,6 +33,8 @@ export type AIProviderGenerateInput = {
   signal?: AbortSignal
   responseMimeType?: 'application/json' | 'text/plain'
   responseSchema?: AIResponseSchema
+  /** Overrides AI_REQUEST_TIMEOUT_MS for this call (e.g. a feature known to run long). */
+  timeoutMs?: number
 }
 
 export type AIProviderWebSearchInput = AIProviderGenerateInput & {

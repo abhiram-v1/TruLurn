@@ -23,6 +23,7 @@ type GeminiResponse = {
     candidatesTokenCount?: number
     totalTokenCount?: number
     cachedContentTokenCount?: number
+    thoughtsTokenCount?: number
   }
 }
 
@@ -34,9 +35,11 @@ export async function generateWithGemini({
   model,
   auditFeature,
   onUsage,
+  reasoningEffort,
   responseMimeType = 'application/json',
   responseSchema,
   signal,
+  timeoutMs,
 }: AIProviderGenerateInput): Promise<string> {
   const apiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY
   const selectedModel = model ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash'
@@ -65,9 +68,14 @@ export async function generateWithGemini({
     body: JSON.stringify({
       contents,
       ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-      generationConfig: buildGeminiGenerationConfig({ responseMimeType, responseSchema }),
+      generationConfig: buildGeminiGenerationConfig({
+        model: selectedModel,
+        reasoningEffort,
+        responseMimeType,
+        responseSchema,
+      }),
     }),
-  }, { signal })
+  }, { signal, timeoutMs })
 
   const data = (await response.json()) as GeminiResponse
 
@@ -84,6 +92,7 @@ export async function generateWithGemini({
       input_tokens: data.usageMetadata.promptTokenCount ?? 0,
       cached_input_tokens: data.usageMetadata.cachedContentTokenCount ?? 0,
       output_tokens: data.usageMetadata.candidatesTokenCount ?? 0,
+      thought_tokens: data.usageMetadata.thoughtsTokenCount ?? 0,
       total_tokens: data.usageMetadata.totalTokenCount ?? 0,
     }))
   }

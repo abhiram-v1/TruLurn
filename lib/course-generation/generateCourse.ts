@@ -1,17 +1,13 @@
-import { generateAI, parseAIJson } from '@/lib/ai'
-import { curriculumBuilderSkill } from '@/lib/ai/skills'
 import { persistGeneratedCourse } from '@/lib/course-generation/mongoPersistence'
 import { deriveLearnerAudience } from '@/lib/personalization/learnerAudience'
-import { formatResearchBrief, researchCurriculum, type CourseResearchReport } from '@/lib/course-generation/research'
+import { researchCurriculum, type CourseResearchReport } from '@/lib/course-generation/research'
 import { orderSourceGroundedInput } from '@/lib/course-generation/sourceOrdering'
 import { analyzeSourceMetadata, triggerBackgroundStyleAnalysis, type SourceProfileEnvelope } from '@/lib/course-generation/sourceProfile'
-import { getOrBuildSourceCompaction, buildSourceCompaction, formatCompactSourceForPrompt } from '@/lib/course-generation/sourceCompaction'
+import { getOrBuildSourceCompaction, buildSourceCompaction, formatProfileOutline } from '@/lib/course-generation/sourceCompaction'
+import { generateCurriculum } from '@/lib/course-generation/curriculumOrchestration'
 import { getDb } from '@/lib/db'
 import { validateGraph, type ValidatorTopic, type ValidatorEdge } from '@/lib/course-generation/validateGraph'
-import {
-  enforceSourceGroundedCurriculum,
-  enforceSourceGroundedMap,
-} from '@/lib/course-generation/sourceCurriculumIntegrity'
+import { enforceSourceGroundedMap } from '@/lib/course-generation/sourceCurriculumIntegrity'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
 import { generateCourseGraph } from '@/lib/graph-generation'
 
@@ -113,7 +109,9 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
       })
     }
 
-    const compactOutline = formatCompactSourceForPrompt(compactSource)
+    // Profiling only needs a slim headings-and-signal outline, not the full
+    // curriculum evidence projection.
+    const compactOutline = formatProfileOutline(compactSource)
 
     const metadataProfile = await analyzeSourceMetadata({
       goals: orderedInput.goals,
@@ -165,18 +163,7 @@ export async function generateAndPersistCourse(input: CourseGenerationInput & { 
     })
   }
 
-  const curriculumPrompt = curriculumBuilderSkill({
-    ...input,
-    curriculumResearchBrief: formatResearchBrief(researchReport),
-  })
-  const curriculumText = await generateAI({ feature: 'curriculum_generation', ...curriculumPrompt })
-  let curriculum = parseAIJson<any>(curriculumText)
-  if (input.mode === 'source_grounded') {
-    curriculum = enforceSourceGroundedCurriculum(curriculum, {
-      sourceText: input.sourceText,
-      sourceProfile: input.sourceProfile,
-    })
-  }
+  const curriculum = await generateCurriculum(input, researchReport)
 
   const [graphResult, learnerAudience] = await Promise.all([
     generateCourseGraph({

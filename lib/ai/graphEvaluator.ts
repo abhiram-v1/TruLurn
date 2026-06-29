@@ -3,20 +3,16 @@
 // and recommend the next topic to study.
 
 import { generateAI, parseAIJson } from '@/lib/ai'
+import { levelToMasteryPercent } from '@/lib/graph/mastery'
 import type { GraphNodeState, GraphEvaluationResult, GraphNodeUpdate } from '@/lib/graph/types'
 
 // ── Topic state → graph state mapping ──────────────────────────────────────
 
 function overallLevelToState(level: number): GraphNodeState {
   if (level >= 5) return 'mastered'
-  if (level >= 4) return 'functional'
   if (level >= 3) return 'functional'
   if (level >= 2) return 'partial'
   return 'unstable'
-}
-
-function levelToMastery(level: number): number {
-  return Math.min(100, Math.round(level * 20))
 }
 
 // ── Quiz evaluation event ──────────────────────────────────────────────────
@@ -45,7 +41,7 @@ export async function evaluateQuizForGraph(
 ): Promise<GraphEvaluationResult> {
   // 1. Deterministic state update for the evaluated topic
   const newState = overallLevelToState(event.overallLevel)
-  const newMastery = levelToMastery(event.overallLevel)
+  const newMastery = levelToMasteryPercent(event.overallLevel)
   const hasMisconception = event.hasFalseConfidence || (event.overallLevel <= 2 && event.weakGaps.length > 0)
 
   const topicUpdate: GraphNodeUpdate = {
@@ -57,9 +53,16 @@ export async function evaluateQuizForGraph(
   }
 
   // 2. Find topics that are now unlockable (all prereqs satisfied)
+  // The just-evaluated topic counts toward unlocking dependents only if its
+  // RESULTING state is mastered/functional — a raw `passed` flag at any level
+  // (e.g. a level-2 "partial" pass) used to count too, which could unlock
+  // topics whose prerequisite genuinely was not yet solid.
   const masteredSet = new Set(
     courseTopics
-      .filter((t) => t.state === 'mastered' || t.state === 'functional' || t.id === event.topicId && event.passed)
+      .filter((t) =>
+        t.state === 'mastered'
+        || t.state === 'functional'
+        || (t.id === event.topicId && (newState === 'mastered' || newState === 'functional')))
       .map((t) => t.id),
   )
 
@@ -124,26 +127,4 @@ Which topic ID should the student study next?`,
   }
 
   return { updates, unlocked, nextSuggestedTopicId, summary }
-}
-
-// ── Lesson-progress evaluation (lightweight, no AI) ────────────────────────
-
-export function evaluateLessonProgress(
-  topicId: string,
-  currentMastery: number,
-  pagesCompleted: number,
-  totalPages: number,
-): GraphNodeUpdate {
-  // Each page completion gives a small mastery bump if the topic isn't yet functional
-  const pageRatio = totalPages > 0 ? pagesCompleted / totalPages : 0
-  const bump = Math.round(pageRatio * 15) // max +15% from reading alone
-  const newMastery = Math.min(100, currentMastery + bump)
-
-  // State only upgrades from active → partial if enough pages read
-  let state: GraphNodeState | undefined
-  if (pageRatio >= 0.5 && currentMastery < 30) {
-    state = 'partial'
-  }
-
-  return { topicId, mastery: newMastery, state }
 }

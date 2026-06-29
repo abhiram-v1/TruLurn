@@ -8,16 +8,24 @@ import type {
   AIProviderName,
   AIProviderUsage,
   AIProviderWebSearchInput,
+  AIResponseSchema,
   AIWebSearchResult,
 } from '@/lib/ai/types'
 
+// A schema can vary by provider dialect (e.g. OpenAI strict mode rejects
+// open-ended dictionaries that Gemini accepts). Most callers pass a static
+// schema, which behaves exactly as before; a resolver function is invoked
+// with whichever provider ends up serving the request.
+type ResponseSchemaInput = AIResponseSchema | ((provider: AIProviderName) => AIResponseSchema | undefined)
+
 type GenerateAIInput = Omit<
   AIProviderGenerateInput,
-  'model' | 'purpose' | 'auditFeature' | 'promptCacheKey' | 'onUsage'
+  'model' | 'purpose' | 'auditFeature' | 'promptCacheKey' | 'onUsage' | 'responseSchema'
 > & {
   feature: AIFeature
   purpose?: AIProviderGenerateInput['purpose']
   validateResponse?: (text: string) => boolean
+  responseSchema?: ResponseSchemaInput
 }
 
 type SearchAIInput = Omit<
@@ -32,6 +40,7 @@ export type AIGenerationResult = {
   text: string
   provider: AIProviderName
   model?: string
+  usage?: AIProviderUsage
 }
 
 export type AISearchResult = AIWebSearchResult & {
@@ -54,6 +63,9 @@ const searchFlights = new Map<string, Promise<AISearchResult>>()
 
 function requestHash(kind: 'generate' | 'search', input: GenerateAIInput | SearchAIInput) {
   const schema = 'responseSchema' in input ? input.responseSchema : undefined
+  // A per-provider resolver can't be serialized; hash a stable marker instead
+  // so requests sharing one are still grouped by their other characteristics.
+  const serializableSchema = typeof schema === 'function' ? 'dynamic-per-provider' : schema ?? null
   return createHash('sha256')
     .update(JSON.stringify({
       kind,
@@ -62,7 +74,7 @@ function requestHash(kind: 'generate' | 'search', input: GenerateAIInput | Searc
       system: input.system,
       user: input.user,
       responseMimeType: input.responseMimeType ?? null,
-      responseSchema: schema ?? null,
+      responseSchema: serializableSchema,
       reasoningEffort: input.reasoningEffort ?? null,
       searchContextSize: 'searchContextSize' in input ? input.searchContextSize ?? null : null,
     }))
@@ -158,8 +170,12 @@ async function executeGeneration(input: GenerateAIInput): Promise<AIGenerationRe
       model = providerName === route.provider
         ? route.model
         : resolveAIProviderModel(feature, providerName, false)
+      const responseSchema = typeof request.responseSchema === 'function'
+        ? request.responseSchema(providerName)
+        : request.responseSchema
       const text = await provider.generate({
         ...request,
+        responseSchema,
         model,
         purpose: purpose ?? route.purpose,
         auditFeature: feature,
@@ -187,7 +203,7 @@ async function executeGeneration(input: GenerateAIInput): Promise<AIGenerationRe
         estimatedInputTokens: Math.ceil((request.system.length + request.user.length) / 4),
         usage,
       })
-      return { text, provider: providerName, model }
+      return { text, provider: providerName, model, usage }
     } catch (error) {
       if (process.env.LOG_PERF === '1') {
         console.warn(

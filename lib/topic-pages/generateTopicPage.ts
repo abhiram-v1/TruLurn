@@ -1,7 +1,8 @@
 import crypto from 'crypto'
 import { generateAI, parseAIJson } from '@/lib/ai'
+import type { AIReasoningEffort } from '@/lib/ai/types'
 import { buildAudienceDirective } from '@/lib/personalization/learnerAudience'
-import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/personas'
+import { buildPersonaDirective } from '@/lib/personas'
 import { buildLessonFidelityDirective, policyFromCourse } from '@/lib/course-generation/sourceFidelity'
 import { formatSourceProfileForLessons } from '@/lib/course-generation/sourceProfile'
 import { buildLessonQualityRepairDirective } from '@/lib/topic-pages/lessonQuality'
@@ -22,7 +23,13 @@ import type {
 } from '@/lib/grounding/sourceGrounding'
 import { formatSourceEvidencePackets } from '@/lib/grounding/sourceGrounding'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
-import type { LearningArchitectureBrief } from '@/lib/learning-architecture/analyzePage'
+import type {
+  ConceptDifficulty,
+  ConceptImportance,
+  LearningArchitectureBrief,
+  MisconceptionRisk,
+  ReasoningNeed,
+} from '@/lib/learning-architecture/analyzePage'
 import type { SourceImageAsset } from '@/lib/sources/images'
 import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
 
@@ -85,6 +92,14 @@ export type GeneratedTopicPage = {
   generation_authority?: GenerationAuthorityContract | null
   /** Source figures attached to this page (for inline embeds + the figure rail). */
   figures?: SourceImageAsset[]
+  /** Writer-side judgement after verifying planner recommendations against live context. */
+  concept_importance?: ConceptImportance
+  concept_difficulty?: ConceptDifficulty
+  reasoning_need?: ReasoningNeed
+  teaching_depth?: 1 | 2 | 3 | 4 | 5
+  requires_formal_definition?: boolean
+  misconception_risk?: MisconceptionRisk
+  planner_adjustment_reason?: string
   // Realization-first planning fields (from PDF lesson template)
   page_mode?: 'micro' | 'short' | 'full' | 'critical'
   topic_type?: 'conceptual' | 'technical' | 'mathematical' | 'programming' | 'overview' | 'bridge'
@@ -191,7 +206,13 @@ function formatLearningArchitecture(brief?: LearningArchitectureBrief) {
   ].filter(Boolean)
 
   return [
-    'LEARNING ARCHITECTURE BRIEF:',
+    'LEARNING ARCHITECTURE BRIEF (planner recommendations; verify before writing):',
+    `Recommended concept importance: ${brief.concept_importance}`,
+    `Recommended concept difficulty: ${brief.concept_difficulty}`,
+    `Recommended reasoning need: ${brief.reasoning_need}`,
+    `Recommended teaching depth: ${brief.teaching_depth}/5`,
+    `Recommended formal definition: ${brief.requires_formal_definition}`,
+    `Recommended misconception risk: ${brief.misconception_risk}`,
     `Target understanding: ${brief.target_understanding}`,
     `Success criteria: ${brief.success_criteria.join('; ') || 'none'}`,
     `Why this matters now: ${brief.why_this_matters_now}`,
@@ -255,6 +276,27 @@ function normalizeLessonMarkdown(markdown: string) {
     })
     .filter(Boolean)
     .join('\n\n')
+}
+
+function normalizeImportance(value: unknown, fallback: ConceptImportance = 'important'): ConceptImportance {
+  if (
+    value === 'critical' ||
+    value === 'important' ||
+    value === 'supporting' ||
+    value === 'peripheral'
+  ) return value
+  return fallback
+}
+
+function normalizeReasoningNeed(value: unknown, fallback: ReasoningNeed = 'medium'): ReasoningNeed {
+  if (value === 'low' || value === 'medium' || value === 'high') return value
+  return fallback
+}
+
+function normalizeTeachingDepth(value: unknown, fallback: 1 | 2 | 3 | 4 | 5 = 3): 1 | 2 | 3 | 4 | 5 {
+  const depth = Math.round(Number(value))
+  if (depth >= 1 && depth <= 5) return depth as 1 | 2 | 3 | 4 | 5
+  return fallback
 }
 
 function isFillerOptionalSection(content: string) {
@@ -435,6 +477,13 @@ function parseStructuredResponse(
   if (!assessRaw) return null
 
   const meta = parseAIJson<{
+    concept_importance?: ConceptImportance
+    concept_difficulty?: ConceptDifficulty
+    reasoning_need?: ReasoningNeed
+    teaching_depth?: 1 | 2 | 3 | 4 | 5
+    requires_formal_definition?: boolean
+    misconception_risk?: MisconceptionRisk
+    planner_adjustment_reason?: string
     topic_depth?: TopicDepth
     concept_kind?: ConceptKind
     focus?: string
@@ -500,6 +549,13 @@ function parseStructuredResponse(
       reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
       example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
       sections: [],
+      concept_importance: normalizeImportance(meta.concept_importance),
+      concept_difficulty: normalizeReasoningNeed(meta.concept_difficulty),
+      reasoning_need: normalizeReasoningNeed(meta.reasoning_need),
+      teaching_depth: normalizeTeachingDepth(meta.teaching_depth),
+      requires_formal_definition: Boolean(meta.requires_formal_definition),
+      misconception_risk: normalizeReasoningNeed(meta.misconception_risk),
+      planner_adjustment_reason: meta.planner_adjustment_reason,
       page_mode: meta.page_mode,
       topic_type: meta.topic_type,
       core_realization: meta.core_realization,
@@ -531,6 +587,13 @@ function parseStructuredResponse(
     reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
     example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
     sections,
+    concept_importance: normalizeImportance(meta.concept_importance),
+    concept_difficulty: normalizeReasoningNeed(meta.concept_difficulty),
+    reasoning_need: normalizeReasoningNeed(meta.reasoning_need),
+    teaching_depth: normalizeTeachingDepth(meta.teaching_depth),
+    requires_formal_definition: Boolean(meta.requires_formal_definition),
+    misconception_risk: normalizeReasoningNeed(meta.misconception_risk),
+    planner_adjustment_reason: meta.planner_adjustment_reason,
     page_mode: meta.page_mode,
     topic_type: meta.topic_type,
     core_realization: meta.core_realization,
@@ -611,16 +674,16 @@ const CONCEPT_HEADING_DIRECTIVE = `CONCEPT HEADINGS:
 
 const SIGNAL_DENSITY_DIRECTIVE = `SIGNAL DENSITY CONTRACT:
 - Optimize for Signal > Support > Noise. Signal is the key insight, rule, decision, mechanism, formula, contrast, or action. Support is the minimum context or example needed to understand it. Noise is repetition, throat-clearing, decorative story, generic motivation, and extra wording.
-- Persona-led openings are not noise when they create genuine learning value. A concrete question, tension, story, analogy, or challenge counts as signal/support when it exposes the problem, motivates the mechanism, or gives the learner a usable mental handle.
-- Treat target_words as an upper planning budget, not a goal, but do not confuse density with haste. Give difficult ideas enough explanatory space for motivation, precision, mechanism, and interpretation.
-- Lead with intellectual substance quickly. A persona-appropriate question, consequence, tension, or story may take several paragraphs when each paragraph moves the learner toward the concept.
+- An opening earns its place only when it creates genuine learning value. A concrete tension, example, analogy, or consequence counts as signal/support when it exposes the problem, motivates the mechanism, or gives the learner a usable mental handle.
+- Treat target_words as a teaching budget, not a padding quota. Use the amount needed for motivation, precision, mechanism, example, and interpretation; do not confuse density with haste.
+- Lead with intellectual substance quickly. A consequence, tension, or story may take several paragraphs only when each paragraph moves the learner toward the concept.
 - Use prose for unfolding reasoning and human teaching presence. Use bullets for genuinely parallel facts, numbered lists for procedures, tables for compact comparisons, and callouts for definitions or non-obvious takeaways.
 - Vary paragraph length and rhythm according to the idea. Do not mechanically convert a connected explanation into fragments merely to make it scannable.
 - Develop one strong example far enough to expose the mechanism. Brevity is not a virtue when it removes the mapping, reasoning, or interpretation that makes the example teach.
 - Delete sentences that merely rephrase adjacent sentences, praise the learner, announce the lesson, or explain why the explanation exists. Preserve curiosity, anticipation, emphasis, and voice when they guide attention or deepen understanding.`
 
 const SYSTEM = `You are TruLurn's lesson writer.
-The active teaching persona supplied in the user prompt is the single authority for lesson delivery, explanation shape, pacing, and interaction style.
+Use the minimal teaching-style directive supplied in the user prompt. The generation authority controls locked scope and page boundaries. The learning architecture provides planner recommendations for teaching design; verify them before writing.
 
 ${CONCEPT_HEADING_DIRECTIVE}
 
@@ -628,7 +691,8 @@ ${SIGNAL_DENSITY_DIRECTIVE}
 
 INVARIANTS:
 - The generation authority contract owns scope, page existence, sequence, content kind, focus, and length class. Never override it.
-- The learning architecture owns target understanding, success criteria, representation needs, and cross-page connection.
+- The page objective and source boundary are mandatory, but planner recommendations about importance, difficulty, reasoning need, teaching depth, examples, formalism, and misconception risk are advisory. Check them against the actual source evidence, prior pages, continuation flags, and useful token budget.
+- If the planner overestimates, compress intelligently. If it underestimates, deepen only within the locked page span and soft maximum. Record the adjustment in <assessment>; do not blindly obey the planner.
 - Teach directly and synthesize evidence into a coherent explanation. Never write as a commentator on sources or pages.
 - Sound like an intellectually alive professor, not a compressed reference sheet. Reveal why the idea matters, where the crucial move occurs, and what the learner should notice, while avoiding hype or manufactured enthusiasm.
 - For every substantive named concept, preserve its canonical term, precise definition, and field-appropriate language. Unpack formal language; never replace it with analogy alone.
@@ -636,11 +700,11 @@ INVARIANTS:
 - When the page contract permits a concept or topic to close, important concepts must end with one compact blockquote callout labelled "Remember" or "TL;DR", containing the canonical definition and the few load-bearing points worth retaining. If the explanation continues, defer it. Never label content as exam-ready or interview-ready.
 - Protect the first impression: after the first concept heading, use at most two short opening paragraphs and reach the governing insight or formal definition within roughly 150 words. Do not begin with a list, taxonomy, or wall of setup.
 - Use progressive depth: question or tension first, then a visible definition callout, then connected mechanism and example, then boundaries or optional detail.
-- Be accurate, focused, and complete. Stop when the assigned understanding is fully taught.
+- Be accurate, focused, and complete. Use enough of the planned teaching budget to make the assigned understanding real, then stop before adding repetition or unrelated detail.
 - Preserve continuity: do not re-teach prior material. Use a brief callback, then advance the new idea.
 - Treat planned pages as consecutive physical spans of one textbook manuscript. A page boundary does not create a new lesson, hook, recap, or conclusion.
-- Stay below the locked target_words whenever possible. Slight overflow toward soft_max_words is allowed only to finish a nearly complete concept or worked step.
-- Define technical terms accurately. Use formalism, examples, analogies, code, and active processing only when the persona path or learning architecture calls for them.
+- Treat target_words as the expected teaching budget for this span: write near it when the concept needs development, and under it only when the assigned understanding is genuinely complete. Slight overflow toward soft_max_words is allowed to finish a nearly complete concept or worked step.
+- Define technical terms accurately. Use formalism, examples, analogies, code, and active processing when the source material, assigned objective, or verified planner recommendation genuinely calls for them.
 - Optional sections are false by default. Most pages need zero or one; deep pages may use two when each changes how the learner studies.
 - Use paragraphs for reasoning, bullets for parallel items, numbered lists for procedures, and tables only for compact comparisons.
 - Use $...$ for inline math and standalone $$ blocks for display math. Never mix prose with $$ on the same line.
@@ -661,13 +725,13 @@ wording, examples, representation, optional sections, and tone. Never expand cur
 scope, add pages, skip a planned page, or change its content kind or length class.
 
 LEARNING ARCHITECTURE:
-- When a Learning Architecture Brief is supplied, follow it as the teaching design.
+- When a Learning Architecture Brief is supplied, treat it as the planner's teaching recommendation and verify it against the live page context.
 - Do not invent a different page role, example strategy, or learning objective.
 - The page should create the stated target understanding and satisfy the success criteria.
 - Use the suggested intuition before formalism unless the page role is review or practice.
 - If active-processing prompts are supplied, include them naturally in <checkpoints> or in the closing part of <core>.
-- If the brief says a worked example is needed, include a real worked example.
-- If the brief names misconception risks, address the specific risk without turning every page into a misconception page.
+- If the brief recommends a worked example, include a real worked example when it materially improves this page.
+- If the brief names misconception risks, address the specific risk when it is relevant to this span without turning every page into a misconception page.
 
 TONE & VOICE — smart tutor, not a textbook:
 The page should feel like a smart tutor explaining the exact idea the learner needs — not an AI summarizing notes, not a professor listing facts, not an encyclopedia entry.
@@ -758,8 +822,8 @@ ANTI-PATTERNS (hard bans — these are how pages fail):
 • Cold academic tone: don't list facts like a professor. Guide the learner through a thought process.
 
 ANTI-PADDING RULES (non-negotiable — a padded page is a failed page):
-- estimated_length is a CEILING, never a target. When the concept is fully taught in fewer words, stop. A tight half-page beats a comfortable full page every time.
-- target_words is also a CEILING, not a quota. The preferred page is dense and scannable, not long.
+- estimated_length sets the expected scale of teaching. When the concept is fully taught in fewer words, stop; when it needs the planned space, use it.
+- target_words is a teaching budget, not a quota. The preferred page is complete, focused, and readable: dense enough to respect time, generous enough to actually teach.
 - Keep useful information per line high: key insight first, minimum support second, no ornamental prose.
 - Never open with throat-clearing: no "In this page, we will...", "Welcome back", "Before we dive in", or restating the page focus as prose.
 - Never manufacture a hook. Avoid "Suppose you want to...", "Imagine...", "Have you ever wondered...", and other canned setups unless the scenario itself exposes a non-obvious property of the concept.
@@ -1022,6 +1086,13 @@ Return in this EXACT format. Only <assessment> and <core> are always required.
 
 <assessment>
 {
+  "concept_importance": "critical|important|supporting|peripheral",
+  "concept_difficulty": "low|medium|high",
+  "reasoning_need": "low|medium|high",
+  "teaching_depth": 1,
+  "requires_formal_definition": true,
+  "misconception_risk": "low|medium|high",
+  "planner_adjustment_reason": "accepted planner recommendation | compressed because... | deepened because...",
   "page_mode": "${authority.sequence.page_mode}",
   "topic_type": "conceptual|technical|mathematical|programming|overview|bridge",
   "core_realization": ${JSON.stringify(authority.objective.target_understanding)},
@@ -1062,7 +1133,7 @@ RULES:
 - Always include <core>. This page already passed planning and must be written.
 - This is a physical manuscript span from "${authority.sequence.start_boundary}" to "${authority.sequence.end_boundary}".
 - Cover these concepts in order as space permits: ${authority.sequence.concepts.join('; ')}.
-- Treat ${authority.sequence.target_words} words as an upper budget, not a target. Use fewer words when the assigned understanding is complete. Do not exceed ${authority.sequence.soft_max_words} words unless required to avoid an obviously broken final sentence.
+- Treat ${authority.sequence.target_words} words as the expected teaching budget for this span. Use fewer only when the assigned understanding is genuinely complete. Do not exceed ${authority.sequence.soft_max_words} words unless required to finish a nearly complete thought.
 - Continues from previous: ${authority.sequence.continues_from_previous}. Continues to next: ${authority.sequence.continues_to_next}.
 - ${authority.sequence.continues_from_previous
     ? 'Begin directly from the preceding explanation. Do not restart, reframe, or announce a continuation.'
@@ -1072,9 +1143,9 @@ RULES:
     : 'Complete and close the topic naturally after the assigned material is finished.'}
 - If one concept finishes with useful room remaining, begin the next planned concept on this same page.
 - If content_kind is section, bridge, or example, keep <core> concise and do not pad to look like a full lesson.
-- The page must visibly support target_understanding, why_this_matters_now, intuition_plan, and cross_page_connection from the brief.
-- If the brief requires a worked example, include an inline example or <examples>.
-- If the brief has active_processing prompts, include them as <checkpoints> when appropriate or weave them into <core>.
+- The page must reach the target_understanding inside the locked span. Treat other brief fields as planner recommendations: verify them against source evidence, prior pages, continuation flags, and useful token budget before following them.
+- If the brief recommends a worked example, include one only when it materially improves this page; otherwise explain the compression in planner_adjustment_reason.
+- If the brief has active_processing prompts, include them as <checkpoints> when appropriate or weave them into <core>; skip if they would create token-heavy repetition.
 - Default to no optional sections. Include a separate optional section only when it changes how the learner studies the page.
 - Do not include more than one of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a medium page.
 - Do not include more than two of <key_ideas>, <examples>, <misconceptions>, and <checkpoints> on a deep page.
@@ -1257,7 +1328,7 @@ PHYSICAL PAGE CONTRACT:
 - This span begins at: ${authority.sequence.start_boundary}
 - It should reach: ${authority.sequence.end_boundary}
 - Planned concepts in order: ${authority.sequence.concepts.join('; ')}
-- Treat ${authority.sequence.target_words} words as an upper budget, not a target; ${authority.sequence.soft_max_words} is the soft maximum.
+- Treat ${authority.sequence.target_words} words as the expected teaching budget for this span; ${authority.sequence.soft_max_words} is the soft maximum.
 - Continues from previous: ${authority.sequence.continues_from_previous}
 - Continues to next: ${authority.sequence.continues_to_next}
 - ${authority.sequence.continues_from_previous
@@ -1269,8 +1340,23 @@ PHYSICAL PAGE CONTRACT:
 - If one concept finishes with useful room remaining, begin the next planned concept on this page.
 - Use the soft overflow only to finish a nearly complete concept, derivation, example, or reasoning step.
 
+WRITER JUDGMENT CONTRACT:
+- Treat the learning architecture's importance, difficulty, reasoning_need, teaching_depth, formal-definition, example, and misconception recommendations as strong advice, not commands.
+- Re-evaluate them against the uploaded/source evidence, prior pages, page boundaries, continuation flags, and learner value.
+- If a recommendation is too heavy for this span, compress it and say why in planner_adjustment_reason.
+- If a recommendation is too light for this span, deepen only inside the locked scope and soft maximum; do not add new curriculum.
+- Protect token usage: spend words on definitions, mechanisms, examples, and bridges that change understanding; cut generic setup, duplicate examples, and decorative detail.
+- In <assessment>, record your final writer judgment after this verification.
+
 <assessment>
 {
+  "concept_importance": "critical|important|supporting|peripheral",
+  "concept_difficulty": "low|medium|high",
+  "reasoning_need": "low|medium|high",
+  "teaching_depth": 1,
+  "requires_formal_definition": true,
+  "misconception_risk": "low|medium|high",
+  "planner_adjustment_reason": "accepted planner recommendation | compressed because... | deepened because...",
   "page_mode": "${authority.sequence.page_mode}",
   "topic_type": "conceptual|technical|mathematical|programming|overview|bridge",
   "core_realization": ${JSON.stringify(authority.objective.target_understanding)},
@@ -1345,6 +1431,146 @@ const COURSE_DEPTH_INSTRUCTIONS: Record<string, string> = {
 // the sections that genuinely serve THIS specific page. Not every section
 // belongs on every page. The order below is the preferred order when sections
 // are included, but selection is always contextual.
+export function selectLessonReasoningEffort(input: {
+  course: any
+  topic?: any
+  authority: GenerationAuthorityContract
+  learningArchitecture?: LearningArchitectureBrief
+  sourceEvidence?: SourceEvidencePacket[]
+  approach?: GenerateTopicPageInput['approach']
+  qualityRepair?: GenerateTopicPageInput['qualityRepair']
+}): AIReasoningEffort {
+  return scoreLessonReasoningEffort(input).effort
+}
+
+export function scoreLessonReasoningEffort(input: {
+  course: any
+  topic?: any
+  authority: GenerationAuthorityContract
+  learningArchitecture?: LearningArchitectureBrief
+  sourceEvidence?: SourceEvidencePacket[]
+  approach?: GenerateTopicPageInput['approach']
+  qualityRepair?: GenerateTopicPageInput['qualityRepair']
+}): { score: number; effort: AIReasoningEffort; reasons: string[] } {
+  const { authority, learningArchitecture } = input
+  const sequence = authority.sequence
+  const reasons: string[] = []
+
+  if (learningArchitecture?.reasoning_need) {
+    const baseScore = learningArchitecture.reasoning_need === 'high'
+      ? 5
+      : learningArchitecture.reasoning_need === 'medium'
+        ? 3
+        : 1
+    let score = baseScore
+    reasons.push(`planner recommended reasoning_need=${learningArchitecture.reasoning_need}`)
+
+    if (input.approach === 'go_deeper' && score < 5) {
+      score += 2
+      reasons.push('go-deeper request')
+    } else if (input.approach === 'simplify' && score > 1) {
+      score -= 1
+      reasons.push('simplify request')
+    }
+    if (input.qualityRepair && score < 5) {
+      score += 1
+      reasons.push('quality repair')
+    }
+
+    const effort = score >= 5 ? 'high' : score >= 3 ? 'medium' : 'low'
+    return { score, effort, reasons }
+  }
+
+  if (
+    sequence.content_kind !== 'full_page'
+    && !input.qualityRepair
+    && input.approach !== 'go_deeper'
+  ) {
+    return { score: 0, effort: 'low', reasons: ['non-full lesson span'] }
+  }
+
+  let score = 0
+
+  if (sequence.page_mode === 'critical') {
+    score += 2
+    reasons.push('critical page mode')
+  } else if (sequence.page_mode === 'full') {
+    score += 1
+    reasons.push('full page mode')
+  }
+
+  if (sequence.target_length === 'long') {
+    score += 2
+    reasons.push('long target length')
+  } else if (sequence.target_length === 'medium') {
+    score += 1
+    reasons.push('medium target length')
+  }
+
+  if (String(input.course?.mode ?? '') === 'source_grounded') {
+    score += 1
+    reasons.push('source-grounded course')
+  }
+  if ((input.sourceEvidence?.length ?? 0) >= 2) {
+    score += 1
+    reasons.push('multiple source evidence packets')
+  }
+  if (String(input.course?.course_depth ?? '') === 'high') {
+    score += 1
+    reasons.push('high course depth')
+  }
+  if (String(input.topic?.depth ?? '') === 'deep') {
+    score += 1
+    reasons.push('deep topic label')
+  }
+  if (input.qualityRepair) {
+    score += 1
+    reasons.push('quality repair')
+  }
+
+  if (input.approach === 'go_deeper') {
+    score += 2
+    reasons.push('go-deeper request')
+  } else if (input.approach === 'show_example') {
+    score += 1
+    reasons.push('example-first request')
+  } else if (input.approach === 'simplify') {
+    score -= 1
+    reasons.push('simplify request')
+  }
+
+  if (learningArchitecture?.example_strategy?.worked_example_needed) {
+    score += 1
+    reasons.push('worked example needed')
+  }
+  if (learningArchitecture?.likely_misconceptions?.length) {
+    score += 1
+    reasons.push('misconception risk')
+  }
+  if ((learningArchitecture?.success_criteria?.length ?? 0) >= 3) {
+    score += 1
+    reasons.push('multiple success criteria')
+  }
+  if (
+    learningArchitecture?.representation_plan?.some((item) =>
+      /math|formula|derivation|proof|code|algorithm|chart|diagram|table|formal/i.test(item),
+    )
+  ) {
+    score += 1
+    reasons.push('formal or structured representation')
+  }
+  if (
+    learningArchitecture?.active_processing?.self_explanation_prompt
+    || learningArchitecture?.active_processing?.transfer_prompt
+  ) {
+    score += 1
+    reasons.push('active reasoning prompt')
+  }
+
+  const effort = score >= 5 ? 'high' : score >= 2 ? 'medium' : 'low'
+  return { score, effort, reasons: reasons.length ? reasons : ['legacy fallback metadata'] }
+}
+
 function legacyKnowledgeLevelDirective(level: string): string {
   if (level === 'beginner') {
     return `STUDENT KNOWLEDGE LEVEL: Beginner
@@ -1669,8 +1895,7 @@ export async function generateTopicPage({
     course.learner_audience ?? course.learner_persona,
     course.goals,
   )}\n`
-  const personaBlock = `\n${buildPersonaDirective({
-    persona: resolveCourseTeachingPersona(course),
+  const teachingBlock = `\n${buildPersonaDirective({
     surface: 'lesson',
     lesson: {
       contentKind: authority.sequence.content_kind,
@@ -1773,7 +1998,7 @@ ${availableFigures.map((figure, index) => {
   // it upward — this is what keeps small topics small.
   const authorityBlock = `\n${formatGenerationAuthority(authority)}\n`
 
-  const user = [authorityBlock, personaBlock, courseSkillBlock, audienceBlock, depthBlock, codeBlock, knowledgeBlock, purposeBlock, instructorBlock, learnerStateBlock, approachBlock, customBlock, figuresBlock, figureTeachingContract, USER_TEMPLATE({
+  const user = [authorityBlock, teachingBlock, courseSkillBlock, audienceBlock, depthBlock, codeBlock, knowledgeBlock, purposeBlock, instructorBlock, learnerStateBlock, approachBlock, customBlock, figuresBlock, figureTeachingContract, USER_TEMPLATE({
     courseTitle: course.title ?? course.topic,
     courseGoal: course.goals ?? 'Master the subject clearly enough to explain and apply it.',
     topicTitle: topic.title,
@@ -1794,11 +2019,22 @@ ${availableFigures.map((figure, index) => {
     authority,
   }), qualityRepairBlock].filter(Boolean).join('')
 
+  const reasoningEffort = selectLessonReasoningEffort({
+    course,
+    topic,
+    authority,
+    learningArchitecture,
+    sourceEvidence,
+    approach,
+    qualityRepair,
+  })
+
   let text = await generateAI({
     feature: 'topic_page_generation',
     system: SYSTEM,
     user,
     responseMimeType: 'text/plain',
+    reasoningEffort,
   })
 
   if (
@@ -1816,6 +2052,7 @@ The previous draft omitted every selected source figure. Rewrite the complete re
 PREVIOUS DRAFT:
 ${clip(text, 14_000)}`,
       responseMimeType: 'text/plain',
+      reasoningEffort: reasoningEffort === 'high' ? 'high' : 'medium',
     })
   }
 
@@ -1897,5 +2134,12 @@ export function buildPageDocument(input: {
     generation_authority: input.page.generation_authority ?? null,
     created_at: new Date(),
     updated_at: new Date(),
+    concept_importance: input.page.concept_importance ?? null,
+    concept_difficulty: input.page.concept_difficulty ?? null,
+    reasoning_need: input.page.reasoning_need ?? null,
+    teaching_depth: input.page.teaching_depth ?? null,
+    requires_formal_definition: input.page.requires_formal_definition ?? null,
+    misconception_risk: input.page.misconception_risk ?? null,
+    planner_adjustment_reason: input.page.planner_adjustment_reason ?? null,
   }
 }

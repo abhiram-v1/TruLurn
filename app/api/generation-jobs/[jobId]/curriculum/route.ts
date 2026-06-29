@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
-import { enforceSourceGroundedCurriculum } from '@/lib/course-generation/sourceCurriculumIntegrity'
+import { finalizeCurriculum } from '@/lib/course-generation/curriculumOrchestration'
 
 // Save the (optionally edited) curriculum the user reviewed and approve it, so the
 // generation worker resumes from the curriculum-preview gate and builds the rest of
@@ -35,12 +35,7 @@ export async function POST(
     const candidate = edited && Array.isArray(edited.branches) && edited.branches.length > 0
       ? edited
       : job.curriculum
-    const curriculum = job.input?.mode === 'source_grounded'
-      ? enforceSourceGroundedCurriculum(candidate, {
-          sourceText: job.input?.sourceText,
-          sourceProfile: job.input?.sourceProfile,
-        })
-      : candidate
+    const curriculum = job.input ? finalizeCurriculum(candidate, job.input) : candidate
 
     const update: Record<string, unknown> = {
       curriculum_approved: true,

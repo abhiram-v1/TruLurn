@@ -2,8 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { buildGraphSourceEvidencePackets } from './evidence.ts'
 import { runGraphGeneration, type GraphGenerationExecutor } from './orchestrate.ts'
-import { buildGraphGenerationPrompt } from './prompt.ts'
-import { GraphGenerationError } from './types.ts'
+import { buildGraphEdgeStagePrompt, buildGraphNodeStagePrompt } from './prompt.ts'
+import { GRAPH_GENERATION_MODEL, GraphGenerationError } from './types.ts'
 import { validateGeneratedCourseGraph } from './validate.ts'
 
 function topic(id: string, title: string, sourceAnchor?: string) {
@@ -128,6 +128,44 @@ function graph(sourceBased = false) {
   }
 }
 
+// A single mapped graph topic, as the node stage emits it (state is added later
+// by the orchestrator during assembly, so it is intentionally omitted here).
+function graphNode(id: string, title: string, branchId: string, extra: Record<string, unknown> = {}) {
+  return {
+    id,
+    branch_id: branchId,
+    section: 'Foundations',
+    title,
+    position: 0,
+    parent_id: null,
+    path_ids: [id],
+    path_titles: [title],
+    depth_level: 0,
+    node_type: 'learning_unit',
+    is_leaf: true,
+    children_count: 0,
+    learning_depth: 'standard',
+    sequence_index: 0,
+    recommended_next_ids: [],
+    importance: 'core',
+    role: 'foundation',
+    spine_candidate: false,
+    spine_level: 0,
+    prerequisite_strength: {},
+    is_optional: false,
+    covered_by_node_id: null,
+    prerequisites: [],
+    depth: 'medium',
+    estimated_pages: 2,
+    source_refs: [],
+    ...extra,
+  }
+}
+
+function branchOf(user: string) {
+  return user.match(/Branch to map: \[([^\]]+)\]/)?.[1] ?? null
+}
+
 const sourceText = `Source 1: alpha.md
 # Alpha
 Alpha is the starting concept. It establishes the vocabulary and basic mechanism.
@@ -149,19 +187,34 @@ test('source evidence includes every source and bounded topic excerpts', () => {
   assert.ok(excerpts.reduce((sum, excerpt) => sum + excerpt.text.length, 0) <= 40_000)
 })
 
-test('graph prompt encodes the five-stage mapper and strict source boundary', () => {
-  const packets = buildGraphSourceEvidencePackets(curriculum(true), sourceText)
-  const prompt = buildGraphGenerationPrompt({
-    curriculum: curriculum(true),
-    mode: 'source_grounded',
-    sourceText,
-    sourceEvidencePackets: packets,
+test('node-stage prompt scopes to one branch and carries prior-branch context', () => {
+  const prompt = buildGraphNodeStagePrompt({
+    mode: 'ai_teacher',
+    branch: { id: 'core', title: 'Core', description: 'Core ideas' },
+    branchTopics: [
+      { id: 'b', title: 'Beta' } as any,
+    ],
+    priorNodes: [{ id: 'a', title: 'Alpha', branch_id: 'intro' }],
   })
-  assert.match(prompt.system, /1\. CONCEPT EXTRACTION/)
-  assert.match(prompt.system, /5\. GRAPH OUTPUT/)
-  assert.match(prompt.system, /Never invent, omit, rename, merge, or split/)
-  assert.match(prompt.user, /100% of graph nodes/)
-  assert.match(prompt.user, /Preserve uploaded source order/)
+  assert.match(prompt.system, /curriculum mapper, never a curriculum creator/)
+  assert.match(prompt.user, /map ONE branch/)
+  assert.match(prompt.user, /Branch to map: \[core\]/)
+  assert.match(prompt.user, /already mapped in earlier branches/)
+  assert.ok(prompt.user.includes('"a"'))
+  assert.equal(prompt.responseSchema.name, 'trulurn_graph_nodes_v2')
+})
+
+test('edge-stage prompt fixes the node set and emits only edges', () => {
+  const packets = buildGraphSourceEvidencePackets(curriculum(true), sourceText)
+  const prompt = buildGraphEdgeStagePrompt({
+    mode: 'source_grounded',
+    nodes: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')],
+    sourcePackets: packets,
+  })
+  assert.match(prompt.user, /Final step: connect the already-mapped nodes/)
+  assert.match(prompt.user, /structural_edges/)
+  assert.match(prompt.user, /SOURCE-GROUNDED EDGE RULES/)
+  assert.equal(prompt.responseSchema.name, 'trulurn_graph_edges_v2')
 })
 
 test('accepts a complete AI-generated graph contract', () => {
@@ -273,31 +326,154 @@ test('rejects excessive hard prerequisite fan-in', () => {
   assert.ok(report.issues.some((issue) => issue.code === 'excessive_hard_fan_in'))
 })
 
-test('repairs an invalid first candidate using Gemini-only graph requests', async () => {
-  const requests: Array<{ feature: string; user: string }> = []
-  const outputs = [JSON.stringify({ branches: [], topics: [], structural_edges: [] }), JSON.stringify(graph())]
+// Stage discriminator: the node stage and edge stage carry different schemas.
+function isNodeStage(request: { responseSchema: { name: string } }) {
+  return request.responseSchema.name === 'trulurn_graph_nodes_v2'
+}
+
+test('maps nodes per branch, then edges, assembling a valid graph', async () => {
+  const stages: string[] = []
   const executor: GraphGenerationExecutor = async (request) => {
-    requests.push({ feature: request.feature, user: request.user })
-    return { text: outputs.shift()!, provider: 'gemini', model: 'gemini-3.1-pro-preview' }
+    stages.push(isNodeStage(request) ? 'node' : 'edge')
+    const text = isNodeStage(request)
+      ? JSON.stringify({ topics: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')] })
+      : JSON.stringify({
+          structural_edges: [{
+            from_topic_id: 'a',
+            to_topic_id: 'b',
+            edge_type: 'recommended',
+            reason: 'Alpha before Beta.',
+            source_refs: [],
+          }],
+        })
+    return { text, provider: 'gemini', model: GRAPH_GENERATION_MODEL }
   }
 
-  const result = await runGraphGeneration(
-    { curriculum: curriculum(), mode: 'ai_teacher' },
-    executor,
-  )
-  assert.equal(result.provenance.attempts, 2)
-  assert.equal(result.provenance.provider, 'gemini')
-  assert.equal(result.provenance.model, 'gemini-3.1-pro-preview')
-  assert.ok(requests.every((request) => request.feature === 'graph_generation'))
-  assert.match(requests[1].user, /failed deterministic validation/)
+  const result = await runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor)
+  assert.equal(result.provenance.attempts, 1)
+  assert.equal(result.provenance.model, GRAPH_GENERATION_MODEL)
+  assert.deepEqual(stages, ['node', 'edge'])
+  assert.equal(result.map.validation_report && (result.map.validation_report as any).valid, true)
+  // Exactly one teachable leaf is promoted to active during code assembly.
+  const active = result.map.topics.filter((topic: any) => topic.state === 'active')
+  assert.equal(active.length, 1)
+  assert.equal(active[0].id, 'a')
 })
 
-test('fails after three invalid Gemini attempts with a resumable error code', async () => {
+function twoBranchCurriculum() {
+  return {
+    title: 'Two Branch Course',
+    branches: [
+      { id: 'b1', title: 'First', description: 'First branch', sections: [{ title: 'S', topics: [topic('a', 'Alpha')] }] },
+      { id: 'b2', title: 'Second', description: 'Second branch', sections: [{ title: 'S', topics: [topic('c', 'Gamma')] }] },
+    ],
+  }
+}
+
+test('passes earlier branches\' mapped nodes as context to later branch steps', async () => {
+  const nodeUserPrompts: Record<string, string> = {}
+  const executor: GraphGenerationExecutor = async (request) => {
+    if (isNodeStage(request)) {
+      const id = branchOf(request.user)!
+      nodeUserPrompts[id] = request.user
+      const nodeId = id === 'b1' ? 'a' : 'c'
+      const title = id === 'b1' ? 'Alpha' : 'Gamma'
+      return { text: JSON.stringify({ topics: [graphNode(nodeId, title, id)] }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+    }
+    return {
+      text: JSON.stringify({
+        structural_edges: [{ from_topic_id: 'a', to_topic_id: 'c', edge_type: 'recommended', reason: 'Alpha before Gamma.', source_refs: [] }],
+      }),
+      provider: 'gemini',
+      model: GRAPH_GENERATION_MODEL,
+    }
+  }
+
+  const result = await runGraphGeneration({ curriculum: twoBranchCurriculum(), mode: 'ai_teacher' }, executor)
+  assert.equal((result.map.validation_report as any).valid, true)
+  // First branch sees no prior nodes; the second branch sees the first's node id.
+  assert.match(nodeUserPrompts.b1, /None yet — this is the first branch\./)
+  assert.ok(nodeUserPrompts.b2.includes('"a"'))
+})
+
+test('retries the original step prompt — not a fake repair — after a timeout', async () => {
+  const nodeUsers: string[] = []
+  let nodeCalls = 0
+  const executor: GraphGenerationExecutor = async (request) => {
+    if (isNodeStage(request)) {
+      nodeCalls += 1
+      nodeUsers.push(request.user)
+      if (nodeCalls < 2) throw new Error('AI request timed out after 180000ms')
+      return { text: JSON.stringify({ topics: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')] }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+    }
+    return {
+      text: JSON.stringify({ structural_edges: [{ from_topic_id: 'a', to_topic_id: 'b', edge_type: 'recommended', reason: 'Order.', source_refs: [] }] }),
+      provider: 'gemini',
+      model: GRAPH_GENERATION_MODEL,
+    }
+  }
+
+  const result = await runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor)
+  assert.equal((result.map.validation_report as any).valid, true)
+  assert.equal(nodeCalls, 2)
+  // The retry after a timeout reuses the original prompt, not a "fix this" prompt.
+  assert.equal(nodeUsers[0], nodeUsers[1])
+  assert.ok(!nodeUsers[1].includes('failed deterministic validation'))
+})
+
+test('repairs a branch step that returns the wrong node set, with a correction note', async () => {
+  const nodeUsers: string[] = []
+  let nodeCalls = 0
+  const executor: GraphGenerationExecutor = async (request) => {
+    if (isNodeStage(request)) {
+      nodeCalls += 1
+      nodeUsers.push(request.user)
+      // First attempt drops a required node; second returns the full set.
+      const topics = nodeCalls < 2
+        ? [graphNode('a', 'Alpha', 'core')]
+        : [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')]
+      return { text: JSON.stringify({ topics }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+    }
+    return {
+      text: JSON.stringify({ structural_edges: [{ from_topic_id: 'a', to_topic_id: 'b', edge_type: 'recommended', reason: 'Order.', source_refs: [] }] }),
+      provider: 'gemini',
+      model: GRAPH_GENERATION_MODEL,
+    }
+  }
+
+  const result = await runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor)
+  assert.equal((result.map.validation_report as any).valid, true)
+  assert.equal(nodeCalls, 2)
+  assert.match(nodeUsers[1], /failed deterministic validation/)
+})
+
+test('repairs across a second round when the first edge step leaves orphans', async () => {
+  let edgeCalls = 0
+  const executor: GraphGenerationExecutor = async (request) => {
+    if (isNodeStage(request)) {
+      return { text: JSON.stringify({ topics: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')] }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+    }
+    edgeCalls += 1
+    // First edge response connects nothing, leaving both topics orphaned; the
+    // second round supplies a real edge.
+    const structural_edges = edgeCalls < 2
+      ? []
+      : [{ from_topic_id: 'a', to_topic_id: 'b', edge_type: 'recommended', reason: 'Order.', source_refs: [] }]
+    return { text: JSON.stringify({ structural_edges }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+  }
+
+  const result = await runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor)
+  assert.equal((result.map.validation_report as any).valid, true)
+  assert.equal(result.provenance.attempts, 2)
+  assert.equal(edgeCalls, 2)
+})
+
+test('fails with a resumable error after exhausting a step\'s attempts', async () => {
   let calls = 0
   const executor: GraphGenerationExecutor = async (request) => {
     calls += 1
-    assert.equal(request.feature, 'graph_generation')
-    return { text: 'not-json', provider: 'gemini', model: 'gemini-3.1-pro-preview' }
+    // Node step never returns the required node set.
+    return { text: JSON.stringify({ topics: [] }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
   }
 
   await assert.rejects(
@@ -316,18 +492,38 @@ test('rejects any executor result that violates fixed Gemini ownership', async (
   let calls = 0
   const executor: GraphGenerationExecutor = async () => {
     calls += 1
-    return { text: JSON.stringify(graph()), provider: 'openai', model: 'gpt-5.4-mini' }
+    return { text: JSON.stringify({ topics: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')] }), provider: 'openai', model: 'gpt-5.4-mini' }
   }
 
   await assert.rejects(
     runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor),
     (error: unknown) => {
       assert.ok(error instanceof GraphGenerationError)
-      assert.match(error.message, /gemini-3\.1-pro-preview/)
+      assert.match(error.message, /gemini-3\.1-flash-lite/)
       return true
     },
   )
+  // Three attempts on the first (node) step, then it gives up before reaching edges.
   assert.equal(calls, 3)
+})
+
+test('passes a graph-specific timeout override to every step', async () => {
+  const timeouts: Array<number | undefined> = []
+  const executor: GraphGenerationExecutor = async (request) => {
+    timeouts.push(request.timeoutMs)
+    if (isNodeStage(request)) {
+      return { text: JSON.stringify({ topics: [graphNode('a', 'Alpha', 'core'), graphNode('b', 'Beta', 'core')] }), provider: 'gemini', model: GRAPH_GENERATION_MODEL }
+    }
+    return {
+      text: JSON.stringify({ structural_edges: [{ from_topic_id: 'a', to_topic_id: 'b', edge_type: 'recommended', reason: 'Order.', source_refs: [] }] }),
+      provider: 'gemini',
+      model: GRAPH_GENERATION_MODEL,
+    }
+  }
+
+  await runGraphGeneration({ curriculum: curriculum(), mode: 'ai_teacher' }, executor)
+  assert.ok(timeouts.length >= 2)
+  assert.ok(timeouts.every((value) => typeof value === 'number' && value! >= 120_000))
 })
 
 test('does not retry an aborted graph request', async () => {

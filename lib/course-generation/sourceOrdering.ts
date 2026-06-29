@@ -1,5 +1,6 @@
 import { generateAIResult, parseAIJson, type AIProviderName } from '@/lib/ai'
 import type { CourseGenerationInput } from '@/lib/course-generation/input'
+import { deriveDeterministicOrder } from '@/lib/course-generation/sourceOrderingHeuristics'
 
 type SourceBlock = {
   index: number
@@ -166,6 +167,23 @@ export async function orderSourceGroundedInput<T extends CourseGenerationInput>(
   if (blocks.length <= 1) return input
 
   const fallbackOrder = blocks.map((block) => block.index)
+
+  // Prefer deterministic ordering from explicit sequence numbers; only call the
+  // ordering model when the order is genuinely ambiguous.
+  const deterministicOrder = deriveDeterministicOrder(blocks)
+  if (deterministicOrder) {
+    const orderedBlocks = orderBlocks(blocks, deterministicOrder)
+    return {
+      ...input,
+      sourceText: orderedBlocks.map((block) => block.raw).join('\n\n---\n\n'),
+      sourceOrderAnalysis: [
+        `Deterministic source order from explicit sequence numbers: ${
+          orderedBlocks.map((block) => `Source ${block.index}: ${block.title}`).join(' -> ')
+        }`,
+        'No ordering model call was needed.',
+      ].join('\n'),
+    }
+  }
 
   const { report, order, errors } = await inferOrder(input, blocks)
   if (report && order) {

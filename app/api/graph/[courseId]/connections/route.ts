@@ -62,16 +62,33 @@ export async function POST(
     }
 
     const id = crypto.randomUUID()
-    await db.collection('userConnections').insertOne({
-      _id: id as any,
-      user_id: userId,
-      course_id: courseId,
-      from_topic_id: a,
-      to_topic_id: b,
-      note,
-      created_at: new Date(),
-      updated_at: new Date(),
-    })
+    try {
+      await db.collection('userConnections').insertOne({
+        _id: id as any,
+        user_id: userId,
+        course_id: courseId,
+        from_topic_id: a,
+        to_topic_id: b,
+        note,
+        created_at: new Date(),
+        updated_at: new Date(),
+      })
+    } catch (error) {
+      // The findOne check above and this insert are not atomic — a second
+      // concurrent request for the same pair (double-click, two tabs) can
+      // both pass the check before either inserts. The unique index on
+      // (user_id, course_id, from_topic_id, to_topic_id) is the real
+      // guarantee against a duplicate; this just makes the losing request's
+      // response match the graceful "already exists" path instead of a raw
+      // 500 from the driver's duplicate-key error (code 11000).
+      if ((error as { code?: number })?.code === 11000) {
+        const raceWinner = await db.collection('userConnections').findOne({
+          user_id: userId, course_id: courseId, from_topic_id: a, to_topic_id: b,
+        })
+        if (raceWinner) return NextResponse.json({ id: String(raceWinner._id), alreadyExists: true })
+      }
+      throw error
+    }
 
     // New personal-graph edge — refresh the cached graph payload.
     invalidateCourse(courseId)

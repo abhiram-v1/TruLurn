@@ -1,17 +1,20 @@
 import type { SourceTeachingProfile } from './sourceProfile'
+import {
+  deriveSourceAnchor,
+  indexCompactSections,
+  type CompactCurriculumSource,
+} from './sourceCompaction.ts'
 
 export type SourceCurriculumIssueCode =
   | 'missing_curriculum'
   | 'missing_topics'
   | 'duplicate_topic_id'
-  | 'missing_source_anchor'
-  | 'invalid_source_reference'
-  | 'missing_anchor_locator'
-  | 'unsupported_anchor_locator'
+  | 'missing_source_refs'
+  | 'invalid_source_ref'
   | 'topic_not_supported_by_source'
-  | 'noncovered_topic'
   | 'invalid_concept_group'
   | 'invalid_source_sequence_policy'
+  | 'source_order_violation'
   | 'out_of_scope_promoted'
   | 'excessive_root_topics'
   | 'excessive_total_topics'
@@ -42,6 +45,7 @@ export type SourceCurriculumValidationReport = {
 type ValidationOptions = {
   sourceText?: string
   sourceProfile?: any | null
+  compactCurriculumSource?: CompactCurriculumSource | null
 }
 
 type SourceDocument = {
@@ -60,6 +64,21 @@ const CONCEPT_GROUPS = new Set(['prequel', 'current', 'sequel'])
 const SOURCE_SEQUENCE_POLICIES = new Set([
   'preserve_uploaded_source_order',
   'conceptual_reorder_allowed',
+])
+const DEFAULT_SOURCE_SEQUENCE_POLICY = 'preserve_uploaded_source_order'
+const MECHANICAL_ISSUE_CODES = new Set<SourceCurriculumIssueCode>([
+  'duplicate_topic_id',
+  'invalid_concept_group',
+  'invalid_source_sequence_policy',
+])
+const SUBSTANTIVE_ISSUE_CODES = new Set<SourceCurriculumIssueCode>([
+  'missing_source_refs',
+  'invalid_source_ref',
+  'topic_not_supported_by_source',
+  'out_of_scope_promoted',
+  'source_order_violation',
+  'excessive_root_topics',
+  'excessive_total_topics',
 ])
 const TITLE_STOP_WORDS = new Set([
   'about', 'and', 'basics', 'core', 'for', 'from', 'how', 'introduction',
@@ -101,6 +120,14 @@ const UNRECOVERABLE_CODES = new Set<SourceCurriculumIssueCode>([
   'missing_curriculum',
   'missing_topics',
 ])
+
+export function classifySourceCurriculumIssues(issues: SourceCurriculumIssue[]) {
+  return {
+    mechanical: issues.filter((issue) => MECHANICAL_ISSUE_CODES.has(issue.code)),
+    substantive: issues.filter((issue) => SUBSTANTIVE_ISSUE_CODES.has(issue.code)),
+    irrecoverable: issues.filter((issue) => UNRECOVERABLE_CODES.has(issue.code)),
+  }
+}
 
 // ── Tree-mutation helpers ─────────────────────────────────────────────────────
 
@@ -195,10 +222,9 @@ function deduplicateTopicIds(curriculum: any): SourceCurriculumRepairEntry[] {
  * Repair actions (in order):
  *   duplicate_topic_id          → rename duplicate ids with a numeric suffix
  *   out_of_scope_promoted       → drop the offending topic from the tree
- *   unsupported_anchor_locator  → strip bad locator, keep "Source N"
- *   missing_anchor_locator      → same as above
- *   invalid_source_reference    → reset anchor to "Source 1" (first available)
- *   noncovered_topic            → force source_coverage = 'covered'
+ *   missing_source_refs         → drop the topic — no evidence, no fabrication
+ *   invalid_source_ref          → drop only the invalid refs; drop the topic too if none remain
+ *   topic_not_supported_by_source → drop the unsupported topic
  *   invalid_concept_group       → default concept_group = 'current'
  *   invalid_source_sequence_policy → default to 'preserve_uploaded_source_order'
  *   excessive_*                 → accepted silently (not a blocking defect)
@@ -213,7 +239,7 @@ export function repairSourceGroundedCurriculum(
 ): SourceCurriculumRepairReport {
   const repairs: SourceCurriculumRepairEntry[] = []
   const toRemove = new Set<string>()
-  const docs = sourceDocuments(options.sourceText)
+  const sectionIndex = indexCompactSections(options.compactCurriculumSource)
 
   // Fix duplicate IDs first so subsequent findTopicInTree lookups are reliable.
   repairs.push(...deduplicateTopicIds(curriculum))
@@ -224,8 +250,8 @@ export function repairSourceGroundedCurriculum(
 
     // ── Global (non-topic) repairs ──────────────────────────────────────────
     if (code === 'invalid_source_sequence_policy') {
-      curriculum.source_sequence_policy = 'preserve_uploaded_source_order'
-      repairs.push({ ...ctx, code, action: "Defaulted source_sequence_policy to 'preserve_uploaded_source_order'" })
+      curriculum.source_sequence_policy = DEFAULT_SOURCE_SEQUENCE_POLICY
+      repairs.push({ ...ctx, code, action: `Defaulted source_sequence_policy to '${DEFAULT_SOURCE_SEQUENCE_POLICY}'` })
       continue
     }
 
@@ -251,25 +277,29 @@ export function repairSourceGroundedCurriculum(
     const topic = findTopicInTree(curriculum, topicId)
     if (!topic) continue
 
-    if (code === 'unsupported_anchor_locator' || code === 'missing_anchor_locator') {
-      // Keep the source number, strip the invalid locator phrase.
-      const anchor = String(topic.source_anchor ?? '')
-      const match = anchor.match(/\bSource\s+(\d+)\b/i)
-      const sourceNum = match ? match[1] : (docs.length ? '1' : null)
-      topic.source_anchor = sourceNum ? `Source ${sourceNum}` : ''
-      repairs.push({ ...ctx, code, action: `Reset anchor to "${topic.source_anchor}" (invalid locator removed)` })
+    if (code === 'missing_source_refs') {
+      // No evidence cited at all — remove rather than fabricate an anchor.
+      toRemove.add(topicId)
+      repairs.push({ ...ctx, code, action: `Dropped topic "${topicTitle}" — cites no source evidence` })
       continue
     }
 
-    if (code === 'invalid_source_reference') {
-      topic.source_anchor = docs.length ? `Source 1` : ''
-      repairs.push({ ...ctx, code, action: `Reset source anchor to first available source` })
+    if (code === 'invalid_source_ref') {
+      const refs = Array.isArray(topic.source_refs) ? topic.source_refs : []
+      const validRefs = refs.filter((ref: unknown) => sectionIndex.has(String(ref)))
+      topic.source_refs = validRefs
+      if (validRefs.length) {
+        repairs.push({ ...ctx, code, action: `Removed unsupported source reference(s) from "${topicTitle}"` })
+      } else {
+        toRemove.add(topicId)
+        repairs.push({ ...ctx, code, action: `Dropped topic "${topicTitle}" — no cited evidence resolved to real source material` })
+      }
       continue
     }
 
-    if (code === 'noncovered_topic') {
-      topic.source_coverage = 'covered'
-      repairs.push({ ...ctx, code, action: `Forced source_coverage to 'covered'` })
+    if (code === 'topic_not_supported_by_source') {
+      toRemove.add(topicId)
+      repairs.push({ ...ctx, code, action: `Dropped topic "${topicTitle}" — cited evidence does not support it` })
       continue
     }
 
@@ -286,6 +316,18 @@ export function repairSourceGroundedCurriculum(
   }
 
   return { repaired: repairs.length > 0, repairs, remainingIssues: [] }
+}
+
+export function repairMechanicalSourceGroundedCurriculum(
+  curriculum: any,
+  issues: SourceCurriculumIssue[],
+  options: ValidationOptions = {},
+) {
+  return repairSourceGroundedCurriculum(
+    curriculum,
+    issues.filter((issue) => MECHANICAL_ISSUE_CODES.has(issue.code)),
+    options,
+  )
 }
 
 function sourceDocuments(sourceText = ''): SourceDocument[] {
@@ -348,35 +390,61 @@ function overlapsBoundary(topicTitle: string, boundary: string) {
   return topic.includes(item) || item.includes(topic)
 }
 
-function locatorSupported(locator: string, document: SourceDocument) {
-  const normalizedLocator = normalizedTerm(
-    locator.replace(/^(section|chapter|unit|module|lecture|topic|page)\s+/i, ''),
-  )
-  if (!normalizedLocator) return false
-  const haystack = normalizedTerm(`${document.title}\n${document.body}`)
-  if (haystack.includes(normalizedLocator)) return true
-
-  const tokens = normalizedLocator
-    .split(' ')
-    .filter((token) => token.length >= 3)
-  if (!tokens.length) return false
-  const matched = tokens.filter((token) => haystack.includes(token)).length
-  return matched / tokens.length >= 0.6
+function evidenceTextForRefs(
+  refs: unknown[],
+  sectionIndex: ReturnType<typeof indexCompactSections>,
+) {
+  return refs
+    .map((ref) => sectionIndex.get(String(ref)))
+    .filter(Boolean)
+    .map((hit) => {
+      const section = hit!.section
+      return [
+        hit!.sourceTitle,
+        section.heading_path.join(' '),
+        section.opening_excerpt,
+        ...section.key_definitions,
+        ...section.enumerations,
+        ...section.learning_objectives,
+        ...section.table_summaries,
+      ].join(' ')
+    })
+    .join(' ')
 }
 
-function topicSupportedByDocument(topicTitle: string, topicDescription: string, document: SourceDocument) {
-  const titleTokens = normalizedTerm(topicTitle)
+function topicSupportedByRefs(
+  topic: any,
+  refs: unknown[],
+  sectionIndex: ReturnType<typeof indexCompactSections>,
+) {
+  const evidence = normalizedTerm(evidenceTextForRefs(refs, sectionIndex))
+  if (!evidence) return false
+
+  const titleTokens = normalizedTerm(topic?.title)
     .split(' ')
     .filter((token) => token.length >= 3 && !TITLE_STOP_WORDS.has(token))
-  const haystack = normalizedTerm(`${document.title}\n${document.body}`)
-  if (titleTokens.some((token) => haystack.includes(token))) return true
+  if (titleTokens.some((token) => evidence.includes(token))) return true
 
-  const descriptionTokens = normalizedTerm(topicDescription)
+  const descriptionTokens = normalizedTerm(topic?.description)
     .split(' ')
     .filter((token) => token.length >= 4 && !TITLE_STOP_WORDS.has(token))
     .slice(0, 20)
-  if (!titleTokens.length && !descriptionTokens.length) return true
-  return descriptionTokens.some((token) => haystack.includes(token))
+  // A topic with no substantive title or description token has nothing
+  // checkable against the evidence and must not be auto-approved — that free
+  // pass let thinly-titled topics (e.g. "Overview") through with zero
+  // verification.
+  return descriptionTokens.some((token) => evidence.includes(token))
+}
+
+function sourceNumberFromRefs(
+  refs: unknown[],
+  sectionIndex: ReturnType<typeof indexCompactSections>,
+) {
+  for (const ref of refs) {
+    const hit = sectionIndex.get(String(ref))
+    if (hit) return hit.sourceNumber
+  }
+  return null
 }
 
 function topicLimits({
@@ -453,13 +521,49 @@ export function normalizeSourceGroundedCurriculumBoundary(
   return curriculum
 }
 
+// Fills deterministic fields the model is no longer asked to produce.
+// Idempotent and safe to call twice — once before the first validation pass,
+// and again after repair (e.g. a topic's source_refs may have been pruned).
+export function hydrateSourceGroundedCurriculum(
+  curriculum: any,
+  options: ValidationOptions = {},
+) {
+  if (!curriculum || typeof curriculum !== 'object') return curriculum
+
+  if (!SOURCE_SEQUENCE_POLICIES.has(String(curriculum.source_sequence_policy ?? ''))) {
+    curriculum.source_sequence_policy = DEFAULT_SOURCE_SEQUENCE_POLICY
+  }
+
+  const sectionIndex = indexCompactSections(options.compactCurriculumSource)
+  for (const { topic } of collectTopics(curriculum)) {
+    // Every topic that exists in source-grounded mode is covered by
+    // construction — source_refs is the load-bearing evidence requirement,
+    // not this field. The model is no longer asked to set it.
+    topic.source_coverage = 'covered'
+    // New curricula derive anchors from stable compact-section refs. When
+    // compact evidence is unavailable (legacy stored curriculum), preserve the
+    // existing anchor instead of erasing it during persistence or approval.
+    if (sectionIndex.size) {
+      topic.source_anchor = deriveSourceAnchor(
+        options.compactCurriculumSource,
+        topic.source_refs,
+        sectionIndex,
+      )
+    } else if (typeof topic.source_anchor !== 'string') {
+      topic.source_anchor = ''
+    }
+  }
+
+  return curriculum
+}
+
 export function validateSourceGroundedCurriculum(
   curriculum: any,
   options: ValidationOptions = {},
 ): SourceCurriculumValidationReport {
   const issues: SourceCurriculumIssue[] = []
   const documents = sourceDocuments(options.sourceText)
-  const knownSourceNumbers = new Set(documents.map((document) => document.index))
+  const sectionIndex = indexCompactSections(options.compactCurriculumSource)
   const records = collectTopics(curriculum)
   const rootTopics = records.filter((record) => record.root)
   const leafTopics = records.filter((record) => record.leaf)
@@ -509,14 +613,6 @@ export function validateSourceGroundedCurriculum(
     }
     if (topicId) seenIds.add(topicId)
 
-    if (String(topic?.source_coverage ?? '') !== 'covered') {
-      issues.push({
-        code: 'noncovered_topic',
-        message: `Topic "${topicTitle}" is not marked as covered by the uploaded sources.`,
-        ...context,
-      })
-    }
-
     if (!CONCEPT_GROUPS.has(String(topic?.concept_group ?? ''))) {
       issues.push({
         code: 'invalid_concept_group',
@@ -525,52 +621,47 @@ export function validateSourceGroundedCurriculum(
       })
     }
 
-    const anchor = String(topic?.source_anchor ?? '').trim()
-    if (!anchor) {
+    const refs = Array.isArray(topic?.source_refs) ? topic.source_refs : []
+    const legacyAnchor = String(topic?.source_anchor ?? '').trim()
+    // No compact evidence index exists at all — a genuinely pre-evidence-layer
+    // legacy curriculum, since every fresh source-grounded generation builds
+    // one. Nothing below can be verified against anything in that case, so a
+    // topic with a legacy anchor is still trusted (as before). Whenever a real
+    // index IS available, every check below runs unconditionally — silently
+    // skipping them just because *some* topic in the curriculum lacked an
+    // index was the root cause of source-grounded courses over-expanding past
+    // what partial uploaded material actually supports.
+    const canVerifyAgainstIndex = sectionIndex.size > 0
+    const trustedLegacyTopic = !canVerifyAgainstIndex && Boolean(legacyAnchor)
+
+    if (!refs.length && !trustedLegacyTopic) {
       issues.push({
-        code: 'missing_source_anchor',
-        message: `Topic "${topicTitle}" has no source anchor.`,
+        code: 'missing_source_refs',
+        message: `Topic "${topicTitle}" cites no source evidence.`,
         ...context,
       })
-    } else if (documents.length) {
-      const match = anchor.match(/\bSource\s+(\d+)\b/i)
-      if (!match || !knownSourceNumbers.has(Number(match[1]))) {
-        issues.push({
-          code: 'invalid_source_reference',
-          message: `Topic "${topicTitle}" points to a source that was not uploaded.`,
-          ...context,
-        })
-      } else {
-        const locator = anchor
-          .slice((match.index ?? 0) + match[0].length)
-          .replace(/^[\s:;,.\-\u2013\u2014]+/, '')
-          .trim()
-        if (locator.length < 3) {
-          issues.push({
-            code: 'missing_anchor_locator',
-            message: `Topic "${topicTitle}" names a source but not the section or passage that teaches it.`,
-            ...context,
-          })
-        } else {
-          const document = documents.find((item) => item.index === Number(match[1]))
-          if (document && !locatorSupported(locator, document)) {
-            issues.push({
-              code: 'unsupported_anchor_locator',
-              message: `Topic "${topicTitle}" uses a source anchor that cannot be found in the referenced material.`,
-              ...context,
-            })
-          } else if (
-            document
-            && !topicSupportedByDocument(topicTitle, String(topic?.description ?? ''), document)
-          ) {
-            issues.push({
-              code: 'topic_not_supported_by_source',
-              message: `Topic "${topicTitle}" is not supported by the referenced source material.`,
-              ...context,
-            })
-          }
-        }
-      }
+    } else if (refs.length && !canVerifyAgainstIndex && !trustedLegacyTopic) {
+      issues.push({
+        code: 'missing_source_refs',
+        message: `Topic "${topicTitle}" cites source evidence that cannot be verified and has no legacy anchor.`,
+        ...context,
+      })
+    } else if (canVerifyAgainstIndex && refs.length && refs.some((ref: unknown) => !sectionIndex.has(String(ref)))) {
+      issues.push({
+        code: 'invalid_source_ref',
+        message: `Topic "${topicTitle}" cites source evidence that does not exist in the uploaded material.`,
+        ...context,
+      })
+    } else if (
+      canVerifyAgainstIndex
+      && refs.length
+      && !topicSupportedByRefs(topic, refs, sectionIndex)
+    ) {
+      issues.push({
+        code: 'topic_not_supported_by_source',
+        message: `Topic "${topicTitle}" is not supported by its cited source evidence.`,
+        ...context,
+      })
     }
 
     const promoted = boundaries.find((boundary) => overlapsBoundary(topicTitle, boundary))
@@ -580,6 +671,27 @@ export function validateSourceGroundedCurriculum(
         message: `Topic "${topicTitle}" promotes out-of-scope material "${promoted}" into the course.`,
         ...context,
       })
+    }
+  }
+
+  if (
+    sectionIndex.size
+    && curriculum?.source_sequence_policy === 'preserve_uploaded_source_order'
+  ) {
+    let previousSource = 0
+    for (const { topic } of rootTopics) {
+      const refs = Array.isArray(topic?.source_refs) ? topic.source_refs : []
+      const sourceNumber = sourceNumberFromRefs(refs, sectionIndex)
+      if (sourceNumber == null) continue
+      if (sourceNumber < previousSource) {
+        issues.push({
+          code: 'source_order_violation',
+          message: `Topic "${String(topic?.title ?? topic?.id ?? 'Untitled topic')}" moves backward from Source ${previousSource} to Source ${sourceNumber} while uploaded order is authoritative.`,
+          topicId: String(topic?.id ?? '') || undefined,
+          topicTitle: String(topic?.title ?? '') || undefined,
+        })
+      }
+      previousSource = Math.max(previousSource, sourceNumber)
     }
   }
 
@@ -616,6 +728,7 @@ export function enforceSourceGroundedCurriculum(
   options: ValidationOptions = {},
 ) {
   normalizeSourceGroundedCurriculumBoundary(curriculum, options.sourceProfile)
+  hydrateSourceGroundedCurriculum(curriculum, options)
   const initial = validateSourceGroundedCurriculum(curriculum, options)
 
   // Fast-path: already valid.
@@ -630,6 +743,10 @@ export function enforceSourceGroundedCurriculum(
 
   // Repair all recoverable issues in place.
   const repairReport = repairSourceGroundedCurriculum(curriculum, initial.issues, options)
+
+  // Re-derive anchors for surviving topics — repair may have pruned the ref
+  // that the initial anchor was based on.
+  hydrateSourceGroundedCurriculum(curriculum, options)
 
   // Re-validate after repair. Excessive-count and other soft residuals are
   // recorded for observability but do NOT stop the pipeline — a slightly
@@ -706,15 +823,15 @@ export function enforceSourceGroundedMap(curriculum: any, map: any) {
     }
   }
 
-  // `curriculum_topic_missing_from_map` cannot be synthesised here — the missing
-  // topics simply won't appear in the graph and will be handled gracefully at
-  // persist time. Record the count for observability.
-  const missingCount = issues.filter((i) => i.code === 'curriculum_topic_missing_from_map').length
-  if (missingCount > 0) {
-    repairs.push({
-      code: 'curriculum_topic_missing_from_map',
-      action: `${missingCount} curriculum topic(s) absent from the map — deferred to persistence fallback`,
-    })
+  // `curriculum_topic_missing_from_map` cannot be synthesised here —
+  // fabricating plausible parent/sequence/hierarchy metadata for a topic the
+  // graph step never produced risks a structurally broken node. There is no
+  // "persistence fallback" that actually handles this (there never was);
+  // refuse to persist an incomplete course instead. The generation job's
+  // existing Retry regenerates the graph from the same approved curriculum.
+  const missing = issues.filter((i) => i.code === 'curriculum_topic_missing_from_map')
+  if (missing.length > 0) {
+    throw new SourceCurriculumIntegrityError(missing)
   }
 
   if (repairs.length) {

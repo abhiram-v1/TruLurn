@@ -9,6 +9,17 @@ export type SkillPrompt = {
   name: AISkillName
   system: string
   user: string
+  responseMimeType?: 'application/json' | 'text/plain'
+  /**
+   * A static schema applies to every provider unchanged. A resolver function
+   * is called with the provider that will actually serve the request, so
+   * skills whose schema differs by provider dialect (e.g. OpenAI strict mode
+   * rejecting open-ended dictionaries that Gemini accepts) can return the
+   * correct shape per provider rather than one schema forced onto both.
+   */
+  responseSchema?:
+    | import('@/lib/ai/types').AIResponseSchema
+    | ((provider: import('@/lib/ai/types').AIProviderName) => import('@/lib/ai/types').AIResponseSchema | undefined)
 }
 
 /** @deprecated Use AISkillName. */

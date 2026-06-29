@@ -1,7 +1,9 @@
 import type { CurriculumMode } from '@/lib/ai/skills/types'
 
 export const GRAPH_GENERATION_SCHEMA_VERSION = 'graph-generation-v2' as const
-export const GRAPH_GENERATION_MODEL = 'gemini-3.1-pro-preview' as const
+// Keep in sync with GRAPH_GENERATION_ROUTE_OWNERSHIP.model in lib/ai/routeOwnership.ts.
+// The orchestrator asserts the served model equals this, so they must match.
+export const GRAPH_GENERATION_MODEL = 'gemini-3.1-flash-lite' as const
 
 export type GraphSourceExcerpt = {
   heading_path: string[]

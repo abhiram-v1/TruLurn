@@ -5,8 +5,18 @@ import type { GeneratedTopicPage } from '@/lib/topic-pages/generateTopicPage'
 import { VISUAL_REPRESENTATION_PLANNING_RULES } from '@/lib/ai/skills/dataChart'
 
 export type PageSequenceRole = 'introduce' | 'deepen' | 'connect' | 'repair' | 'practice' | 'review'
+export type ConceptImportance = 'critical' | 'important' | 'supporting' | 'peripheral'
+export type ConceptDifficulty = 'low' | 'medium' | 'high'
+export type ReasoningNeed = 'low' | 'medium' | 'high'
+export type MisconceptionRisk = 'low' | 'medium' | 'high'
 
 export type LearningArchitectureBrief = {
+  concept_importance: ConceptImportance
+  concept_difficulty: ConceptDifficulty
+  reasoning_need: ReasoningNeed
+  teaching_depth: 1 | 2 | 3 | 4 | 5
+  requires_formal_definition: boolean
+  misconception_risk: MisconceptionRisk
   target_understanding: string
   success_criteria: string[]
   why_this_matters_now: string
@@ -92,12 +102,39 @@ function normalizeRole(value: unknown): PageSequenceRole {
   return 'introduce'
 }
 
+function normalizeImportance(value: unknown): ConceptImportance {
+  if (
+    value === 'critical' ||
+    value === 'important' ||
+    value === 'supporting' ||
+    value === 'peripheral'
+  ) return value
+  return 'important'
+}
+
+function normalizeLowMediumHigh(value: unknown): ConceptDifficulty {
+  if (value === 'low' || value === 'medium' || value === 'high') return value
+  return 'medium'
+}
+
+function normalizeTeachingDepth(value: unknown): 1 | 2 | 3 | 4 | 5 {
+  const depth = Math.round(Number(value))
+  if (depth >= 1 && depth <= 5) return depth as 1 | 2 | 3 | 4 | 5
+  return 3
+}
+
 export function normalizeBrief(raw: any): LearningArchitectureBrief {
   const exampleStrategy = raw?.example_strategy ?? {}
   const activeProcessing = raw?.active_processing ?? {}
   const retentionHooks = raw?.retention_hooks ?? {}
 
   return {
+    concept_importance: normalizeImportance(raw?.concept_importance),
+    concept_difficulty: normalizeLowMediumHigh(raw?.concept_difficulty),
+    reasoning_need: normalizeLowMediumHigh(raw?.reasoning_need),
+    teaching_depth: normalizeTeachingDepth(raw?.teaching_depth),
+    requires_formal_definition: Boolean(raw?.requires_formal_definition),
+    misconception_risk: normalizeLowMediumHigh(raw?.misconception_risk),
     target_understanding: compact(raw?.target_understanding, 420),
     success_criteria: normalizeArray(raw?.success_criteria, 6),
     why_this_matters_now: compact(raw?.why_this_matters_now, 420),
@@ -232,6 +269,12 @@ ${input.courseSkillContext || 'No course skill context is attached.'}
 Return this exact JSON shape:
 {
   "target_understanding": "what mental change this page should create",
+  "concept_importance": "critical|important|supporting|peripheral",
+  "concept_difficulty": "low|medium|high",
+  "reasoning_need": "low|medium|high",
+  "teaching_depth": 1,
+  "requires_formal_definition": true,
+  "misconception_risk": "low|medium|high",
   "success_criteria": ["what the learner should be able to explain, distinguish, or do"],
   "why_this_matters_now": "why this page matters at this exact point in the course",
   "required_prior_knowledge": ["prior idea needed now"],
@@ -266,6 +309,10 @@ Return this exact JSON shape:
 
 Rules:
 - The topic plan already locked content kind to "${input.contentKind ?? 'full_page'}". Mirror it exactly; page shape is outside this brief's authority.
+- Recommend concept_importance, concept_difficulty, reasoning_need, teaching_depth, requires_formal_definition, and misconception_risk by thinking about this page's role in the whole course: prerequisite value, future reuse, source emphasis, assessment/interview usefulness, abstraction, common failure modes, and how much bridging it needs to connect prior and later concepts.
+- These are planner recommendations for the lesson writer, not hard commands. The writer must verify them against the current source evidence, page boundary, prior pages, and token budget.
+- reasoning_need recommends initial model deliberation, not answer length: use high for critical abstractions, math/procedures, optimization/training mechanics, source-dense spans, high-risk misconceptions, or pages whose explanation must bridge multiple concepts; use medium for normal conceptual pages; use low for recognition, history, notation, simple orientation, or peripheral support.
+- teaching_depth is a recommended 1-5 scale: 1 quick recognition, 3 solid course-page teaching, 5 careful treatment with formal definition, mechanism, example, boundaries, and future bridges.
 - Treat this as one consecutive span of a continuous textbook manuscript, not an independent lesson.
 - Design only the understanding reached between the supplied start and end boundaries.
 - If this span continues from the previous page, do not request a new hook or broad reintroduction.

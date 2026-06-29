@@ -123,19 +123,27 @@ function normalizeReport(raw: RawResearchReport, input: ResearchInput, apiSource
 export function formatResearchBrief(report?: CourseResearchReport | null) {
   if (!report) return ''
 
+  const line = (label: string, values: string[]) =>
+    values.length ? `${label}: ${values.slice(0, 16).join(', ')}` : null
+
   return [
-    `Research confidence: ${report.research_confidence}`,
-    `Sources consulted: ${report.sources.map((source) => source.domain ?? source.title ?? source.url).join(', ') || 'none recorded'}`,
-    `Recurring expert-taught concepts: ${report.recurring_concepts.join(', ') || 'none recorded'}`,
-    `Foundational concepts: ${report.foundational_concepts.join(', ') || 'none recorded'}`,
-    `Intermediate concepts: ${report.intermediate_concepts.join(', ') || 'none recorded'}`,
-    `Advanced concepts: ${report.advanced_concepts.join(', ') || 'none recorded'}`,
-    `Historical progression: ${report.historical_progression.join(' -> ') || 'none recorded'}`,
-    `Missing-risk checklist: ${report.missing_risk_checklist.join(', ') || 'none recorded'}`,
-    `Optional or niche topics: ${report.optional_or_niche_topics.join(', ') || 'none recorded'}`,
-    `Curriculum validation brief: ${report.validation_brief || 'none'}`,
-    `Curriculum optimization brief: ${report.optimization_brief || 'none'}`,
-  ].join('\n')
+    `Confidence: ${report.research_confidence}`,
+    line('Recurring core', report.recurring_concepts),
+    line('Foundation', report.foundational_concepts),
+    line('Intermediate', report.intermediate_concepts),
+    line('Advanced', report.advanced_concepts),
+    line('Do not miss', report.missing_risk_checklist),
+    line('Optional', report.optional_or_niche_topics),
+    report.historical_progression.length
+      ? `Useful progression: ${report.historical_progression.slice(0, 10).join(' -> ')}`
+      : null,
+    report.optimization_brief
+      ? `Sequencing guidance: ${report.optimization_brief.slice(0, 1400)}`
+      : null,
+    report.validation_brief
+      ? `Coverage check: ${report.validation_brief.slice(0, 1000)}`
+      : null,
+  ].filter(Boolean).join('\n').slice(0, 3600)
 }
 
 // ── Lesson-level concept research ─────────────────────────────────────────────

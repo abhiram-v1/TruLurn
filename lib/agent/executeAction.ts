@@ -2,7 +2,6 @@ import crypto from 'crypto'
 import type { Db } from 'mongodb'
 import { generateAI } from '@/lib/ai'
 import { firstTeachableDescendant, isTeachableTopic, nextRecommendedTeachableTopic, previousTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
-import { resolveTeachingPersonaFromMessage, TEACHING_PERSONAS } from '@/lib/personas'
 import type { ActionIntent, UIAction } from '@/types/agent'
 import { recordRegenerationAttempt } from '@/lib/learning/adaptiveLoop'
 import { CIRCUIT_BREAK_MESSAGE } from '@/lib/learning/adaptiveSignals'
@@ -190,36 +189,6 @@ export async function executeAction(input: ExecuteActionInput): Promise<ExecuteA
       return {
         content: `Generating a custom page: "${instruction.slice(0, 100)}${instruction.length > 100 ? '...' : ''}"`,
         uiAction: { action: 'generate_custom_page', instruction, targetPageNumber },
-      }
-    }
-
-    case 'change_teaching_persona': {
-      const persona = resolveTeachingPersonaFromMessage(message)
-      if (!persona) {
-        return {
-          content: 'Choose a teaching persona by name: **Immersive Builder** for meaning-to-precision explanations, or **Investigator** for evidence, diagnosis, and hidden mechanisms.',
-          uiAction: null,
-        }
-      }
-      await db.collection('courses').updateOne(
-        { _id: courseId as any, user_id: input.userId },
-        {
-          $set: {
-            teaching_persona: persona,
-            teaching_persona_version: TEACHING_PERSONAS[persona].version,
-            updated_at: new Date(),
-          },
-          $unset: {
-            lesson_style: '',
-            learning_style: '',
-            learning_style_reason: '',
-            style_directives: '',
-          },
-        },
-      )
-      return {
-        content: `Switched to **${TEACHING_PERSONAS[persona].name}**. Existing pages stay unchanged unless regenerated; every new or regenerated page, agent explanation, quiz, and recall cue will use this persona.`,
-        uiAction: null,
       }
     }
 

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { GraphData, GraphNode } from '@/lib/graph/types'
+import { requiredUnmetPath } from '@/lib/graph/edges'
 import { BackButton } from '@/components/navigation/BackButton'
 import { KnowledgeGraph } from './KnowledgeGraph'
 import { GraphDetailPanel } from './GraphDetailPanel'
@@ -191,46 +192,26 @@ export function GraphClient({ courseId }: { courseId: string }) {
 
   const focusId = filters.focusMode && selectedId ? selectedId : null
 
-  // ── Critical path — backward BFS from a locked node to nearest completed anchor ──
-  // Highlights the exact prerequisite chain the student needs to complete to unlock
-  // a selected locked topic. Nodes and edges on the path get a special visual class.
+  // ── Critical path — the exact unmet hard-prerequisite chain ────────────────
+  // Highlights only the hard-prerequisite chain still blocking a selected
+  // locked topic, stopping at the nearest mastered/functional ancestor. A
+  // `sequence` edge (study order) is never part of this chain — only a real
+  // "must understand first" dependency is (see lib/graph/edges.ts; this used
+  // to also walk sequence edges, inflating the highlight with topics that
+  // merely come earlier, not topics that are actually blocking).
   const criticalPath = useMemo((): { nodes: Set<string>; edges: Set<string> } => {
     const empty = { nodes: new Set<string>(), edges: new Set<string>() }
     if (!graphData || !selectedNode?.teachable || selectedNode.state !== 'locked') return empty
 
     const nodeById = new Map(graphData.nodes.map((n) => [n.id, n]))
-    // Build reverse adjacency (incoming edges per node)
-    const revAdj = new Map<string, Array<{ from: string; key: string }>>()
-    for (const e of graphData.edges) {
-      if (!['prerequisite', 'sequence'].includes(e.edgeType)) continue
-      if (e.edgeType === 'prerequisite' && e.prereqStrength === 'soft') continue
-      if (!revAdj.has(e.to)) revAdj.set(e.to, [])
-      revAdj.get(e.to)!.push({ from: e.from, key: `${e.from}::${e.to}` })
-    }
-
-    // BFS backwards from selected locked node
-    // Stop expanding a node once we hit a mastered/functional anchor
-    const pathNodes = new Set<string>()
-    const pathEdges = new Set<string>()
-    const queue: string[] = [selectedNode.id]
-    const visited = new Set<string>([selectedNode.id])
-
-    while (queue.length) {
-      const cur = queue.shift()!
-      pathNodes.add(cur)
-      const node = nodeById.get(cur)
-      // Mastered/functional = solid foundation, include in path but don't trace further back
-      if (node && (node.state === 'mastered' || node.state === 'functional')) continue
-      for (const { from, key } of revAdj.get(cur) ?? []) {
-        pathEdges.add(key)
-        if (!visited.has(from)) {
-          visited.add(from)
-          queue.push(from)
-        }
-      }
-    }
-
-    return { nodes: pathNodes, edges: pathEdges }
+    return requiredUnmetPath({
+      targetId: selectedNode.id,
+      edges: graphData.edges,
+      isSatisfied: (id) => {
+        const state = nodeById.get(id)?.state
+        return state === 'mastered' || state === 'functional'
+      },
+    })
   }, [graphData, selectedNode])
 
   // ── Orientation (persistent "where am I / what's next") ────────────────────

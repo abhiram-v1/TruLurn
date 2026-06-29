@@ -1,13 +1,14 @@
-import { buildImmersiveBuilderDirective, IMMERSIVE_BUILDER } from './immersiveBuilder'
-import { buildInvestigatorDirective, INVESTIGATOR } from './investigator'
-import { buildPersonaVisualReasoningDirective } from './visualReasoning'
-import { buildTextbookContinuityDirective } from './textbookContinuity'
+import { buildImmersiveBuilderDirective, IMMERSIVE_BUILDER } from './immersiveBuilder.ts'
+import { buildInvestigatorDirective, INVESTIGATOR } from './investigator.ts'
+import { buildPersonaVisualReasoningDirective } from './visualReasoning.ts'
+import { buildPersonaAcademicContract } from './academicContract.ts'
+import { buildMinimalLessonTeachingDirective } from './minimalLesson.ts'
 import type {
   PersonaLessonContext,
   PersonaSurface,
   TeachingPersonaDefinition,
   TeachingPersonaId,
-} from './types'
+} from './types.ts'
 
 export const DEFAULT_TEACHING_PERSONA: TeachingPersonaId = 'immersive_builder'
 
@@ -46,6 +47,8 @@ export function buildPersonaDirective({
   surface: PersonaSurface
   lesson?: PersonaLessonContext
 }) {
+  if (surface === 'lesson') return buildMinimalLessonTeachingDirective()
+
   let personaDirective: string
   switch (normalizeTeachingPersona(persona)) {
     case 'immersive_builder':
@@ -57,8 +60,8 @@ export function buildPersonaDirective({
   }
   return `${personaDirective}
 
-${buildPersonaVisualReasoningDirective(surface)}
-${surface === 'lesson' ? `\n${buildTextbookContinuityDirective(lesson)}` : ''}`
+${buildPersonaAcademicContract(surface)}
+${buildPersonaVisualReasoningDirective(surface)}`
 }
 
 export type {
@@ -68,4 +71,8 @@ export type {
   PersonaSurface,
   TeachingPersonaDefinition,
   TeachingPersonaId,
-} from './types'
+} from './types.ts'
+export {
+  buildMinimalLessonTeachingDirective,
+  MINIMAL_LESSON_TEACHING_DIRECTIVE,
+} from './minimalLesson.ts'

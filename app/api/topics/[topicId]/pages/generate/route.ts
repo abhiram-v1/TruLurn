@@ -25,6 +25,7 @@ import {
   analyzeTopicPlan,
   formatPageBoundaryPlan,
   isPlanCurrent,
+  PLAN_VERSION,
   type TopicLessonPlan,
 } from '@/lib/learning-architecture/analyzeTopicPlan'
 import { policyFromCourse } from '@/lib/course-generation/sourceFidelity'
@@ -321,6 +322,20 @@ export async function POST(
     const expectedSkillContextKey = courseSkillPlanningContext?.key ?? null
     async function ensureTopicPlan(): Promise<TopicLessonPlan> {
       const existing = planTopic.lesson_plan as TopicLessonPlan | undefined
+      // Do not replace the page boundaries underneath an in-progress topic.
+      // Untouched v5 plans upgrade to the GPT-5.4 planner automatically, while
+      // topics with generated pages keep their internally consistent old plan.
+      const hasGeneratedPages = topicPages.some((page: any) => String(page?.content ?? '').trim())
+      const legacyPlanMatchesContext = existing
+        && (existing.fidelity_key ?? null) === expectedFidelityKey
+        && (existing.skill_context_key ?? null) === expectedSkillContextKey
+      if (
+        legacyPlanMatchesContext
+        && Number(existing.version) < PLAN_VERSION
+        && hasGeneratedPages
+      ) {
+        return existing
+      }
       if (isPlanCurrent(existing, expectedFidelityKey, expectedSkillContextKey)) return existing
       const pageFocuses: string[] = Array.isArray(planTopic.page_focuses) && planTopic.page_focuses.length
         ? planTopic.page_focuses.map((entry: any, i: number) => String(entry?.focus ?? fallbackPageFocus(planTopic, i + 1)))

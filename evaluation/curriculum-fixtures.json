@@ -1,0 +1,74 @@
+[
+  {
+    "id": "narrow_transactions_chapter",
+    "mode": "source_grounded",
+    "goal": "Learn exactly what this chapter teaches about database transactions.",
+    "expected_concepts": ["transaction", "atomicity", "isolation"],
+    "forbidden_concepts": ["distributed database", "query optimization"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "ordered_lecture_series",
+    "mode": "source_grounded",
+    "goal": "Turn lectures 1 through 4 into a faithful course.",
+    "expected_concepts": ["data model", "sql", "transaction", "recovery"],
+    "forbidden_concepts": ["nosql"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "ambiguous_source_order",
+    "mode": "source_grounded",
+    "goal": "Organize several unnumbered notes without inventing bridge topics.",
+    "expected_concepts": ["definition", "mechanism", "example"],
+    "forbidden_concepts": ["capstone"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "repeated_concepts_across_sources",
+    "mode": "source_grounded",
+    "goal": "Merge repeated explanations into one coherent curriculum.",
+    "expected_concepts": ["gradient descent", "learning rate", "loss"],
+    "forbidden_concepts": ["reinforcement learning"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "assumed_prerequisites",
+    "mode": "source_grounded",
+    "goal": "Teach the uploaded regression chapter.",
+    "expected_concepts": ["linear regression", "loss function"],
+    "forbidden_concepts": ["matrix algebra course", "calculus course"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "mentioned_followups",
+    "mode": "source_grounded",
+    "goal": "Teach only the covered neural-network material.",
+    "expected_concepts": ["neural network", "activation", "backpropagation"],
+    "forbidden_concepts": ["transformer", "diffusion model"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "exam_oriented_material",
+    "mode": "source_grounded",
+    "goal": "Create a faithful exam-preparation curriculum from these notes.",
+    "expected_concepts": ["definition", "worked example", "common mistake"],
+    "forbidden_concepts": ["research frontier"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "very_large_mixed_documents",
+    "mode": "source_grounded",
+    "goal": "Build a faithful curriculum from a large mixed upload while excluding unrelated appendices.",
+    "expected_concepts": ["data preparation", "model training", "evaluation", "deployment"],
+    "forbidden_concepts": ["company history", "meeting notes", "travel policy"],
+    "expects_source_refs": true
+  },
+  {
+    "id": "ai_teacher_gradient_descent",
+    "mode": "ai_teacher",
+    "goal": "Learn gradient descent from intuition through practical use.",
+    "expected_concepts": ["gradient", "learning rate", "loss", "convergence"],
+    "forbidden_concepts": [],
+    "expects_source_refs": false
+  }
+]

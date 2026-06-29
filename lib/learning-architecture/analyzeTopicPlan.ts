@@ -17,10 +17,9 @@ import {
 //
 // The plan is the AUTHORITY on how many pages this topic deserves. The
 // curriculum's estimated_pages is only a ceiling — the planner sees the actual
-// conceptual load and consolidates freely: a thin topic becomes ONE substantive
-// page, never three padded ones. Pages the topic doesn't need are simply not
-// planned (no "skip" placeholders), so they are never generated and never
-// cost a model call.
+// conceptual load and may consolidate genuinely thin material, but it must
+// preserve enough space for definitions, mechanisms, examples, misconceptions,
+// and source coverage. The budget is not a target to minimize.
 
 export type PageTargetLength = 'short' | 'medium' | 'long'
 export type PageBreakPreference = 'concept_boundary' | 'natural_pause' | 'soft_overflow'
@@ -59,7 +58,12 @@ export type TopicLessonPlan = {
 
 // v5: physical pages are consecutive textbook spans, with signal-density
 // ceilings rather than prose-comfort targets.
-export const PLAN_VERSION = 5
+// v6 moves lesson preparation to GPT-5.4 and removes the old bias toward
+// minimizing page count.
+// v7 adds AI-authored lesson-depth recommendations so model thinking effort can
+// start from the planner's judgement instead of hardcoded topic-name rules.
+// Untouched cached plans are upgraded lazily.
+export const PLAN_VERSION = 7
 
 /**
  * A plan is usable when it matches the current planner contract — and, when an
@@ -197,7 +201,7 @@ Course depth: ${input.course.course_depth ?? 'standard'}
 Topic: ${input.topic.title}
 Topic description: ${input.topic.description ?? input.topic.summary ?? 'No stored description.'}
 Topic depth label: ${input.topic.depth ?? 'medium'}
-Page budget (CEILING, not a target): ${input.plannedPages}
+Maximum pages available: ${input.plannedPages}
 
 Draft page focuses from the curriculum (a rough guess made before any content existed — merge, drop, or rewrite them freely):
 ${focusList || 'No page focuses supplied — infer a sensible page breakdown.'}
@@ -212,7 +216,12 @@ ${input.courseSkillContext || 'No course skill context is attached.'}
 
 PAGE-BREAK POLICY — plan breaks by length:
 - First estimate the words needed to teach the topic properly, without padding.
-- Use roughly 480-680 words as the normal physical page capacity. Dense pages are preferred over long prose pages.
+- Use roughly 480-680 words as the normal physical page capacity. Prefer readable,
+  well-developed explanation over packing several substantial ideas into one dense page.
+- Treat the curriculum's draft page count as a useful baseline, not a quota to minimize.
+  Use fewer pages only when the material is genuinely thin or duplicate.
+- Give distinct substantial mechanisms, formal definitions, worked examples, and
+  high-risk misconceptions enough room to be taught rather than merely mentioned.
 - Prefer to begin a substantial new concept on the next page when the current page is
   already near capacity. This is a preference, not a hard rule.
 - If a concept finishes with meaningful room left, begin the next concept on the same
@@ -224,7 +233,7 @@ PAGE-BREAK POLICY — plan breaks by length:
 - Assign every substantive point exactly once. Adjacent spans may share a concept only
   when that concept genuinely continues across the break.
 - Never plan pages whose only purpose is recap, motivation, transition, or "what's next".
-- Never exceed the supplied page budget. Every planned page will be generated and read.
+- Never exceed the supplied maximum. Every planned page will be generated and read.
 - Use content_kind "full_page" for normal physical pages. Page roles describe movement
   through the manuscript; they do not turn pages into isolated lessons.
 
@@ -250,6 +259,12 @@ Return this exact JSON shape:
       "break_preference": "concept_boundary|natural_pause|soft_overflow",
       "break_reason": "why this is the least disruptive length-based break",
       "brief": {
+        "concept_importance": "critical|important|supporting|peripheral",
+        "concept_difficulty": "low|medium|high",
+        "reasoning_need": "low|medium|high",
+        "teaching_depth": 1,
+        "requires_formal_definition": true,
+        "misconception_risk": "low|medium|high",
         "target_understanding": "what the reader understands by the end of this consecutive span",
         "success_criteria": ["what the learner should be able to explain or do"],
         "why_this_matters_now": "why this page matters at this point",
@@ -288,6 +303,22 @@ Return this exact JSON shape:
 
 Rules:
 - "pages" must contain between 1 and ${input.plannedPages} entries, numbered contiguously from 1.
+- For every brief, recommend concept_importance, concept_difficulty, reasoning_need,
+  teaching_depth, requires_formal_definition, and misconception_risk by judging
+  this span's role in the whole course: prerequisite value, future reuse, source
+  emphasis, assessment/interview usefulness, abstraction, failure modes, and how
+  much bridging it needs to connect prior and later concepts.
+- These are planner recommendations for the lesson writer, not hard commands.
+  The writer must verify them against the current source evidence, page boundary,
+  prior pages, and token budget.
+- reasoning_need recommends initial model deliberation, not answer length: use high for
+  critical abstractions, math/procedures, optimization/training mechanics,
+  source-dense spans, high-risk misconceptions, or pages whose explanation must
+  bridge multiple concepts; use medium for normal conceptual pages; use low for
+  recognition, history, notation, simple orientation, or peripheral support.
+- teaching_depth is a recommended 1-5 scale: 1 quick recognition, 3 solid course-page teaching, 5
+  careful treatment with formal definition, mechanism, example, boundaries, and
+  future bridges.
 - target_words is an upper planning budget, not a mandatory minimum.
 - soft_max_words is the allowed finish-the-thought overflow and must be at least target_words.
 - Use short for about 240-420 words, medium for about 480-680, and long only when
@@ -317,8 +348,8 @@ export async function analyzeTopicPlan(input: AnalyzeTopicPlanInput): Promise<To
   const raw = parseAIJson<any>(text)
   const rawPages: any[] = Array.isArray(raw?.pages) ? raw.pages : []
 
-  // Honor the planner's consolidation: keep only real, generatable pages
-  // (no skip placeholders), capped at the curriculum's ceiling, and renumber
+  // Keep only real, generatable pages (no skip placeholders), capped at the
+  // available maximum, and renumber
   // contiguously so navigation never has gaps.
   const ceiling = Math.max(1, Number(input.plannedPages) || 1)
   const pages: TopicPagePlan[] = []

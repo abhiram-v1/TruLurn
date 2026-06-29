@@ -4,6 +4,15 @@ import type { GraphElementReviewState, GraphNodeState } from '@/lib/graph/types'
 
 // ── Branch family colour ramps ───────────────────────────────────────────────
 // Each branch family keeps a consistent colour across all its layers.
+//
+// KNOWN COLLISION (flagged, not silently fixed — repainting the palette is a
+// visual-design call, not a logic fix): the "blue" branch-family ramp below
+// (--kg-ramp-blue-*, e.g. #185FA5/#3B89D6) and the confidence-gradient's
+// "Highly Stable" step in confidenceToColor() below (#2563EB) are two
+// distinct, independently-rendered blues that can appear on screen at the
+// same time with different meanings (branch identity vs. confidence score).
+// `--kg-accent` (the active/critical-path highlight colour) is NOT part of
+// this collision — it's orange (see app/styles/*.css), not blue.
 
 export interface RampColor { border: string; line: string; tint: string }
 
@@ -109,7 +118,7 @@ export function confidenceToColor(confidence: number): string {
   if (confidence >= 95) return '#C026D3'  // Magenta  — High Importance + High Confidence
   if (confidence >= 88) return '#7C3AED'  // Purple   — Critical / Core Knowledge
   if (confidence >= 80) return '#4F46E5'  // Indigo   — Long-Term Stable
-  if (confidence >= 72) return '#2563EB'  // Blue     — Highly Stable
+  if (confidence >= 72) return '#2563EB'  // Blue     — Highly Stable (collides with the branch-ramp "blue" — see the note above RAMPS)
   if (confidence >= 63) return '#0891B2'  // Cyan     — Verified Confidence
   if (confidence >= 54) return '#0D9488'  // Teal     — Strong Confidence
   if (confidence >= 44) return '#16A34A'  // Green    — High Confidence

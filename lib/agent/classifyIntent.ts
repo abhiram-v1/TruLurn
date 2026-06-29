@@ -35,11 +35,6 @@ ACTION labels (student is issuing an unambiguous command at the lesson):
   GENERATE_PAGE   — generate a new custom page
 
   SKIP_CURRENT    - student says they already understand this and wants to move on or skip remaining ungenerated pages
-  CHANGE_PERSONA  - student explicitly asks to switch the teaching persona used for ALL future lessons
-                    Examples: "switch to Investigator", "use Immersive Builder from now on"
-                    Key signal: refers to "lessons", "pages" (plural), "the course", "from now on", "going forward"
-                    NOT this action: "can you make this more practical?" or "show more examples here" (those are current_page)
-
 RULES:
 - Default to current_page when ambiguous. Only choose an ACTION for clear, unambiguous commands.
 - "I'm confused about X" → current_page (question, not a page-regen command)
@@ -72,7 +67,6 @@ const INTENT_MAP: Record<string, ActionIntent> = {
   GO_TO_TOPIC:         'go_to_topic',
   GENERATE_PAGE:       'generate_page',
   SKIP_CURRENT:        'skip_current',
-  CHANGE_PERSONA:      'change_teaching_persona',
 }
 
 function normalizeMessage(message: string) {
@@ -169,12 +163,6 @@ function deterministicActionIntent(message: string): ActionIntent | null {
 
   if (/\b(quiz|test)\b.*\b(on|about|for)\b.+/.test(text)) {
     return 'custom_quiz'
-  }
-
-  if (
-    /\b(switch|change|use|activate)\b.*\b(investigator|immersive builder|teaching persona|persona)\b/.test(text)
-  ) {
-    return 'change_teaching_persona'
   }
 
   return null
