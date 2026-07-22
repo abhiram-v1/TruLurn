@@ -7,6 +7,7 @@ import { buildPersonaDirective, resolveCourseTeachingPersona } from '@/lib/perso
 import { getRecallBreakMode, snoozeBreak, type StudySessionDoc } from '@/lib/recall/session'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 function serializeRecallSession(doc: RecallSessionDoc, taggedItemIds: Set<string>) {
   return {
@@ -93,6 +94,8 @@ export async function POST(request: Request) {
       return null
     })
 
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools', db })
+
     const recallSession = await createRecallSession({
       db,
       session,
@@ -120,6 +123,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ recall: serializeRecallSession(recallSession, taggedItemIds) })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Could not start the recall break.'
     const status = message.includes('sign in') ? 401 : message.includes('Nothing new') ? 409 : 500
     return NextResponse.json({ error: message }, { status })

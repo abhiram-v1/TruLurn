@@ -34,11 +34,13 @@ export async function POST(request: Request) {
 
     const event: TrackEvent = {
       type,
-      topicId: body.topicId ? String(body.topicId) : undefined,
-      topicTitle: body.topicTitle ? String(body.topicTitle) : undefined,
+      topicId: body.topicId ? String(body.topicId).slice(0, 160) : undefined,
+      topicTitle: body.topicTitle ? String(body.topicTitle).slice(0, 160) : undefined,
       pageNumber: Number.isFinite(Number(body.pageNumber)) ? Number(body.pageNumber) : undefined,
-      keyConcepts: Array.isArray(body.keyConcepts) ? body.keyConcepts.map(String) : undefined,
-      summary: body.summary ? String(body.summary) : null,
+      keyConcepts: Array.isArray(body.keyConcepts)
+        ? body.keyConcepts.slice(0, 20).map((value: unknown) => String(value).slice(0, 120))
+        : undefined,
+      summary: body.summary ? String(body.summary).slice(0, 1000) : null,
     }
 
     const [session, mode] = await Promise.all([

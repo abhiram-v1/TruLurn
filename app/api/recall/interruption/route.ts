@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { generateAIResult, parseAIJson } from '@/lib/ai'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 type InterruptionDecision = {
   decision?: unknown
@@ -47,6 +48,8 @@ export async function POST(request: Request) {
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
+
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools', db })
 
     const signals = {
       topic_title: compactText(body.topicTitle, 120),
@@ -102,6 +105,8 @@ ${JSON.stringify(signals)}`,
       confidence,
     })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Could not classify interruption timing.'
     const status = message.toLowerCase().includes('sign in') ? 401 : 503
     return NextResponse.json({ error: message }, { status })

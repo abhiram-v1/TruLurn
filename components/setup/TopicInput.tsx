@@ -1,6 +1,6 @@
 'use client'
 
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
+import { FormEvent, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import { HiSparkles } from 'react-icons/hi2'
@@ -36,14 +36,6 @@ interface TopicInputProps {
 
 const MIN_GOAL_LENGTH = 10
 
-const ACCEPTED_SOURCE_TYPES = [
-  '.txt', '.md', '.markdown', '.json', '.csv', '.pdf', '.docx', '.pptx', '.xlsx', '.html', '.epub',
-  'text/plain', 'text/markdown', 'application/json', 'text/csv', 'application/pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-].join(',')
-
 // ── Static option tables (values match the generate API + course types) ──────
 
 const SOURCE_OPTIONS: Array<{
@@ -51,13 +43,14 @@ const SOURCE_OPTIONS: Array<{
   title: string
   copy: string
   Icon: typeof IcDoc
+  disabled?: boolean
 }> = [
-  // Source-based first.
   {
     value: 'source_grounded',
-    title: 'Your documents',
-    copy: 'Build from your notes, books, and PDFs. Every lesson stays traceable to your material.',
+    title: 'Your documents · Coming soon',
+    copy: 'Source-based curricula are paused while document processing is hardened for production.',
     Icon: IcDoc,
+    disabled: true,
   },
   {
     value: 'ai_teacher',
@@ -186,12 +179,6 @@ function getCourseFeel(persona: TeachingPersonaId, depth: CourseDepth, level: Kn
   return COURSE_FEEL[`${persona}_${depth}_${level}`] ?? ''
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
 /** A titled section card — the structural unit of the builder. */
 function Block({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
   return (
@@ -207,8 +194,7 @@ function Block({ title, hint, children }: { title: string; hint: string; childre
 
 export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const { status } = useSession()
-  // Source-based learning is the prioritized default.
-  const [mode, setMode] = useState<CourseMode>('source_grounded')
+  const mode: CourseMode = 'ai_teacher'
   const [learningControl, setLearningControl] = useState<LearningControlMode>('balanced')
   const [courseDepth, setCourseDepth] = useState<CourseDepth>('standard')
   const [knowledgeLevel, setKnowledgeLevel] = useState<KnowledgeLevel>('intermediate')
@@ -222,8 +208,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [description, setDescription] = useState('')
   const [isGenerating, setIsGenerating] = useState(initialJobId !== null)
   const [activeJobId, setActiveJobId] = useState<string | null>(initialJobId)
-  const [sourceFiles, setSourceFiles] = useState<FileList | null>(null)
-  const [isDraggingFiles, setIsDraggingFiles] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [topicUnsuitable, setTopicUnsuitable] = useState(false)
   const [authRequired, setAuthRequired] = useState(false)
@@ -234,19 +218,15 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   const [ideasLoading, setIdeasLoading] = useState(true)
   const [previewData, setPreviewData] = useState<CurriculumPreviewData | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const typewriterRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [sparksExpanded, setSparksExpanded] = useState(false)
 
   const goalTooShort = description.trim().length < MIN_GOAL_LENGTH
-  const needsSource = mode === 'source_grounded' && (!sourceFiles || sourceFiles.length === 0)
-  const cannotGenerate = isGenerating || goalTooShort || needsSource
+  const cannotGenerate = isGenerating || goalTooShort
 
   const readinessHint = goalTooShort
     ? 'Describe your goal to continue.'
-    : needsSource
-      ? 'Add at least one source file to continue.'
-      : null
+    : null
 
   useEffect(() => {
     if (status !== 'authenticated') return
@@ -290,14 +270,18 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
     }
   }
   useEffect(() => {
+    if (status !== 'authenticated') {
+      setIdeasLoading(false)
+      return
+    }
     if (loadIdeasRef.current) return
     loadIdeasRef.current = true
     void loadIdeas()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [status])
 
   useEffect(() => {
-    if (description.trim().length < MIN_GOAL_LENGTH || isStreaming) return
+    if (status !== 'authenticated' || description.trim().length < MIN_GOAL_LENGTH || isStreaming) return
     let active = true
     const timer = setTimeout(async () => {
       setPreviewLoading(true)
@@ -321,32 +305,13 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       if (active) setPreviewLoading(false)
     }, 1400)
     return () => { active = false; clearTimeout(timer) }
-  }, [description, mode, courseDepth, knowledgeLevel, learningPurpose, learningControl, isStreaming])
+  }, [description, mode, courseDepth, knowledgeLevel, learningPurpose, learningControl, isStreaming, status])
 
   /** Click an idea spark → drop its ready-structured goal into the box (typed in). */
   function pickIdea(idea: CurriculumIdea) {
     if (isEnhancing || isStreaming) return
     setEnhancementError(null)
     revealEnhancedGoal(idea.goal)
-  }
-
-  function updateSources(event: ChangeEvent<HTMLInputElement>) {
-    setSourceFiles(event.target.files)
-    setError(null)
-  }
-
-  function clearSources() {
-    setSourceFiles(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
-  function handleSourceDrop(event: React.DragEvent<HTMLLabelElement>) {
-    event.preventDefault()
-    setIsDraggingFiles(false)
-    if (event.dataTransfer.files?.length) {
-      setSourceFiles(event.dataTransfer.files)
-      setError(null)
-    }
   }
 
   function handleCancel() {
@@ -380,6 +345,10 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
   async function enhanceGoal() {
     const base = description.trim()
     if (base.length < 3 || isEnhancing || isStreaming) return
+    if (status !== 'authenticated') {
+      setAuthRequired(true)
+      return
+    }
     setIsEnhancing(true)
     setEnhancementError(null)
     try {
@@ -440,12 +409,6 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
       formData.append('teachingPersona', teachingPersona)
       formData.append('previewCurriculum', String(previewCurriculum))
 
-      if (sourceFiles) {
-        Array.from(sourceFiles).forEach((file) => {
-          formData.append('sources', file)
-        })
-      }
-
       const response = await fetch('/api/courses/generate', {
         method: 'POST',
         body: formData,
@@ -479,7 +442,7 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
     await startGeneration()
   }
 
-  const sourceLabel = mode === 'source_grounded' ? 'Your documents' : 'AI generated'
+  const sourceLabel = 'AI generated'
   const levelLabel = LEVEL_LABEL[knowledgeLevel]
 
   return (
@@ -551,22 +514,22 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
                 </button>
               )}
             </div>
-            <button type="button" className="cb-is-refresh" onClick={loadIdeas} disabled={ideasLoading} title="New ideas">
+            <button type="button" className="cb-is-refresh" onClick={loadIdeas} disabled={ideasLoading || status !== 'authenticated'} title="New ideas">
               <HiSparkles size={12} />
             </button>
           </div>
         </Block>
 
-        {/* ── Content source (source-based first) ── */}
+        {/* ── Content source ── */}
         <Block title="Choose content source" hint="Where lessons come from">
           <div className="cb-source-grid">
-            {SOURCE_OPTIONS.map(({ value, title, copy, Icon }) => (
+            {SOURCE_OPTIONS.map(({ value, title, copy, Icon, disabled }) => (
               <button
                 key={value}
                 type="button"
                 className={`cb-source-card${mode === value ? ' selected' : ''}`}
-                onClick={() => setMode(value)}
                 aria-pressed={mode === value}
+                disabled={disabled}
               >
                 <span className="cb-sc-check"><IcCheckSm width={9} height={9} /></span>
                 <span className="cb-sc-head">
@@ -578,63 +541,10 @@ export function TopicInput({ initialJobId = null }: TopicInputProps) {
             ))}
           </div>
 
-          {mode === 'source_grounded' ? (
-            <div className="cb-source-upload">
-              <label
-                htmlFor="sources"
-                className={`cb-upload${isDraggingFiles ? ' dragging' : ''}${sourceFiles?.length ? ' has-files' : ''}`}
-                onDragOver={(event) => { event.preventDefault(); setIsDraggingFiles(true) }}
-                onDragLeave={() => setIsDraggingFiles(false)}
-                onDrop={handleSourceDrop}
-              >
-                <input
-                  ref={fileInputRef}
-                  id="sources"
-                  className="hidden-file-input"
-                  multiple
-                  type="file"
-                  accept={ACCEPTED_SOURCE_TYPES}
-                  onChange={updateSources}
-                />
-                <span className="cb-upload-ic"><IcDoc width={22} height={22} /></span>
-                <span className="cb-upload-copy">
-                  <strong>
-                    {sourceFiles?.length
-                      ? `${sourceFiles.length} file${sourceFiles.length === 1 ? '' : 's'} selected`
-                      : 'Choose files or drag & drop'}
-                  </strong>
-                  <span>PDF, Word, PowerPoint, Excel, Markdown, HTML, or plain text</span>
-                </span>
-              </label>
-              {sourceFiles && sourceFiles.length > 0 ? (
-                <>
-                  <ol className="cb-file-list" aria-label="Selected source order">
-                    {Array.from(sourceFiles).map((file, idx) => (
-                      <li key={`${file.name}-${idx}`}>
-                        <span className="cb-file-num">{idx + 1}</span>
-                        <span className="cb-file-name">{file.name}</span>
-                        <span className="cb-file-size">{formatFileSize(file.size)}</span>
-                      </li>
-                    ))}
-                  </ol>
-                  <div className="cb-source-foot">
-                    <span>The numbered order above is treated as the study sequence.</span>
-                    <button className="cb-clear-btn" type="button" onClick={clearSources}>Clear selection</button>
-                  </div>
-                </>
-              ) : (
-                <p className="cb-source-note">
-                  Lessons are generated only from this material — foundations, core concepts, and next
-                  steps are organized from what your sources actually cover.
-                </p>
-              )}
-            </div>
-          ) : (
-            <div className="cb-notice">
-              <IcWarn />
-              <span>This curriculum is AI-generated from model knowledge. Verify technical facts for professional or high-stakes use.</span>
-            </div>
-          )}
+          <div className="cb-notice">
+            <IcWarn />
+            <span>This curriculum is AI-generated from model knowledge. Verify technical facts for professional or high-stakes use.</span>
+          </div>
         </Block>
 
         {/* ── Progression ── */}

@@ -1,13 +1,21 @@
 import { NextResponse } from 'next/server'
 import { generateAI } from '@/lib/ai'
+import { getRequiredUserId } from '@/lib/server/currentUser'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(request: Request) {
   try {
+    const userId = await getRequiredUserId()
     const { prompt } = await request.json()
 
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
       return NextResponse.json({ error: 'Prompt is required.' }, { status: 400 })
     }
+    if (prompt.trim().length > 2000) {
+      return NextResponse.json({ error: 'Prompt must be 2,000 characters or fewer.' }, { status: 400 })
+    }
+
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools' })
 
     const systemInstruction = `You rewrite a learner's raw learning goal into a sharp, structured goal that a course-generation system can turn into an excellent, well-scoped curriculum. The output goes directly into a "Learning goal" field that names and structures the whole course, so it must be information-rich but still read as one natural goal.
 
@@ -36,7 +44,10 @@ Hard rules:
 
     return NextResponse.json({ enhanced: cleaned })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Prompt enhancement failed.'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const status = message.toLowerCase().includes('sign in') ? 401 : 500
+    return NextResponse.json({ error: status === 401 ? message : 'Prompt enhancement failed.' }, { status })
   }
 }

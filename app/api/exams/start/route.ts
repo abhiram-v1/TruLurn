@@ -3,6 +3,7 @@ import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { startOrResumeExam } from '@/lib/quiz/examEngine'
 import type { ExamMode } from '@/types'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(request: Request) {
   try {
@@ -22,10 +23,14 @@ export async function POST(request: Request) {
 
     const db = await getDb()
     const userId = await getRequiredUserId()
+    await consumeApiUsage({ userId, bucket: 'quiz_actions', scope: 'quiz', db })
     const state = await startOrResumeExam({ db, courseId, topicId, userId, mode, isReview, forceNew })
     return NextResponse.json(state)
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Could not start exam.'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const status = message.toLowerCase().includes('sign in') ? 401 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }

@@ -4,21 +4,13 @@ import { readCourseGenerationInput, validateCourseGenerationInput } from '@/lib/
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import crypto from 'crypto'
 import { ensureLexicalSearchIndexes, ensureVectorSearchIndexes } from '@/lib/vector/indexes'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(request: Request) {
   try {
     const userId = await getRequiredUserId()
     const db = await getDb()
     const jobId = crypto.randomUUID()
-    const [vectorIndexes, lexicalIndexes] = await Promise.all([
-      ensureVectorSearchIndexes(db),
-      ensureLexicalSearchIndexes(db),
-    ])
-    const indexErrors = [...vectorIndexes, ...lexicalIndexes]
-      .filter((index) => index.status === 'error')
-    if (indexErrors.length) {
-      console.warn('[course-generation] Vector index setup reported errors.', indexErrors)
-    }
     const input = await readCourseGenerationInput(request, {
       db,
       userId,
@@ -28,6 +20,18 @@ export async function POST(request: Request) {
 
     if (validationError) {
       return NextResponse.json({ error: validationError }, { status: 400 })
+    }
+
+    await consumeApiUsage({ userId, bucket: 'course_builds', scope: 'course-builds', db })
+
+    const [vectorIndexes, lexicalIndexes] = await Promise.all([
+      ensureVectorSearchIndexes(db),
+      ensureLexicalSearchIndexes(db),
+    ])
+    const indexErrors = [...vectorIndexes, ...lexicalIndexes]
+      .filter((index) => index.status === 'error')
+    if (indexErrors.length) {
+      console.warn('[course-generation] Vector index setup reported errors.', indexErrors)
     }
 
     const jobDoc = {
@@ -65,6 +69,8 @@ export async function POST(request: Request) {
       jobId,
     })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Unknown course generation error'
     const status = message.includes('sign in') ? 401 : 500
 

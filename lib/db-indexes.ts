@@ -91,6 +91,18 @@ export async function ensureIndexes(db: Db): Promise<void> {
       { feature: 1, provider: 1, model: 1, created_at: -1 },
       { background: true, name: 'ai_usage_events_feature' },
     ),
+    db.collection('apiUsageDaily').createIndex(
+      { user_id: 1, date_key: 1 },
+      { background: true, name: 'api_usage_daily_user' },
+    ),
+    db.collection('apiUsageDaily').createIndex(
+      { expires_at: 1 },
+      { background: true, expireAfterSeconds: 0, name: 'api_usage_daily_ttl' },
+    ),
+    db.collection('apiRateWindows').createIndex(
+      { expires_at: 1 },
+      { background: true, expireAfterSeconds: 0, name: 'api_rate_windows_ttl' },
+    ),
     db.collection('lessonResearchCache').createIndex(
       { user_id: 1, course_id: 1, topic_id: 1, page_number: 1, updated_at: -1 },
       { background: true, name: 'lesson_research_cache_scope' },

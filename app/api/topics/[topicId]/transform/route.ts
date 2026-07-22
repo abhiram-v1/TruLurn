@@ -11,6 +11,7 @@ import {
   validateTransformResult,
   type TransformAction,
 } from '@/lib/topic-transform'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(
   request: Request,
@@ -47,6 +48,8 @@ export async function POST(
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
     }
+
+    await consumeApiUsage({ userId, bucket: 'lesson_generations', scope: 'lessons', db })
 
     const typedAction = action as TransformAction
     const courseSkillContext = await retrieveCourseSkillContext({
@@ -94,6 +97,8 @@ export async function POST(
 
     throw new Error('The transform could not produce a safe in-place replacement after two attempts.')
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Transform failed.'
     const status = message.includes('sign in') ? 401 : 500
     return NextResponse.json({ error: message }, { status })

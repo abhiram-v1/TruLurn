@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { generateAI, parseAIJson } from '@/lib/ai'
+import { getRequiredUserId } from '@/lib/server/currentUser'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,12 +46,18 @@ function sanitize(raw: unknown): PreviewData | null {
 
 export async function POST(request: Request) {
   try {
+    const userId = await getRequiredUserId()
     const body = await request.json().catch(() => ({}))
     const goal = String(body?.goal ?? '').trim()
 
     if (goal.length < 10) {
       return NextResponse.json({ error: 'Goal too short.' }, { status: 400 })
     }
+    if (goal.length > 2000) {
+      return NextResponse.json({ error: 'Goal must be 2,000 characters or fewer.' }, { status: 400 })
+    }
+
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools' })
 
     const depth = DEPTH_DESC[String(body?.depth)] ?? 'standard'
     const level = LEVEL_DESC[String(body?.level)] ?? 'intermediate'
@@ -100,6 +108,10 @@ Generate the course preview JSON.`
     return NextResponse.json(parsed)
   } catch (error) {
     console.error('[curriculum-preview]', error)
-    return NextResponse.json({ error: 'Preview generation failed.' }, { status: 500 })
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
+    const message = error instanceof Error ? error.message : 'Preview generation failed.'
+    const status = message.toLowerCase().includes('sign in') ? 401 : 500
+    return NextResponse.json({ error: status === 401 ? message : 'Preview generation failed.' }, { status })
   }
 }

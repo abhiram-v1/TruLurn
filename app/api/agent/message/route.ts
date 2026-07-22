@@ -7,6 +7,7 @@ import { handleMessage } from '@/lib/agent/handleMessage'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { getCachedCourseTopics } from '@/lib/cache/courseData'
 import { generateConversationTitle } from '@/lib/chat/generateConversationTitle'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function GET(request: Request) {
   try {
@@ -18,6 +19,14 @@ export async function GET(request: Request) {
     const conversationId = searchParams.get('conversationId')
 
     const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
+
+    const course = await db.collection('courses').findOne(
+      { _id: courseId as any, user_id: userId },
+      { projection: { _id: 1 } },
+    )
+    if (!course) {
+      return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
+    }
 
     // Messages are grouped into saved chat threads (conversation_id). Older
     // messages predate that grouping and have no conversation_id at all —
@@ -89,14 +98,38 @@ async function touchConversation(
 export async function POST(request: Request) {
   const startedAt = performance.now()
   try {
+    const userId = await getRequiredUserId()
     const body = await request.json()
     const { courseId, topicId, pageNumber, message, selectedContext, stream, conversationId } = body
 
     if (!courseId || !topicId || pageNumber === undefined || !message?.trim()) {
       return NextResponse.json({ error: 'Missing required agent parameters.' }, { status: 400 })
     }
+    if (String(message).trim().length > 4000) {
+      return NextResponse.json({ error: 'Message must be 4,000 characters or fewer.' }, { status: 400 })
+    }
+    if (typeof selectedContext === 'string' && selectedContext.length > 6000) {
+      return NextResponse.json({ error: 'Selected context must be 6,000 characters or fewer.' }, { status: 400 })
+    }
+    if (!Number.isFinite(Number(pageNumber)) || Number(pageNumber) < 1) {
+      return NextResponse.json({ error: 'pageNumber must be a positive number.' }, { status: 400 })
+    }
 
-    const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
+    const db = await getDb()
+    const [course, topic] = await Promise.all([
+      db.collection('courses').findOne(
+        { _id: String(courseId) as any, user_id: userId },
+        { projection: { _id: 1 } },
+      ),
+      db.collection('topics').findOne(
+        { _id: String(topicId) as any, course_id: String(courseId) },
+        { projection: { _id: 1 } },
+      ),
+    ])
+    if (!course || !topic) {
+      return NextResponse.json({ error: 'Course or topic not found.' }, { status: 404 })
+    }
+    await consumeApiUsage({ userId, bucket: 'tutor_messages', scope: 'tutor', db })
     const contextReadyAt = performance.now()
     const input = {
       db,
@@ -170,6 +203,8 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Unknown agent error'
     const status = message.includes('sign in') ? 401 : message.includes('not found') ? 404 : 500
 

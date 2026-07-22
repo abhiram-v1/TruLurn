@@ -1,10 +1,11 @@
 import type { CourseDepth, CurriculumMode, KnowledgeLevel, LearningControlMode, LearningPurpose } from '@/lib/ai/skills/types'
 import type { SourceProfileEnvelope, SourceTeachingProfile } from '@/lib/course-generation/sourceProfile'
 import type { CompactCurriculumSource } from '@/lib/course-generation/sourceCompaction'
-import { extractSourceTextFromFormData, normalizeCurriculumMode } from '@/lib/ai/sources'
+import { normalizeCurriculumMode } from '@/lib/ai/sources'
 import type { Db } from 'mongodb'
-import { ingestSourceFilesFromFormData } from '@/lib/sources/ingestion'
 import { normalizeTeachingPersona, type TeachingPersonaId } from '@/lib/personas'
+
+export const SOURCE_BASED_CURRICULA_ENABLED = false
 
 export type CourseGenerationInput = {
   topic: string          // derived from goals — kept for backward compat with persistence
@@ -66,23 +67,13 @@ function normalizeLearningPurpose(value: unknown): LearningPurpose {
 
 export async function readCourseGenerationInput(
   request: Request,
-  ingestion?: { db: Db; userId: string; generationJobId: string },
+  _ingestion?: { db: Db; userId: string; generationJobId: string },
 ): Promise<CourseGenerationInput> {
   const contentType = request.headers.get('content-type') ?? ''
 
   if (contentType.includes('multipart/form-data')) {
     const formData = await request.formData()
     const goals = String(formData.get('goals') ?? '').trim()
-    const durableExtraction = ingestion && goals.length >= 10
-      ? await ingestSourceFilesFromFormData({
-          ...ingestion,
-          formData,
-        })
-      : null
-    const extracted = durableExtraction
-      ?? (goals.length >= 10
-        ? await extractSourceTextFromFormData(formData)
-        : { sourceText: '', limitations: [] })
 
     return normalizeCourseGenerationInput({
       goals,
@@ -93,11 +84,10 @@ export async function readCourseGenerationInput(
       learningPurpose: normalizeLearningPurpose(formData.get('learningPurpose')),
       teachingPersona: normalizeTeachingPersona(formData.get('teachingPersona')),
       previewCurriculum: formData.get('previewCurriculum') !== 'false',
-      sourceText: extracted.sourceText,
-      sourceLimitations: extracted.limitations,
-      sourceDocumentIds: durableExtraction?.sourceDocumentIds ?? [],
-      sourceVersionIds: durableExtraction?.sourceVersionIds ?? [],
-      sourceIngestionJobIds: durableExtraction?.sourceIngestionJobIds ?? [],
+      sourceLimitations: [],
+      sourceDocumentIds: [],
+      sourceVersionIds: [],
+      sourceIngestionJobIds: [],
     })
   }
 
@@ -154,11 +144,8 @@ function normalizeCourseGenerationInput(input: {
 
 export function validateCourseGenerationInput(input: CourseGenerationInput): string | null {
   if (!input.goals || input.goals.length < 10) return 'Please describe what you want to learn (at least a sentence).'
-  if (input.mode === 'source_grounded' && !input.sourceText && !input.sourceVersionIds?.length) {
-    const extractionDetails = input.sourceLimitations.filter(Boolean).join(' ')
-    return extractionDetails
-      ? `No readable text could be extracted from the uploaded source. ${extractionDetails}`
-      : 'Source-grounded mode needs at least one non-empty, supported source file.'
+  if (input.mode === 'source_grounded' && !SOURCE_BASED_CURRICULA_ENABLED) {
+    return 'Source-based curricula are temporarily unavailable during the beta. Choose AI generated instead.'
   }
   return null
 }

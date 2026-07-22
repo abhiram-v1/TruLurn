@@ -5,10 +5,12 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { handleDoubt } from '@/lib/doubts/handleDoubt'
 import { getRequiredUserId } from '@/lib/server/currentUser'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(request: Request) {
   const startedAt = performance.now()
   try {
+    const userId = await getRequiredUserId()
     const body = await request.json()
     const { courseId, topicId, pageNumber, question } = body
 
@@ -24,7 +26,8 @@ export async function POST(request: Request) {
     // Cap question length: protects the prompt budget and bounds per-call cost.
     const trimmedQuestion = String(question).trim().slice(0, 4000)
 
-    const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
+    const db = await getDb()
+    await consumeApiUsage({ userId, bucket: 'tutor_messages', scope: 'tutor', db })
     const contextReadyAt = performance.now()
     const result = await handleDoubt({
       db,
@@ -46,6 +49,8 @@ export async function POST(request: Request) {
       },
     })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Unknown doubt chat error'
     const status = message.includes('sign in') ? 401 : message.includes('not found') ? 404 : 500
 

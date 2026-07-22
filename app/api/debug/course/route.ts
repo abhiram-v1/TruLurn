@@ -4,7 +4,7 @@ import { getDb } from '@/lib/db'
 // Temporary diagnostic endpoint — remove before production
 export async function GET(request: Request) {
   if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json({ error: 'Not available in production' }, { status: 403 })
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
   }
 
   const { searchParams } = new URL(request.url)

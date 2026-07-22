@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { answerExamTurn, saveExamDraft } from '@/lib/quiz/examEngine'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(
   request: Request,
@@ -25,6 +26,7 @@ export async function POST(
 
     const db = await getDb()
     const userId = await getRequiredUserId()
+    await consumeApiUsage({ userId, bucket: 'quiz_actions', scope: 'quiz', db })
     const state = await answerExamTurn({
       db,
       sessionId: decodeURIComponent(params.sessionId),
@@ -35,8 +37,11 @@ export async function POST(
     })
     return NextResponse.json(state)
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Could not submit answer.'
-    return NextResponse.json({ error: message }, { status: 500 })
+    const status = message.toLowerCase().includes('sign in') ? 401 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }
 

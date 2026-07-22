@@ -125,7 +125,7 @@
   border-color: var(--color-detail-slate);
 }
 
-.cb-source-card:not(.selected):hover,
+.cb-source-card:not(.selected):not(:disabled):hover,
 .cb-path-card:not(.selected):hover {
   border-color: var(--color-detail-slate);
   background: color-mix(in srgb, var(--color-detail-mineral) 28%, var(--color-bg-primary));

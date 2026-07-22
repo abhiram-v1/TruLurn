@@ -6,7 +6,7 @@ export async function getRequiredUserId() {
   const userId = session?.user ? (session.user as typeof session.user & { id?: string }).id : null
 
   if (!userId) {
-    throw new Error('You must sign in before creating a persistent course.')
+    throw new Error('You must sign in to continue.')
   }
 
   return userId

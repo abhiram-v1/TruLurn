@@ -11,6 +11,7 @@ import { getDb } from '@/lib/db'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { analyzeInteractionForGraph } from '@/lib/graph/interactionAnalyzer'
 import { updateGraphFromInteraction } from '@/lib/graph/manager'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export async function POST(
   request: Request,
@@ -31,11 +32,16 @@ export async function POST(
     if (!body.message?.trim() || !body.topicId) {
       return NextResponse.json({ ok: false, reason: 'missing_fields' }, { status: 400 })
     }
+    if (body.message.trim().length > 4000) {
+      return NextResponse.json({ ok: false, reason: 'message_too_large' }, { status: 413 })
+    }
 
     const [db] = await Promise.all([getDb()])
 
     const course = await db.collection('courses').findOne({ _id: courseId as any, user_id: userId })
     if (!course) return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
+
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools', db })
 
     const analysis = await analyzeInteractionForGraph({
       message: body.message,
@@ -57,6 +63,8 @@ export async function POST(
 
     return NextResponse.json({ ok: true, is_update_graph: analysis.is_update_graph })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Unknown error'
     const status = message.includes('sign in') ? 401 : 500
     return NextResponse.json({ error: message }, { status })

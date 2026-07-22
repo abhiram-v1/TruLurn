@@ -49,6 +49,7 @@ import {
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { findRelevantSourceImages } from '@/lib/sources/images'
 import { invalidateCourse, getCachedCourse, getCachedTopic, getCachedTopicPages, getCachedCourseTopics } from '@/lib/cache/courseData'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 type GeneratePageBody = {
   courseId?: string
@@ -87,6 +88,12 @@ export async function POST(
     if (!courseId) {
       return NextResponse.json({ error: 'courseId is required.' }, { status: 400 })
     }
+    if (!Number.isFinite(pageNumber) || pageNumber > 10_000) {
+      return NextResponse.json({ error: 'pageNumber must be between 1 and 10,000.' }, { status: 400 })
+    }
+    if (customInstruction && customInstruction.length > 2000) {
+      return NextResponse.json({ error: 'Custom instructions must be 2,000 characters or fewer.' }, { status: 400 })
+    }
 
     const db = await getDb()
     const userId = await getRequiredUserId()
@@ -94,6 +101,15 @@ export async function POST(
 
     if (!course) {
       return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
+    }
+    if (String(course.mode ?? '') === 'source_grounded') {
+      return NextResponse.json(
+        {
+          error: 'Source-based curricula are temporarily unavailable during the beta.',
+          code: 'SOURCE_CURRICULA_DISABLED',
+        },
+        { status: 410 },
+      )
     }
 
     const topic = await getCachedTopic(db, courseId, params.topicId)
@@ -144,6 +160,8 @@ export async function POST(
         alreadyExists: true,
       })
     }
+
+    await consumeApiUsage({ userId, bucket: 'lesson_generations', scope: 'lessons', db })
 
     if (String(course.mode ?? '') === 'source_grounded') {
       // 1. Wait briefly for style job to finish (up to 4000ms)
@@ -847,6 +865,8 @@ export async function POST(
       regenerated: (force || existingIsBlank) && Boolean(existing),
     })
   } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
     const message = error instanceof Error ? error.message : 'Unknown page generation error'
     const status = message.includes('sign in')
       ? 401

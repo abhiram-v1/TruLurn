@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { generateAI, parseAIJson } from '@/lib/ai'
+import { getRequiredUserId } from '@/lib/server/currentUser'
+import { apiUsageErrorResponse, consumeApiUsage } from '@/lib/server/apiUsage'
 
 export const dynamic = 'force-dynamic'
 
@@ -73,6 +75,17 @@ function sanitize(raw: unknown): CurriculumIdea[] {
 }
 
 export async function POST(request: Request) {
+  try {
+    const userId = await getRequiredUserId()
+    await consumeApiUsage({ userId, bucket: 'learning_tools', scope: 'ai-tools' })
+  } catch (error) {
+    const limited = apiUsageErrorResponse(error)
+    if (limited) return limited
+    const message = error instanceof Error ? error.message : 'Could not load curriculum ideas.'
+    const status = message.toLowerCase().includes('sign in') ? 401 : 500
+    return NextResponse.json({ error: status === 401 ? message : 'Could not load curriculum ideas.' }, { status })
+  }
+
   let count = 6
   try {
     const body = await request.json().catch(() => ({}))

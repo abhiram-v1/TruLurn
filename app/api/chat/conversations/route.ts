@@ -65,6 +65,13 @@ export async function POST(request: Request) {
     }
 
     const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
+    const course = await db.collection('courses').findOne(
+      { _id: courseId as any, user_id: userId },
+      { projection: { _id: 1 } },
+    )
+    if (!course) {
+      return NextResponse.json({ error: 'Course not found.' }, { status: 404 })
+    }
     const now = new Date()
     const doc = {
       _id: crypto.randomUUID() as any,
