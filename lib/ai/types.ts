@@ -70,6 +70,7 @@ export type AIProviderAdapter = {
   capabilities: ReadonlySet<AICapability>
   isConfigured: () => boolean
   generate?: (input: AIProviderGenerateInput) => Promise<string>
+  stream?: (input: AIProviderGenerateInput) => AsyncGenerator<string>
   webSearch?: (input: AIProviderWebSearchInput) => Promise<AIWebSearchResult>
   embed?: (input: AIProviderEmbeddingInput) => Promise<number[]>
 }
@@ -78,6 +79,7 @@ export type AIFeature =
   | 'agent_action'
   | 'agent_intent'
   | 'agent_style'
+  | 'chat_title'
   | 'curriculum_generation'
   | 'curriculum_research'
   | 'doubt_answer'
@@ -85,6 +87,7 @@ export type AIFeature =
   | 'embeddings'
   | 'exam_evaluation'
   | 'exam_question_generation'
+  | 'exam_question_validation'
   | 'exam_strategy'
   | 'flow_tracking'
   | 'graph_interaction_analyzer'
@@ -109,6 +112,7 @@ export type AIFeature =
   | 'prompt_enhancement'
   | 'curriculum_ideas'
   | 'curriculum_preview'
+  | 'goal_coverage_check'
 
 export type AIFeatureRoute = {
   capability: AICapability

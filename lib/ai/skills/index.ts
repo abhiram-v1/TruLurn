@@ -8,3 +8,8 @@ export {
   VISUAL_REPRESENTATION_PLANNING_RULES,
 } from '@/lib/ai/skills/dataChart'
 export type * from '@/lib/ai/skills/types'
+export {
+  COMPACT_VECTOR_OUTPUT_CONTRACT,
+  VECTOR_DIAGRAM_EMBEDDING_INSTRUCTIONS,
+  VECTOR_REPRESENTATION_PLANNING_RULES,
+} from '@/lib/ai/skills/vectorDiagram'

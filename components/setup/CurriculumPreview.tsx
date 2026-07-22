@@ -1,13 +1,15 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { IconChevronUp, IconChevronDown, IconTrash } from '@tabler/icons-react'
+import { IconChevronUp, IconChevronDown, IconChevronRight, IconTrash, IconPlus } from '@tabler/icons-react'
 
 
 // ── Curriculum preview & editor ────────────────────────────────────────────────
 // Shown after the AI builds the curriculum but before atlas/page generation. The
-// learner can rename, reorder, delete, and add branches/sections/topics, then
-// approve. Editing the plan here is cheap; regenerating a whole course is not.
+// learner can rename, reorder, delete, and add branches/sections/topics — at any
+// nesting depth — then approve. Editing the plan here is cheap; regenerating a
+// whole course is not. The full recursive tree is rendered: sub-topics are the
+// substance of the plan, not a footnote count.
 
 type AnyTopic = {
   id?: string
@@ -25,7 +27,13 @@ type AnyBranch = {
   topics?: AnyTopic[]
   [k: string]: unknown
 }
-type Curriculum = { title?: string; branches?: AnyBranch[]; [k: string]: unknown }
+type GoalCoverageConcept = { concept: string; covered: boolean; matched_topic: string | null }
+type Curriculum = {
+  title?: string
+  branches?: AnyBranch[]
+  goal_coverage_report?: { concepts?: GoalCoverageConcept[] } | null
+  [k: string]: unknown
+}
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
@@ -56,13 +64,21 @@ function normalize(curriculum: Curriculum): Curriculum {
   return next
 }
 
+// Every node in a subtree, including the root topic itself.
+function countSubtree(topic: AnyTopic): number {
+  let n = 1
+  for (const child of Array.isArray(topic.children) ? topic.children : []) {
+    n += countSubtree(child)
+  }
+  return n
+}
+
+// Full recursive count — grandchildren and deeper all count.
 function countTopics(curriculum: Curriculum): number {
   let n = 0
   for (const b of curriculum.branches ?? []) {
     for (const s of b.sections ?? []) {
-      for (const t of s.topics ?? []) {
-        n += 1 + (Array.isArray(t.children) ? t.children.length : 0)
-      }
+      for (const t of s.topics ?? []) n += countSubtree(t)
     }
   }
   return n
@@ -74,6 +90,38 @@ function move<T>(arr: T[], index: number, dir: -1 | 1): T[] {
   const copy = [...arr]
   ;[copy[index], copy[target]] = [copy[target], copy[index]]
   return copy
+}
+
+function newTopic(title = 'New topic'): AnyTopic {
+  return {
+    id: slugify(`${title} ${Date.now()}`),
+    title,
+    description: '',
+    prerequisites: [],
+    depth: 'medium',
+    estimated_pages: 3,
+    node_type: 'learning_unit',
+    children: [],
+    initial_state: 'locked',
+  }
+}
+
+// Case-insensitive check that a concept phrase appears somewhere in the tree.
+function treeHasTitle(curriculum: Curriculum, phrase: string): boolean {
+  const needle = phrase.trim().toLowerCase()
+  if (!needle) return true
+  let found = false
+  const visit = (t: AnyTopic) => {
+    if (found) return
+    if ((t.title ?? '').toLowerCase().includes(needle)) { found = true; return }
+    for (const c of Array.isArray(t.children) ? t.children : []) visit(c)
+  }
+  for (const b of curriculum.branches ?? []) {
+    for (const s of b.sections ?? []) {
+      for (const t of s.topics ?? []) visit(t)
+    }
+  }
+  return found
 }
 
 export function CurriculumPreview({
@@ -88,9 +136,26 @@ export function CurriculumPreview({
   const [curr, setCurr] = useState<Curriculum>(() => normalize(initialCurriculum))
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Collapsed topic paths — everything starts expanded so the real size of the
+  // plan is visible. Keys are `${bi}.${si}.${path.join('.')}`.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // Coverage concepts the learner has dismissed by hand.
+  const [dismissedConcepts, setDismissedConcepts] = useState<Set<string>>(new Set())
 
   const topicCount = useMemo(() => countTopics(curr), [curr])
   const branchCount = curr.branches?.length ?? 0
+
+  // Concepts the goal named that the plan (currently) doesn't cover. Re-checked
+  // against the live tree so adding/renaming a topic clears the warning.
+  const missingConcepts = useMemo(() => {
+    const concepts = curr.goal_coverage_report?.concepts ?? []
+    return concepts.filter(
+      (c) =>
+        !c.covered &&
+        !dismissedConcepts.has(c.concept) &&
+        !treeHasTitle(curr, c.concept),
+    )
+  }, [curr, dismissedConcepts])
 
   // ── Mutators (all immutable) ──────────────────────────────────────────────
   function mutate(fn: (draft: Curriculum) => void) {
@@ -99,6 +164,17 @@ export function CurriculumPreview({
       fn(draft)
       return draft
     })
+  }
+
+  // The topics array a nested path points INTO. `parentPath` walks children.
+  function topicsAt(d: Curriculum, bi: number, si: number, parentPath: number[]): AnyTopic[] {
+    let arr = d.branches![bi].sections![si].topics!
+    for (const i of parentPath) {
+      const t = arr[i]
+      if (!Array.isArray(t.children)) t.children = []
+      arr = t.children
+    }
+    return arr
   }
 
   const setCourseTitle = (v: string) => mutate((d) => { d.title = v })
@@ -126,31 +202,54 @@ export function CurriculumPreview({
   const setSectionTitle = (bi: number, si: number, v: string) =>
     mutate((d) => { d.branches![bi].sections![si].title = v })
 
-  const setTopicField = (bi: number, si: number, ti: number, field: 'title' | 'description', v: string) =>
-    mutate((d) => { (d.branches![bi].sections![si].topics![ti] as AnyTopic)[field] = v })
-
-  const deleteTopic = (bi: number, si: number, ti: number) =>
-    mutate((d) => { d.branches![bi].sections![si].topics!.splice(ti, 1) })
-
-  const moveTopic = (bi: number, si: number, ti: number, dir: -1 | 1) =>
+  const setTopicTitleAt = (bi: number, si: number, path: number[], v: string) =>
     mutate((d) => {
-      const topics = d.branches![bi].sections![si].topics!
-      d.branches![bi].sections![si].topics = move(topics, ti, dir)
+      const arr = topicsAt(d, bi, si, path.slice(0, -1))
+      arr[path[path.length - 1]].title = v
     })
 
-  const addTopic = (bi: number, si: number) =>
+  const deleteTopicAt = (bi: number, si: number, path: number[]) =>
     mutate((d) => {
-      d.branches![bi].sections![si].topics!.push({
-        id: slugify(`topic ${Date.now()}`),
-        title: 'New topic',
-        description: '',
-        prerequisites: [],
-        depth: 'medium',
-        estimated_pages: 3,
-        node_type: 'learning_unit',
-        children: [],
-        initial_state: 'locked',
-      })
+      const arr = topicsAt(d, bi, si, path.slice(0, -1))
+      arr.splice(path[path.length - 1], 1)
+    })
+
+  const moveTopicAt = (bi: number, si: number, path: number[], dir: -1 | 1) =>
+    mutate((d) => {
+      const parentPath = path.slice(0, -1)
+      const index = path[path.length - 1]
+      const arr = topicsAt(d, bi, si, parentPath)
+      const moved = move(arr, index, dir)
+      if (parentPath.length === 0) {
+        d.branches![bi].sections![si].topics = moved
+      } else {
+        const parentArr = topicsAt(d, bi, si, parentPath.slice(0, -1))
+        parentArr[parentPath[parentPath.length - 1]].children = moved
+      }
+    })
+
+  const addTopicAt = (bi: number, si: number, parentPath: number[], title?: string) =>
+    mutate((d) => {
+      topicsAt(d, bi, si, parentPath).push(newTopic(title))
+    })
+
+  // Missing concept → real topic at the end of the last branch's last section.
+  const addMissingConcept = (concept: string) => {
+    mutate((d) => {
+      const branches = d.branches ?? []
+      if (branches.length === 0) return
+      const branch = branches[branches.length - 1]
+      const sections = branch.sections!
+      sections[sections.length - 1].topics!.push(newTopic(concept))
+    })
+  }
+
+  const toggleCollapsed = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
     })
 
   async function approve() {
@@ -176,6 +275,97 @@ export function CurriculumPreview({
     }
   }
 
+  // ── Recursive topic rows ──────────────────────────────────────────────────
+  function renderTopics(topics: AnyTopic[], bi: number, si: number, parentPath: number[]) {
+    return (
+      <ul className={parentPath.length === 0 ? 'curriculum-topics' : 'curriculum-topics curriculum-subtopics'}>
+        {topics.map((topic, ti) => {
+          const path = [...parentPath, ti]
+          const key = `${bi}.${si}.${path.join('.')}`
+          const children = Array.isArray(topic.children) ? topic.children : []
+          const hasChildren = children.length > 0
+          const isCollapsed = collapsed.has(key)
+          const subtreeSize = countSubtree(topic) - 1
+
+          return (
+            <li key={key}>
+              <div className="curriculum-topic" data-depth={parentPath.length}>
+                {hasChildren ? (
+                  <button
+                    type="button"
+                    className={`curriculum-topic-toggle${isCollapsed ? '' : ' open'}`}
+                    onClick={() => toggleCollapsed(key)}
+                    title={isCollapsed ? 'Show sub-topics' : 'Hide sub-topics'}
+                    aria-label={isCollapsed ? 'Show sub-topics' : 'Hide sub-topics'}
+                    aria-expanded={!isCollapsed}
+                  >
+                    <IconChevronRight size={13} stroke={2.2} />
+                  </button>
+                ) : (
+                  <span className="curriculum-topic-num">{ti + 1}</span>
+                )}
+                <div className="curriculum-topic-fields">
+                  <input
+                    className="curriculum-topic-title"
+                    value={topic.title ?? ''}
+                    onChange={(e) => setTopicTitleAt(bi, si, path, e.target.value)}
+                    placeholder="Topic title"
+                    aria-label="Topic title"
+                  />
+                  {hasChildren && isCollapsed ? (
+                    <span className="curriculum-topic-children">
+                      {subtreeSize} sub-topic{subtreeSize !== 1 ? 's' : ''}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="curriculum-row-actions">
+                  <button
+                    type="button"
+                    onClick={() => addTopicAt(bi, si, path)}
+                    title="Add sub-topic"
+                    aria-label="Add sub-topic"
+                  >
+                    <IconPlus size={14} stroke={2} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveTopicAt(bi, si, path, -1)}
+                    disabled={ti === 0}
+                    title="Move up"
+                    aria-label="Move topic up"
+                  >
+                    <IconChevronUp size={14} stroke={2} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => moveTopicAt(bi, si, path, 1)}
+                    disabled={ti === topics.length - 1}
+                    title="Move down"
+                    aria-label="Move topic down"
+                  >
+                    <IconChevronDown size={14} stroke={2} />
+                  </button>
+                  <button
+                    type="button"
+                    className="curriculum-delete"
+                    onClick={() => deleteTopicAt(bi, si, path)}
+                    title={hasChildren ? 'Delete topic and its sub-topics' : 'Delete topic'}
+                    aria-label="Delete topic"
+                  >
+                    <IconTrash size={14} stroke={1.8} />
+                  </button>
+                </div>
+              </div>
+              {hasChildren && !isCollapsed
+                ? renderTopics(children, bi, si, path)
+                : null}
+            </li>
+          )
+        })}
+      </ul>
+    )
+  }
+
   return (
     <div className="curriculum-preview">
       <header className="curriculum-preview-head">
@@ -195,6 +385,33 @@ export function CurriculumPreview({
           <span className="curriculum-stat-pill">{topicCount} {topicCount === 1 ? 'topic' : 'topics'}</span>
         </div>
       </header>
+
+      {missingConcepts.length > 0 ? (
+        <div className="curriculum-coverage-warning" role="status">
+          <strong>You asked for these, but they aren&rsquo;t in the plan yet:</strong>
+          <ul>
+            {missingConcepts.map((c) => (
+              <li key={c.concept}>
+                <span>{c.concept}</span>
+                <div className="curriculum-coverage-actions">
+                  <button type="button" onClick={() => addMissingConcept(c.concept)}>
+                    Add as topic
+                  </button>
+                  <button
+                    type="button"
+                    className="curriculum-coverage-dismiss"
+                    onClick={() =>
+                      setDismissedConcepts((prev) => new Set(prev).add(c.concept))
+                    }
+                  >
+                    Skip
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="curriculum-branches">
         {(curr.branches ?? []).map((branch, bi) => (
@@ -263,59 +480,9 @@ export function CurriculumPreview({
                       />
                     ) : null}
 
-                    <ul className="curriculum-topics">
-                      {topics.map((topic, ti) => {
-                        const childCount = Array.isArray(topic.children) ? topic.children.length : 0
-                        return (
-                          <li className="curriculum-topic" key={`topic-${bi}-${si}-${ti}`}>
-                            <span className="curriculum-topic-num">{ti + 1}</span>
-                            <div className="curriculum-topic-fields">
-                              <input
-                                className="curriculum-topic-title"
-                                value={topic.title ?? ''}
-                                onChange={(e) => setTopicField(bi, si, ti, 'title', e.target.value)}
-                                placeholder="Topic title"
-                                aria-label="Topic title"
-                              />
-                              {childCount > 0 ? (
-                                <span className="curriculum-topic-children">{childCount} sub-topics</span>
-                              ) : null}
-                            </div>
-                            <div className="curriculum-row-actions">
-                              <button
-                                type="button"
-                                onClick={() => moveTopic(bi, si, ti, -1)}
-                                disabled={ti === 0}
-                                title="Move up"
-                                aria-label="Move topic up"
-                              >
-                                <IconChevronUp size={14} stroke={2} />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => moveTopic(bi, si, ti, 1)}
-                                disabled={ti === topics.length - 1}
-                                title="Move down"
-                                aria-label="Move topic down"
-                              >
-                                <IconChevronDown size={14} stroke={2} />
-                              </button>
-                              <button
-                                type="button"
-                                className="curriculum-delete"
-                                onClick={() => deleteTopic(bi, si, ti)}
-                                title="Delete topic"
-                                aria-label="Delete topic"
-                              >
-                                <IconTrash size={14} stroke={1.8} />
-                              </button>
-                            </div>
-                          </li>
-                        )
-                      })}
-                    </ul>
+                    {renderTopics(topics, bi, si, [])}
 
-                    <button type="button" className="curriculum-add-topic" onClick={() => addTopic(bi, si)}>
+                    <button type="button" className="curriculum-add-topic" onClick={() => addTopicAt(bi, si, [])}>
                       + Add topic
                     </button>
                   </div>

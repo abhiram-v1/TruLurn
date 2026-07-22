@@ -32,7 +32,7 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   explain: 'Explain',
   mcq: 'Multiple choice',
   true_false: 'True / False',
-  code: 'Code answer',
+  code: 'Code reasoning',
 }
 
 const OPTION_LETTERS = ['A', 'B', 'C', 'D']
@@ -80,6 +80,7 @@ type ExamSessionPayload = {
     question_index: number
     min_questions: number
     max_questions: number
+    answered_count: number
     followups_used: number
     max_followups: number
     summary?: {
@@ -98,6 +99,9 @@ type ExamSessionPayload = {
   turns?: Array<ExamTurn & {
     answer?: string
     rubric?: string | null
+    correct_answer?: string | null
+    answer_explanation?: string | null
+    answer_uncertain?: boolean
     evaluation?: EvaluationResult | null
   }>
 }
@@ -172,8 +176,8 @@ function CodeAnswerInput({
   return (
     <div className="quiz-code-shell">
       <div className="quiz-code-toolbar">
-        <span>Code answer</span>
-        <span>⇥ indent · ⌘Z undo</span>
+        <span>Code reasoning</span>
+        <span>Reviewed, not executed</span>
       </div>
       <CodeMirror
         value={value}
@@ -322,6 +326,18 @@ function ResultView({
               ? <pre><code>{turn.answer || 'No answer given.'}</code></pre>
               : <p>{turn.answer || <em>No answer given.</em>}</p>}
           </div>
+          {(turn.type === 'mcq' || turn.type === 'true_false') && turn.correct_answer ? (
+            <div className="result-correct-answer">
+              <span className="result-label">Correct answer</span>
+              <p>{turn.correct_answer}</p>
+            </div>
+          ) : null}
+          {turn.answer_explanation ? (
+            <div className="result-explanation">
+              <span className="result-label">Why</span>
+              <MarkdownContent className="quiz-question-md">{turn.answer_explanation}</MarkdownContent>
+            </div>
+          ) : null}
           {turn.evaluation && (
             <div className="result-feedback">
               <span className="result-label">Feedback</span>
@@ -401,13 +417,13 @@ export function QuizSession({
         const res = await fetch('/api/exams/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ courseId, topicId, mode, isReview }),
+          body: JSON.stringify({ courseId, topicId, mode, isReview, forceNew: retakeKey > 0 }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Could not start quiz.')
         if (alive) {
           setState(data)
-          setAnswer('')
+          setAnswer(data.turn?.draft_answer ?? '')
         }
       } catch (err) {
         if (alive) setError(err instanceof Error ? err.message : 'Could not start quiz.')
@@ -422,14 +438,42 @@ export function QuizSession({
   }, [courseId, topicId, mode, isReview, retakeKey])
 
   const turn = state?.turn ?? null
+
+  // Restore the saved in-progress response when the learner comes back.
+  useEffect(() => {
+    setAnswer(turn?.draft_answer ?? '')
+  }, [turn?.id, turn?.draft_answer])
+
+  // Save a draft after a short pause. Submitted answers are still saved by the
+  // normal POST below; this protects work if the learner closes the page first.
+  useEffect(() => {
+    if (!state?.session.id || !turn || state.session.status !== 'active') return
+    if (answer === (turn.draft_answer ?? '')) return
+
+    const timer = window.setTimeout(() => {
+      fetch(`/api/exams/${encodeURIComponent(state.session.id)}/answer`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ turnId: turn.id, answer }),
+      }).catch(() => {
+        // A draft is best-effort. It must never prevent the real answer from
+        // being submitted when the connection is briefly unavailable.
+      })
+    }, 650)
+
+    return () => window.clearTimeout(timer)
+  }, [answer, state?.session.id, state?.session.status, turn])
   const progressLabel = useMemo(() => {
     if (!state || !turn) return 'Preparing quiz'
-    if (state.session.mode === 'spot_check') return `Spot check · Question ${turn.turn_index}`
-    return `Question ${turn.turn_index}${turn.source === 'followup' ? ' · follow-up' : ''}`
+    if (turn.source === 'followup') {
+      return `Follow-up ${Math.max(1, state.session.followups_used)} of up to ${state.session.max_followups}`
+    }
+    const position = Math.min(state.session.min_questions, state.session.answered_count + 1)
+    if (state.session.mode === 'spot_check') return `Spot check · Question ${position} of ${state.session.min_questions}`
+    return `Question ${position} of ${state.session.min_questions}`
   }, [state, turn])
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function submitAnswer(uncertain = false) {
     if (!state?.session.id || !turn) return
     setIsSubmitting(true)
     setError(null)
@@ -437,7 +481,7 @@ export function QuizSession({
       const res = await fetch(`/api/exams/${encodeURIComponent(state.session.id)}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ turnId: turn.id, answer }),
+        body: JSON.stringify({ turnId: turn.id, answer, uncertain }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not submit answer.')
@@ -455,6 +499,11 @@ export function QuizSession({
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void submitAnswer(false)
   }
 
   if (isLoading) {
@@ -491,7 +540,7 @@ export function QuizSession({
     )
   }
 
-  if (!turn) {
+  if (!state || !turn) {
     return (
       <div className="quiz-stack">
         <div className="question-block">
@@ -505,9 +554,21 @@ export function QuizSession({
   return (
     <div className="quiz-stack">
       <form className="quiz-stack" onSubmit={submit}>
+        <div className="quiz-progress" aria-label="Quiz progress">
+          <div>
+            <strong>{progressLabel}</strong>
+            {state.session.max_followups > 0 ? (
+              <span>Up to {state.session.max_followups} diagnostic follow-ups</span>
+            ) : null}
+          </div>
+          <progress
+            max={Math.max(1, state.session.min_questions)}
+            value={Math.min(state.session.min_questions, state.session.answered_count + 1)}
+          />
+        </div>
         <div className="question-block">
           <div className="question-meta">
-            {progressLabel} · {TYPE_LABELS[turn.type]}
+            {TYPE_LABELS[turn.type]}
           </div>
           <div className="question-text">
             <MarkdownContent className="quiz-question-md">{turn.question}</MarkdownContent>
@@ -521,9 +582,19 @@ export function QuizSession({
           </div>
         )}
 
-        <button className="button" type="submit" disabled={isSubmitting || !answer.trim()}>
-          {isSubmitting ? 'Saving answer...' : 'Continue'}
-        </button>
+        <div className="quiz-submit-actions">
+          <button className="button" type="submit" disabled={isSubmitting || !answer.trim()}>
+            {isSubmitting ? 'Saving answer...' : 'Continue'}
+          </button>
+          <button
+            className="button-subtle"
+            type="button"
+            onClick={() => void submitAnswer(true)}
+            disabled={isSubmitting}
+          >
+            I’m not sure
+          </button>
+        </div>
       </form>
 
       <p className="page-subtitle" style={{ marginTop: 4 }}>

@@ -1,3 +1,151 @@
+// ── Display-math fence repair ──────────────────────────────────────────────
+// AI output sometimes glues a `$$` fence to prose ("...such as $$") or drops a
+// closing fence. One misplaced `$$` desyncs every later fence: remark-math then
+// captures PROSE as display math (red KaTeX errors, space-swallowed sentences)
+// while the actual formulas fall out as raw text — and a stray `=` line even
+// turns the formula above it into a setext <h1>. The repair has two passes:
+//   1. move fences that share a line with other content onto their own lines
+//   2. re-pair fence lines, closing blocks whose closer is missing and
+//      dropping stray fences that would otherwise swallow prose
+// Both passes are idempotent, so running the repair on already-clean content
+// is a no-op.
+
+const FENCE_ONLY_RE = /^\s*\$\$\s*$/
+const CODE_FENCE_RE = /^\s*(```|~~~)/
+
+/** A line that plausibly belongs inside a display-math block. */
+function looksLikeMathContentLine(line: string): boolean {
+  const t = line.trim()
+  if (!t) return false
+  if (/^#{1,6}\s/.test(t)) return false
+  if (t.startsWith('>')) return false
+  if (/^([-*+]|\d+\.)\s/.test(t)) return false
+  if (t.startsWith('|')) return false
+  if (t.includes('\\')) return true
+  // No TeX commands: only accept short symbol-ish lines (e.g. "=", "x + 1"),
+  // not prose — prose is what a desynced fence would wrongly swallow.
+  const words = t.match(/[A-Za-z]{2,}/g) ?? []
+  return words.length <= 3
+}
+
+/** Pass 1: put every lone `$$` fence on its own line. */
+function splitMixedFenceLines(markdown: string): string {
+  const out: string[] = []
+  let inCode = false
+  for (const line of markdown.split('\n')) {
+    if (CODE_FENCE_RE.test(line)) {
+      inCode = !inCode
+      out.push(line)
+      continue
+    }
+    if (inCode || FENCE_ONLY_RE.test(line)) {
+      out.push(line)
+      continue
+    }
+    // Even counts are self-contained inline math ($$x$$) — leave those alone.
+    const count = (line.match(/\$\$/g) ?? []).length
+    if (count !== 1) {
+      out.push(line)
+      continue
+    }
+    const idx = line.indexOf('$$')
+    const before = line.slice(0, idx).trimEnd()
+    const after = line.slice(idx + 2).trim()
+    if (before) out.push(before)
+    out.push('$$')
+    if (after) out.push(after)
+  }
+  return out.join('\n')
+}
+
+/** Pass 2: re-pair fence-only lines so no block captures prose. */
+function repairFencePairing(markdown: string): string {
+  const lines = markdown.split('\n')
+  const out: string[] = []
+  let inCode = false
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+    if (CODE_FENCE_RE.test(line)) {
+      inCode = !inCode
+      out.push(line)
+      i += 1
+      continue
+    }
+    if (inCode || !FENCE_ONLY_RE.test(line)) {
+      out.push(line)
+      i += 1
+      continue
+    }
+
+    // Fence-only line: scan forward over math content (tolerating blanks) to
+    // find either the closing fence or the first prose/structure boundary.
+    let k = i + 1
+    let lastMathIdx = i
+    let sawMath = false
+    while (k < lines.length) {
+      if (FENCE_ONLY_RE.test(lines[k])) break
+      const t = lines[k].trim()
+      if (!t) {
+        k += 1
+        continue
+      }
+      if (!looksLikeMathContentLine(lines[k])) break
+      sawMath = true
+      lastMathIdx = k
+      k += 1
+    }
+
+    if (k < lines.length && FENCE_ONLY_RE.test(lines[k])) {
+      if (sawMath) {
+        // Proper block: emit fence, content, fence.
+        for (let m = i; m <= k; m += 1) out.push(lines[m])
+      }
+      // else: empty $$ ... $$ block — drop both fences.
+      i = k + 1
+      continue
+    }
+
+    if (sawMath) {
+      // Opener with math content but the closing fence is missing before
+      // prose/structure/EOF: close right after the last math line.
+      for (let m = i; m <= lastMathIdx; m += 1) out.push(lines[m])
+      out.push('$$')
+      i = lastMathIdx + 1
+      continue
+    }
+
+    // Stray fence with no math after it. If the lines right above are
+    // unfenced TeX (contain a backslash command), this is a closer whose
+    // opener went missing — wrap backward. Otherwise drop the fence.
+    let back = out.length
+    while (
+      back > 0
+      && out[back - 1].trim()
+      && !FENCE_ONLY_RE.test(out[back - 1])
+      && looksLikeMathContentLine(out[back - 1])
+    ) back -= 1
+    const wrapped = out.slice(back)
+    if (wrapped.length && wrapped.some((l) => l.includes('\\'))) {
+      out.splice(back, 0, '$$')
+      out.push('$$')
+    }
+    i += 1
+  }
+
+  return out.join('\n')
+}
+
+/**
+ * Repair malformed `$$` display-math fences so a single AI formatting slip
+ * cannot cascade into broken rendering for the rest of a page.
+ */
+export function repairMathFences(markdown: string): string {
+  if (!markdown.includes('$$')) return markdown
+  return repairFencePairing(splitMixedFenceLines(markdown))
+}
+
 // ── Math detection ─────────────────────────────────────────────────────────
 
 /** Loose heuristic — matches backtick math like `f(x)` */
@@ -154,7 +302,7 @@ export function normalizeLessonMarkdown(markdown: string) {
     normalizeAsciiTables(
       fixExistingMathSpans(
         normalizeItalicMath(
-          normalizeInlineCodeMath(markdown),
+          normalizeInlineCodeMath(repairMathFences(markdown)),
         ),
       ),
     ),

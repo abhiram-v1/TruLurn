@@ -1,4 +1,10 @@
-import type { NeuralNetSpec, DataChartSpec, ParseResult, TruVizSpec } from './types'
+import type {
+  CoordinateVectorsSpec,
+  DataChartSpec,
+  NeuralNetSpec,
+  ParseResult,
+  TruVizSpec,
+} from './types'
 
 const CHART_TYPES = new Set(['bar', 'line', 'scatter', 'pie', 'histogram', 'area'])
 
@@ -38,11 +44,55 @@ export function parseTruViz(raw: string): ParseResult {
     return validateDataChart(obj, raw)
   }
 
+  if (obj.type === 'coordinate-vectors') {
+    return validateCoordinateVectors(obj, raw)
+  }
+
   return {
     ok: false,
-    error: `Unknown diagram type: "${obj.type}". Supported: "neural-net", "data-chart".`,
+    error: `Unknown diagram type: "${obj.type}". Supported: "neural-net", "data-chart", "coordinate-vectors".`,
     raw,
   }
+}
+
+function isFiniteTuple(value: unknown, dimensions: 2 | 3): boolean {
+  return Array.isArray(value)
+    && value.length === dimensions
+    && value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate))
+}
+
+function validateCoordinateVectors(obj: Record<string, unknown>, raw: string): ParseResult {
+  if (obj.dimensions !== 2 && obj.dimensions !== 3) {
+    return { ok: false, error: 'coordinate-vectors "dimensions" must be 2 or 3.', raw }
+  }
+  const dimensions = obj.dimensions
+  if (!Array.isArray(obj.vectors) || obj.vectors.length === 0 || obj.vectors.length > 12) {
+    return { ok: false, error: 'coordinate-vectors requires 1 to 12 vectors.', raw }
+  }
+  for (let index = 0; index < obj.vectors.length; index++) {
+    const vector = obj.vectors[index] as Record<string, unknown>
+    if (!vector || typeof vector !== 'object' || !isFiniteTuple(vector.to, dimensions)) {
+      return { ok: false, error: `Vector ${index} needs a ${dimensions}D numeric "to" tuple.`, raw }
+    }
+    if (vector.from !== undefined && !isFiniteTuple(vector.from, dimensions)) {
+      return { ok: false, error: `Vector ${index} has an invalid ${dimensions}D "from" tuple.`, raw }
+    }
+  }
+  if (obj.points !== undefined) {
+    if (!Array.isArray(obj.points) || obj.points.length > 16) {
+      return { ok: false, error: 'coordinate-vectors "points" must contain at most 16 points.', raw }
+    }
+    for (let index = 0; index < obj.points.length; index++) {
+      const point = obj.points[index] as Record<string, unknown>
+      if (!point || typeof point !== 'object' || !isFiniteTuple(point.at, dimensions)) {
+        return { ok: false, error: `Point ${index} needs a ${dimensions}D numeric "at" tuple.`, raw }
+      }
+    }
+  }
+  if (obj.extent !== undefined && (typeof obj.extent !== 'number' || !Number.isFinite(obj.extent) || obj.extent <= 0)) {
+    return { ok: false, error: 'coordinate-vectors "extent" must be a positive number.', raw }
+  }
+  return { ok: true, spec: obj as unknown as CoordinateVectorsSpec as TruVizSpec }
 }
 
 function validateNeuralNet(obj: Record<string, unknown>, raw: string): ParseResult {

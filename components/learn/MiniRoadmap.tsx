@@ -2,21 +2,45 @@
 
 import {
   IconArrowRight,
+  IconBook2,
+  IconBrain,
+  IconBinaryTree,
   IconCheck,
   IconChevronDown,
   IconChevronRight,
+  IconChevronUp,
+  IconChartDots3,
+  IconCompass,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconFlag3,
   IconLock,
   IconMap2,
+  IconNetwork,
+  IconRoute,
   IconTags,
   IconTopologyStar3,
   IconTrash,
 } from '@tabler/icons-react'
+import type { Icon } from '@tabler/icons-react'
 import Link from 'next/link'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Topic } from '@/types'
+import type { LessonConceptNavPage } from '@/components/learn/LessonConceptNavigator'
+
+// Rotating set of geometric glyphs for section medallions — same pool used by
+// the Atlas branch nodes, so the two curriculum views read as one system.
+const SECTION_GLYPHS: Icon[] = [
+  IconCompass,
+  IconRoute,
+  IconBinaryTree,
+  IconNetwork,
+  IconBrain,
+  IconChartDots3,
+  IconTopologyStar3,
+]
 
 type TaggedReminder = {
   id: string
@@ -47,6 +71,26 @@ function isComplete(topic: Topic) {
   return COMPLETE_STATES.has(String(topic.state))
 }
 
+// Status marker strung on the thread: green check (done), pulsing accent
+// (current), outlined accent core (available), lock (locked).
+function TopicMarker({ state }: { state: string }) {
+  if (state === 'done') {
+    return <span className="tk-mk tk-mk--done" aria-hidden="true"><IconCheck size={11} stroke={2.6} /></span>
+  }
+  if (state === 'current') {
+    return (
+      <span className="tk-mk tk-mk--current" aria-hidden="true">
+        <span className="tk-mk-pulse" />
+        <span className="tk-mk-core" />
+      </span>
+    )
+  }
+  if (state === 'available') {
+    return <span className="tk-mk tk-mk--avail" aria-hidden="true"><span className="tk-mk-core" /></span>
+  }
+  return <span className="tk-mk tk-mk--locked" aria-hidden="true"><IconLock size={9} stroke={2} /></span>
+}
+
 function sortTopics(topics: Topic[]) {
   return [...topics].sort((a, b) => {
     const aSeq = Number.isFinite(Number(a.sequence_index)) ? Number(a.sequence_index) : Number.MAX_SAFE_INTEGER
@@ -72,24 +116,37 @@ export function MiniRoadmap({
   topics,
   currentTopicId,
   courseId,
+  courseTitle,
   collapsed = false,
   onToggle,
   currentPageNumber,
   totalPlannedPages,
+  conceptPages,
 }: {
   topics: Topic[]
   currentTopicId: string
   courseId: string
+  courseTitle?: string
   collapsed?: boolean
   onToggle?: () => void
   /** Page the learner is reading inside the current topic (1-based). */
   currentPageNumber?: number
   /** Planned page count of the current topic. */
   totalPlannedPages?: number
+  /** Per-page concepts for the current topic — powers the "in this topic" page list. */
+  conceptPages?: LessonConceptNavPage[]
 }) {
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(
     () => initialExpandedTopics(topics, currentTopicId),
   )
+  // Sections start collapsed except the one the learner is inside — the rail
+  // stays scannable while everything else remains one click away.
+  const [openSections, setOpenSections] = useState<Set<string>>(() => {
+    const current = topics.find((topic) => topic.id === currentTopicId)
+    const fallback = topics[0]?.section
+    const initial = current?.section ?? fallback
+    return new Set(initial ? [initial] : [])
+  })
   const [panelView, setPanelView] = useState<'map' | 'tagged'>('map')
   const [taggedReminders, setTaggedReminders] = useState<TaggedReminder[]>([])
   const [tagsLoading, setTagsLoading] = useState(true)
@@ -97,6 +154,7 @@ export function MiniRoadmap({
   const currentRowRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
   const sections = Array.from(new Set(topics.map((topic) => topic.section)))
+  const currentTopic = topics.find((topic) => topic.id === currentTopicId)
   const visibleRailTopics = topics.slice(0, 12)
   const hasRecursiveTraccia = topics.some((topic) =>
     Boolean(topic.parent_id || topic.node_type || topic.children_count || topic.path_ids?.length),
@@ -189,17 +247,20 @@ export function MiniRoadmap({
     })
   }
 
-  function rowAdornment(topic: Topic, current: boolean) {
-    if (topic.state === 'locked') {
-      return <IconLock className="topic-adorn" size={12} stroke={1.8} aria-label="Locked" />
-    }
-    if (isComplete(topic)) {
-      return <IconCheck className="topic-adorn complete" size={13} stroke={2.2} aria-label="Completed" />
-    }
-    return null
+  function toggleSection(section: string) {
+    setOpenSections((current) => {
+      const next = new Set(current)
+      if (next.has(section)) {
+        next.delete(section)
+      } else {
+        next.add(section)
+      }
+      return next
+    })
   }
 
-  // Page progress shown under the current topic row ("Page 3 of 7").
+  // Page progress shown under the current topic row ("Page 3 of 7") when
+  // there is no per-page list to render instead.
   function currentPageProgress() {
     if (!currentPageNumber || !totalPlannedPages || totalPlannedPages < 1) return null
     const pct = Math.min(100, Math.round((currentPageNumber / totalPlannedPages) * 100))
@@ -211,51 +272,140 @@ export function MiniRoadmap({
     )
   }
 
+  // "In this topic" page list — shown under the current topic, mirrors the
+  // per-page concept nav that already lives in the lesson panel.
+  function renderCurrentTopicPages(topic: Topic) {
+    if (!conceptPages || !conceptPages.length) return null
+    const active = currentPageNumber ?? 1
+    return (
+      <div className="traccia-pages-panel" aria-label={`Pages in ${topic.title}`}>
+        <div className="traccia-pages-head">
+          <span>In this topic</span>
+          <span className="traccia-pages-count">Page {active} / {conceptPages.length}</span>
+        </div>
+        {conceptPages.map((pg) => {
+          const state = pg.page_number < active ? 'done' : pg.page_number === active ? 'current' : 'todo'
+          const label = pg.concepts?.[0] || pg.summary || `Page ${pg.page_number}`
+          return (
+            <Link
+              key={pg.id}
+              className={`traccia-page-row is-${state}`}
+              href={`/learn/${courseId}/${topic.id}?page=${pg.page_number}`}
+              prefetch={false}
+            >
+              <span className="traccia-page-pip">
+                {state === 'done' ? <IconCheck size={9} stroke={3} /> : pg.page_number}
+              </span>
+              <span className="traccia-page-name">{label}</span>
+            </Link>
+          )
+        })}
+      </div>
+    )
+  }
+
   function renderTopicRow(topic: Topic, level = 0) {
     const current = topic.id === currentTopicId
     const currentPath = topicIsCurrentPath(topic, currentTopicId)
     const container = isContainer(topic)
     const expanded = expandedTopicIds.has(topic.id)
     const children = childrenByParent.get(topic.id) ?? []
-    const dotState = current ? 'active' : topic.state
+    const markerState = current ? 'current'
+      : isComplete(topic) ? 'done'
+      : topic.state === 'active' ? 'available'
+      : 'locked'
+
+    if (container) {
+      const locked = topic.state === 'locked'
+      // Progress through this lesson: all teachable descendants, not just
+      // direct children (containers can nest).
+      const descendants = topics.filter(
+        (t) => !isContainer(t) && (t.path_ids ?? []).includes(topic.id),
+      )
+      const teachableChildren = descendants.length
+        ? descendants
+        : children.filter((child) => !isContainer(child))
+      const doneCount = teachableChildren.filter(isComplete).length
+      const total = teachableChildren.length
+      const containsCurrent = teachableChildren.some((t) => t.id === currentTopicId)
+      const done = total > 0 && doneCount === total
+      const lit = total ? Math.min(1, (doneCount + (containsCurrent ? 0.5 : 0)) / total) : 0
+      return (
+        <div
+          className={`traccia-lesson level-${Math.min(level, 2)} ${currentPath ? 'is-current-path' : ''} ${locked ? 'is-locked' : ''}`}
+          key={topic.id}
+        >
+          <button
+            aria-expanded={expanded}
+            className="traccia-lesson-head"
+            disabled={locked}
+            onClick={() => toggleTopic(topic.id)}
+            type="button"
+          >
+            <span className={`traccia-lesson-node ${currentPath ? 'active' : ''} ${done ? 'done' : ''}`} aria-hidden="true" />
+            <span className="traccia-lesson-copy">
+              <span className="traccia-lesson-title">{topic.title}</span>
+              {total ? (
+                <span className="traccia-lesson-sub">
+                  <span className="traccia-lesson-frac">{doneCount}/{total}</span>
+                  <span className="traccia-lesson-minibar" aria-hidden="true">
+                    <i style={{ width: `${lit * 100}%` }} />
+                  </span>
+                </span>
+              ) : null}
+            </span>
+            {locked ? (
+              <IconLock className="traccia-lesson-lock" aria-label="Locked" size={13} stroke={1.8} />
+            ) : expanded ? (
+              <IconChevronDown className="traccia-lesson-chevron" aria-hidden="true" size={15} stroke={1.8} />
+            ) : (
+              <IconChevronRight className="traccia-lesson-chevron" aria-hidden="true" size={15} stroke={1.8} />
+            )}
+          </button>
+          {expanded && children.length ? (
+            <div className="traccia-topic-thread" style={{ '--lit': lit } as CSSProperties}>
+              <span className="traccia-topics-lit" aria-hidden="true" />
+              {children.map((child) => renderTopicRow(child, level + 1))}
+            </div>
+          ) : null}
+        </div>
+      )
+    }
+
+    const row = (
+      <>
+        <TopicMarker state={markerState} />
+        <span className="traccia-topic-copy">
+          <span className="traccia-topic-title">{topic.title}</span>
+          {current ? (
+            <span className="tk-here">
+              <IconBook2 size={11} stroke={1.9} aria-hidden="true" /> Reading now
+            </span>
+          ) : null}
+          {current && !(conceptPages && conceptPages.length) ? currentPageProgress() : null}
+        </span>
+      </>
+    )
 
     return (
-      <div
-        className={`topic-tree-row level-${Math.min(level, 2)} ${current ? 'is-current' : ''}`}
-        key={topic.id}
-        ref={current ? currentRowRef : undefined}
-      >
-        {container ? (
-          <button
-            className={`topic-container ${currentPath ? 'current-path' : ''} ${current ? 'current' : ''}`}
-            type="button"
-            onClick={() => toggleTopic(topic.id)}
-          >
-            <span className={`state-dot ${dotState}`} />
-            <span className="topic-name">{topic.title}</span>
-            <span className="topic-expander" aria-hidden="true">
-              {expanded ? <IconChevronDown size={14} stroke={1.8} /> : <IconChevronRight size={14} stroke={1.8} />}
-            </span>
-          </button>
-        ) : (
-          <Link
-            className={`topic-link ${current ? 'current' : ''}`}
-            href={`/learn/${courseId}/${topic.id}`}
-          >
-            <span className={`state-dot ${dotState}`} />
-            <span className="topic-name">{topic.title}</span>
-            {rowAdornment(topic, current)}
-          </Link>
-        )}
-
-        {current && !container ? currentPageProgress() : null}
-
-        {container && expanded && children.length ? (
-          <div className="topic-child-list">
-            {children.map((child) => renderTopicRow(child, level + 1))}
-          </div>
-        ) : null}
-      </div>
+      <Fragment key={topic.id}>
+        <div
+          className={`traccia-topic-row level-${Math.min(level, 2)} ${current ? 'is-current' : ''} ${isComplete(topic) ? 'is-done' : ''} ${topic.state === 'locked' ? 'is-locked' : ''}`}
+          ref={current ? currentRowRef : undefined}
+        >
+          {topic.state === 'locked' ? (
+            <div className="traccia-topic-link" aria-disabled="true">{row}</div>
+          ) : (
+            <Link
+              className="traccia-topic-link"
+              href={`/learn/${courseId}/${topic.id}`}
+            >
+              {row}
+            </Link>
+          )}
+        </div>
+        {current ? renderCurrentTopicPages(topic) : null}
+      </Fragment>
     )
   }
 
@@ -344,7 +494,14 @@ export function MiniRoadmap({
   return (
     <>
       <div className="roadmap-header">
-        {!collapsed ? <p className="panel-label">{panelView === 'map' ? 'Traccia' : 'Tagged reminders'}</p> : null}
+        {!collapsed ? (
+          <div className="traccia-heading">
+            <p className="panel-label">{panelView === 'map' ? 'Traccia' : 'Tagged reminders'}</p>
+            {panelView === 'map' ? (
+              <span className="traccia-heading-note">{courseTitle || 'Course path'}</span>
+            ) : null}
+          </div>
+        ) : null}
         <div className="roadmap-header-actions">
           {!collapsed ? (
             <button
@@ -407,41 +564,95 @@ export function MiniRoadmap({
             <div className="roadmap-progress-bar">
               <span style={{ width: `${progressPct}%` }} />
             </div>
-            <span className="roadmap-progress-text">
-              {completedCount}/{teachable.length} topics
-            </span>
+            <span className="roadmap-progress-text"><b>{completedCount}</b> of {teachable.length} topics</span>
+            <span className="roadmap-progress-pct">{progressPct}%</span>
           </div>
 
           <div className="roadmap-scroll">
-            {sections.map((section) => (
-              <div className="topic-group" key={section}>
-                <div className="roadmap-section-label">
-                  <span className="roadmap-section-name">{section}</span>
-                  {sectionProgress(section)}
-                </div>
-                <div className="topic-list">
-                  {hasRecursiveTraccia ? (
-                    sortTopics(topics.filter((topic) => {
-                      if (topic.section !== section) return false
-                      return !topic.parent_id || !topicById.has(topic.parent_id)
-                    })).map((topic) => renderTopicRow(topic))
-                  ) : (
-                    sortTopics(topics.filter((topic) => topic.section === section))
-                      .map((topic) => renderTopicRow(topic))
-                  )}
-                </div>
-              </div>
-            ))}
+            {sections.map((section, sectionIndex) => {
+              const sectionTopics = teachable.filter((topic) => topic.section === section)
+              const isCurrentSection = currentTopic?.section === section
+              const isLockedSection = sectionTopics.length > 0
+                && sectionTopics.every((topic) => topic.state === 'locked')
+              const isDoneSection = !isCurrentSection && sectionTopics.length > 0
+                && sectionTopics.every(isComplete)
+              const sectionDoneCount = sectionTopics.filter(isComplete).length
+              const sectionLit = sectionTopics.length
+                ? Math.min(1, (sectionDoneCount + (isCurrentSection ? 0.5 : 0)) / sectionTopics.length)
+                : 0
+              const sectionLabelId = `traccia-section-${sectionIndex}`
+              const Glyph = SECTION_GLYPHS[sectionIndex % SECTION_GLYPHS.length]
+              const sectionOpen = openSections.has(section)
+
+              return (
+                <section
+                  aria-labelledby={sectionLabelId}
+                  className={`traccia-section ${isCurrentSection ? 'section-current' : ''} ${isLockedSection ? 'section-locked' : ''} ${isDoneSection ? 'section-done' : ''}`}
+                  key={section}
+                >
+                  <button
+                    aria-expanded={sectionOpen}
+                    className="traccia-section-head"
+                    id={sectionLabelId}
+                    onClick={() => toggleSection(section)}
+                    type="button"
+                  >
+                    <span className="traccia-section-marker" aria-hidden="true">
+                      <Glyph size={16} stroke={1.7} />
+                      {isDoneSection ? (
+                        <span className="traccia-section-badge"><IconCheck size={9} stroke={3} /></span>
+                      ) : isLockedSection ? (
+                        <span className="traccia-section-badge is-locked"><IconLock size={8} stroke={2.2} /></span>
+                      ) : null}
+                    </span>
+                    <span className="traccia-section-copy">
+                      <span className="traccia-section-name">{section}</span>
+                      <span className="traccia-section-meta">
+                        {sectionProgress(section)}
+                        {isCurrentSection ? <span className="traccia-section-here">You are here</span> : null}
+                      </span>
+                    </span>
+                    {sectionOpen ? (
+                      <IconChevronUp className="traccia-section-chevron" aria-hidden="true" size={16} stroke={1.8} />
+                    ) : (
+                      <IconChevronDown className="traccia-section-chevron" aria-hidden="true" size={16} stroke={1.8} />
+                    )}
+                  </button>
+                  {sectionOpen ? (
+                    <div className="traccia-section-thread" style={{ '--lit': sectionLit } as CSSProperties}>
+                      {hasRecursiveTraccia ? (
+                        sortTopics(topics.filter((topic) => {
+                          if (topic.section !== section) return false
+                          return !topic.parent_id || !topicById.has(topic.parent_id)
+                        })).map((topic) => renderTopicRow(topic))
+                      ) : (
+                        sortTopics(topics.filter((topic) => topic.section === section))
+                          .map((topic) => renderTopicRow(topic))
+                      )}
+                    </div>
+                  ) : null}
+                  {sectionOpen && sectionIndex === sections.length - 1 ? (
+                    <div className="traccia-route-destination" aria-hidden="true">
+                      <IconFlag3 size={15} stroke={1.8} />
+                    </div>
+                  ) : null}
+                </section>
+              )
+            })}
           </div>
 
           {/* Journey footer — what comes after this topic */}
           <div className="roadmap-footer-stack">
             {nextTopic ? (
               <Link className="roadmap-next" href={`/learn/${courseId}/${nextTopic.id}`}>
-                <span className="roadmap-next-label">Up next</span>
-                <span className="roadmap-next-title">
-                  {nextTopic.title} <IconArrowRight size={13} stroke={2} className="roadmap-next-arrow" />
+                <span className="roadmap-next-icon-shell" aria-hidden="true">
+                  <IconBook2 size={16} stroke={1.8} />
                 </span>
+                <span className="roadmap-next-copy">
+                  <span className="roadmap-next-label">Up next</span>
+                  <span className="roadmap-next-title">{nextTopic.title}</span>
+                </span>
+                <IconArrowRight size={15} stroke={2} className="roadmap-next-arrow" aria-hidden="true" />
               </Link>
             ) : currentIndex >= 0 ? (
               <div className="roadmap-next is-locked">

@@ -13,6 +13,11 @@ interface Props {
   onToggleFocus: () => void
   /** Remove a learner-made connection (userConnections doc id). */
   onDeleteConnection?: (connectionId: string) => void
+  /** Tuck the panel away so the graph gets full width. */
+  onCollapse?: () => void
+  /** Begin (or cancel) linking this concept to another one. */
+  onStartConnect?: () => void
+  connecting?: boolean
 }
 
 /** Human label for what an edge MEANS — must match the canvas edge taxonomy. */
@@ -38,146 +43,22 @@ function roleLabel(value: number) {
   return 'Support'
 }
 
-export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, onToggleFocus, onDeleteConnection }: Props) {
-  if (!node) {
-    const course = data.course
-    const nextNode = data.nextBestNodeId ? data.nodes.find((n) => n.id === data.nextBestNodeId) : null
+export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, onToggleFocus, onDeleteConnection, onCollapse, onStartConnect, connecting }: Props) {
+  // The panel only exists for a clicked node — course-level stats live in the
+  // left sidebar, so there is no "nothing selected" overview state anymore.
+  if (!node) return null
 
-    return (
-      <aside className="kg-detail">
-        <div className="kg-overview-head">
-          <div className="kg-overview-kicker">Knowledge Map</div>
-          <h2 className="kg-overview-title">{course.title}</h2>
-        </div>
-
-        <div className="kg-detail-scroll">
-          {/* Overall mastery bar */}
-          <div className="kg-detail-section">
-            <div className="kg-detail-label">Overall mastery</div>
-            <div className="kg-mastery-bar">
-              <span
-                className="fill"
-                style={{ width: `${course.masteryScore}%`, background: 'var(--kg-accent)' }}
-              />
-            </div>
-            <div className="kg-mastery-text">
-              <span>{course.topicCount} concept{course.topicCount !== 1 ? 's' : ''} in this course</span>
-              <strong>{course.masteryScore}% mastered</strong>
-            </div>
-          </div>
-
-          {/* State breakdown */}
-          <div className="kg-detail-section">
-            <div className="kg-detail-label">Progress breakdown</div>
-            <div className="kg-detail-meta">
-              {course.mastered > 0 && (
-                <div className="kg-meta-item">
-                  <div className="k">Mastered</div>
-                  <div className="v" style={{ color: 'var(--kg-mastered)' }}>{course.mastered}</div>
-                </div>
-              )}
-              {course.functional > 0 && (
-                <div className="kg-meta-item">
-                  <div className="k">Functional</div>
-                  <div className="v" style={{ color: 'var(--kg-functional)' }}>{course.functional}</div>
-                </div>
-              )}
-              {course.partial > 0 && (
-                <div className="kg-meta-item">
-                  <div className="k">Partial</div>
-                  <div className="v" style={{ color: 'var(--kg-partial)' }}>{course.partial}</div>
-                </div>
-              )}
-              {course.unstable > 0 && (
-                <div className="kg-meta-item">
-                  <div className="k">Unstable</div>
-                  <div className="v" style={{ color: 'var(--kg-unstable)' }}>{course.unstable}</div>
-                </div>
-              )}
-              {course.active > 0 && (
-                <div className="kg-meta-item">
-                  <div className="k">Active</div>
-                  <div className="v" style={{ color: 'var(--kg-active)' }}>{course.active}</div>
-                </div>
-              )}
-              <div className="kg-meta-item">
-                <div className="k">Locked</div>
-                <div className="v">{course.locked}</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Next Best Node recommendation */}
-          {nextNode && (
-            <div className="kg-detail-section">
-              <div className="kg-detail-label">Recommended next</div>
-              <div className="kg-next-rec">
-                <div className="kg-next-rec-info">
-                  <span className={`kg-pdot ${nextNode.state}`} />
-                  <div>
-                    <div className="kg-next-rec-title">{nextNode.title}</div>
-                    <div className="kg-next-rec-meta">{nextNode.branchTitle} · {stateLabel(nextNode.state)}</div>
-                  </div>
-                </div>
-                <div className="kg-next-rec-actions">
-                  <button className="kg-next-btn primary" onClick={() => onSelect(nextNode.id)}>
-                    View in graph <span className="arrow">→</span>
-                  </button>
-                  <Link className="kg-next-btn" href={`/learn/${courseId}/${encodeURIComponent(nextNode.id)}`}>
-                    Go to lesson
-                  </Link>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Branch mastery breakdown */}
-          {data.branches.length > 0 && (
-            <div className="kg-detail-section">
-              <div className="kg-detail-label">Branch progress</div>
-              <div className="kg-branch-list">
-                {data.branches.map((b) => (
-                  <div key={b.id} className="kg-branch-row">
-                    <div className="kg-branch-row-head">
-                      <span className={`kg-branch-dot-sm ${b.color}`} />
-                      <span className="kg-branch-row-name">{b.title}</span>
-                      <span className="kg-branch-row-pct">{b.masteryScore}%</span>
-                    </div>
-                    <div className="kg-mastery-bar thin">
-                      <span
-                        className="fill"
-                        style={{ width: `${b.masteryScore}%`, background: 'var(--kg-accent)' }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Graph connectivity stats */}
-          <div className="kg-detail-section">
-            <div className="kg-detail-label">Graph connectivity</div>
-            <div className="kg-detail-meta">
-              <div className="kg-meta-item">
-                <div className="k">Connected</div>
-                <div className="v">{course.connectedCount} node{course.connectedCount !== 1 ? 's' : ''}</div>
-              </div>
-              <div className="kg-meta-item">
-                <div className="k">Isolated</div>
-                <div className="v"
-                  style={course.isolatedCount > 0 ? { color: 'var(--kg-unstable)' } : {}}
-                >
-                  {course.isolatedCount}
-                  {course.isolatedCount > 0 ? ' (no edges)' : ''}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </aside>
-    )
-  }
+  const collapseBtn = onCollapse ? (
+    <button
+      className="kg-panel-collapse"
+      type="button"
+      onClick={onCollapse}
+      title="Hide panel"
+      aria-label="Hide concept details"
+    >
+      ❯
+    </button>
+  ) : null
 
   const nodeById = (id: string) => data.nodes.find((n) => n.id === id)
   // All relationship kinds the canvas draws (prerequisite, sequence, recommended,
@@ -209,6 +90,7 @@ export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, on
     return (
       <aside className="kg-detail">
         <div className="kg-detail-head">
+          {collapseBtn}
           <div className="kg-detail-kicker">Course structure</div>
           <h2 className="kg-detail-title">{node.title}</h2>
           <div className="kg-detail-row">
@@ -252,6 +134,7 @@ export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, on
   return (
     <aside className="kg-detail">
       <div className="kg-detail-head">
+        {collapseBtn}
         <div className="kg-detail-kicker">{node.section}</div>
         <h2 className="kg-detail-title">{node.title}</h2>
         <div className="kg-detail-row">
@@ -336,20 +219,6 @@ export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, on
                   {node.doubtCount >= 6 ? 'High confusion' : node.doubtCount >= 3 ? 'Some confusion' : 'Low'}
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Learning signal */}
-        {node.state !== 'locked' && (
-          <div className="kg-detail-section">
-            <div className="kg-detail-label">Learning signal</div>
-            <div className="kg-mastery-bar">
-              <span className="full" style={{ background: stateColorVar(node.state) }} />
-            </div>
-            <div className="kg-mastery-text">
-              <span>Current evidence from lessons and quiz attempts</span>
-              <strong>{stateLabel(node.state)}</strong>
             </div>
           </div>
         )}
@@ -520,20 +389,14 @@ export function GraphDetailPanel({ node, data, courseId, onSelect, focusMode, on
                 }).slice(0, 2)}
               </>
             )}
+            {onStartConnect && (
+              <button className="kg-next-btn" onClick={onStartConnect}>
+                {connecting ? 'Cancel link' : '⌁ Connect to another concept'}
+              </button>
+            )}
             <button className="kg-next-btn" onClick={onToggleFocus}>
               {focusMode ? 'Exit focus mode' : 'Enter focus mode'}
             </button>
-          </div>
-        </div>
-
-        {/* Tags */}
-        <div className="kg-detail-section">
-          <div className="kg-detail-label">Tags</div>
-          <div className="kg-tag-row">
-            <span className="kg-tag">{node.section}</span>
-            <span className="kg-tag">{roleLabel(node.importance)}</span>
-            <span className="kg-tag">{depthLabel(node.difficulty)}</span>
-            <span className="kg-tag">{stateLabel(node.state)}</span>
           </div>
         </div>
       </div>

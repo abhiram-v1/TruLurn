@@ -54,7 +54,7 @@ type GeneratePageBody = {
   courseId?: string
   pageNumber?: number
   force?: boolean
-  approach?: 'explain_again' | 'go_deeper' | 'simplify' | 'show_example'
+  approach?: 'explain_again' | 'go_deeper' | 'simplify' | 'show_example' | 'concise'
   customInstruction?: string
 }
 
@@ -198,6 +198,18 @@ export async function POST(
           code: 'SOURCE_INDEX_NOT_READY',
           sourceIndex: sourceReadiness,
         }, { status: 409 })
+      }
+
+      if (!sourceReadiness.ready) {
+        return NextResponse.json({
+          error: sourceReadiness.failedCount
+            ? 'Some source passages could not be indexed. Please retry after the source indexing job recovers.'
+            : 'Your source is still being indexed. Please wait a moment and try again.',
+          code: sourceReadiness.failedCount
+            ? 'SOURCE_RETRIEVAL_DEGRADED'
+            : 'SOURCE_RETRIEVAL_PENDING',
+          sourceIndex: sourceReadiness,
+        }, { status: sourceReadiness.failedCount ? 503 : 409 })
       }
     }
 
@@ -601,9 +613,10 @@ export async function POST(
       pagePlan: planned,
     })
 
-    if (!lessonQuality.accepted) {
+    const MAX_QUALITY_REPAIRS = 2
+    for (let attempt = 1; !lessonQuality.accepted && attempt <= MAX_QUALITY_REPAIRS; attempt += 1) {
       qualityRepairHistory.push({
-        attempt: 1,
+        attempt,
         trigger_score: lessonQuality.overall_score,
         issues: lessonQuality.issues,
         created_at: new Date(),

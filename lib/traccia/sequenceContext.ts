@@ -1,6 +1,6 @@
 import type { Db } from 'mongodb'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
-import { nextRecommendedTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
+import { isTeachableTopic, nextRecommendedTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
 
 export type SequenceCoverageState =
   | 'new'
@@ -40,6 +40,8 @@ type TopicLike = {
   key_concepts?: string[]
   summary?: string | null
   description?: string | null
+  node_type?: string
+  children_count?: number
 }
 
 function compact(value: unknown, max = 320) {
@@ -132,9 +134,10 @@ export async function buildSequenceContextPack({
 
   const [branchTopics, prerequisiteTopics, priorSummaries, recentEvents] = await Promise.all([
     db.collection('topics')
-      .find({ course_id: courseId, branch_id: topic.branch_id })
+      .find({ course_id: courseId })
       .project({
         title: 1,
+        branch_id: 1,
         parent_id: 1,
         path_ids: 1,
         path_titles: 1,
@@ -187,10 +190,22 @@ export async function buildSequenceContextPack({
       .toArray(),
   ])
 
+  const orderedTeachable = sortTracciaTopics(branchTopics as any).filter((item) => isTeachableTopic(item as any))
+  const currentOrderIndex = orderedTeachable.findIndex((item) => String(item._id) === topicId)
+  const priorTopicIds = new Set(
+    currentOrderIndex >= 0
+      ? orderedTeachable.slice(0, currentOrderIndex).map((item) => String(item._id))
+      : [],
+  )
+  const priorOnlySummaries = priorSummaries.filter((summary) => priorTopicIds.has(String(summary.topic_id)))
+  const priorOnlyMemoryPages = currentOrderIndex >= 0
+    ? (memory?.pages ?? []).filter((page) => priorTopicIds.has(String(page.topic_id)))
+    : []
+
   const candidates = conceptCandidates(topic, prerequisiteTopics)
   const priorPages = [
     ...previousPages.map((page) => ({ ...page, topic_title: topic.title })),
-    ...(memory?.pages ?? []),
+    ...priorOnlyMemoryPages,
   ]
   const exampleRefs = extractExampleRefs(priorPages)
   const cueMap = new Map<string, { state: SequenceCoverageState; source?: string }>()
@@ -206,13 +221,13 @@ export async function buildSequenceContextPack({
       || includesConcept(item.summary ?? item.description, concept)
       || (item.key_concepts ?? []).some((key: string) => includesConcept(key, concept)),
     )
-    const summaryHit = priorSummaries.find((summary) =>
+    const summaryHit = priorOnlySummaries.find((summary) =>
       includesConcept(summary.focus, concept)
       || includesConcept(summary.summary, concept)
       || [...(summary.key_concepts ?? []), ...(summary.covered_concepts ?? [])]
         .some((item: string) => includesConcept(item, concept)),
     )
-    const memoryHit = memory?.pages.find((page) =>
+    const memoryHit = priorOnlyMemoryPages.find((page) =>
       includesConcept(page.focus, concept)
       || includesConcept(page.summary, concept)
       || includesConcept(page.content, concept),
@@ -235,8 +250,11 @@ export async function buildSequenceContextPack({
   const currentPath = (topic.path_titles?.length ? topic.path_titles : [topic.section, topic.title])
     .filter(Boolean)
     .join(' > ')
-  const sortedBranchTopics = sortTracciaTopics(branchTopics as any)
+  const sortedBranchTopics = sortTracciaTopics(
+    branchTopics.filter((candidate) => String(candidate.branch_id) === String(topic.branch_id)) as any,
+  )
   const next = nextRecommendedTeachableTopic(sortedBranchTopics as any, topicId)
+  const currentSequencePosition = currentOrderIndex >= 0 ? currentOrderIndex + 1 : null
   const siblings = sortedBranchTopics
     .filter((candidate: any) => String(candidate.parent_id ?? '') === String(topic.parent_id ?? ''))
     .filter((candidate: any) => String(candidate._id) !== topicId)
@@ -247,6 +265,10 @@ export async function buildSequenceContextPack({
   const lines = [
     'SEQUENCE CONTEXT PACK:',
     `Current path: ${currentPath || topic.title || 'Current topic'}`,
+    currentSequencePosition
+      ? `Course sequence position: ${currentSequencePosition} of ${orderedTeachable.length} teachable nodes`
+      : `Course sequence position: unknown of ${orderedTeachable.length} teachable nodes`,
+    `Prior generated-page memory considered: ${priorOnlySummaries.length} prior-in-sequence summaries; future or out-of-order summaries ignored.`,
     next ? `Recommended next teachable node: ${next.title}` : 'Recommended next teachable node: none',
     siblings.length ? `Nearby sibling nodes: ${siblings.join(', ')}` : null,
   ].filter(Boolean) as string[]

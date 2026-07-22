@@ -60,3 +60,31 @@ test('AI-teacher prompt is separate from source-grounding instructions', () => {
   assert.doesNotMatch(user, /complete syllabus boundary/)
   assert.ok(CURRICULUM_SYSTEM_PROMPT.length + user.length < 5000)
 })
+
+test('AI-teacher prompt treats the learner goal as an outcome contract', () => {
+  const user = buildAITeacherCurriculumPrompt({
+    ...baseInput('ai_teacher'),
+    goals: 'I want to build reliable checkout flows using database transactions.',
+  })
+
+  assert.match(user, /Goal alignment contract/)
+  assert.match(user, /target capability/)
+  assert.match(user, /concrete tasks or deliverables/)
+  assert.match(user, /Avoid generic syllabus branches/)
+  assert.match(user, /structure_reasoning/)
+})
+
+test('source prompt aligns goals only inside the uploaded source boundary', () => {
+  const user = buildSourceCurriculumPrompt({
+    ...baseInput('source_grounded'),
+    goals: 'I want to build reliable checkout flows using database transactions.',
+  }, {
+    sourceEvidence: '=== Source: Transactions ===\n## Section [s1:1]: Atomicity',
+  })
+
+  assert.match(user, /Goal alignment within the source boundary/)
+  assert.match(user, /prioritization contract inside the supplied sources/)
+  assert.match(user, /do not invent it/)
+  assert.match(user, /outside the uploaded source boundary/)
+  assert.match(user, /source_refs/)
+})

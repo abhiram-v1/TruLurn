@@ -27,7 +27,7 @@ export function MissingPageGenerator({
   const [failedChecks, setFailedChecks] = useState<string[]>([])
   const generationStartedRef = useRef(false)
 
-  const generate = useCallback(async function generate() {
+  const generate = useCallback(async function generate(approach?: 'concise') {
     if (generationStartedRef.current) return
     generationStartedRef.current = true
     setStatus('generating')
@@ -38,7 +38,7 @@ export function MissingPageGenerator({
       const response = await fetch(`/api/topics/${encodeURIComponent(topicId)}/pages/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ courseId, pageNumber, force }),
+        body: JSON.stringify({ courseId, pageNumber, force, approach }),
       })
       const data = (await response.json()) as {
         error?: string
@@ -111,9 +111,16 @@ export function MissingPageGenerator({
             ))}
           </ul>
         ) : null}
-        <button className="button" type="button" onClick={generate} disabled={status === 'generating'}>
-          {status === 'generating' ? 'Generating…' : 'Retry generation'}
-        </button>
+        <div className="missing-page-actions">
+          <button className="button" type="button" onClick={() => void generate()} disabled={status === 'generating'}>
+            {status === 'generating' ? 'Generating…' : 'Retry normally'}
+          </button>
+          {status === 'failed' ? (
+            <button className="button-subtle" type="button" onClick={() => void generate('concise')}>
+              Generate concise version
+            </button>
+          ) : null}
+        </div>
       </section>
       <BottomNav courseId={courseId} />
     </main>

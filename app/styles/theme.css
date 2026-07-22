@@ -11,8 +11,8 @@
 
 .settings-theme-icon {
   align-items: center;
-  background: rgba(211, 109, 74, 0.1);
-  border: 1px solid rgba(211, 109, 74, 0.24);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-line);
   border-radius: var(--radius-md);
   color: var(--color-accent);
   display: inline-flex !important;
@@ -55,6 +55,37 @@
 .theme-switch[aria-checked='true'] .theme-switch-thumb {
   transform: translateX(20px);
 }
+
+.settings-accent-row {
+  min-height: 76px;
+}
+
+.accent-picker {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.accent-swatch {
+  background: var(--swatch);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--swatch) 32%, var(--color-border));
+  cursor: pointer;
+  height: 20px;
+  padding: 0;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+  width: 20px;
+}
+
+.accent-swatch:hover:not(:disabled) { transform: scale(1.12); }
+.accent-swatch:focus-visible { outline: 2px solid var(--color-text-primary); outline-offset: 3px; }
+.accent-swatch[aria-pressed='true'] { box-shadow: 0 0 0 2px var(--color-surface-elevated), 0 0 0 4px var(--swatch); }
+.accent-swatch:disabled { cursor: default; opacity: .55; }
+.accent-swatch-terracotta { --swatch: #d36d4a; }
+.accent-swatch-indigo { --swatch: #5b6cd6; }
+.accent-swatch-teal { --swatch: #1f9b86; }
+.accent-swatch-plum { --swatch: #a2569c; }
 
 /* Dark mode: app-wide surfaces */
 [data-theme='dark'] body,

@@ -165,14 +165,7 @@ function extractWebSources(data: OpenAIResponse): OpenAIWebSource[] {
   return Array.from(sources.values())
 }
 
-export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY
-
-  if (!apiKey) {
-    throw new Error('Missing OPENAI_API_KEY in .env.local')
-  }
-
-  const model = selectOpenAIModel(input)
+function buildOpenAIRequestBody(input: OpenAIGenerateInput, model: string, stream = false) {
   const body: Record<string, unknown> = {
     model,
     input: [
@@ -180,6 +173,7 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       { role: 'user', content: input.user },
     ],
     prompt_cache_key: promptCacheKey(input.promptCacheKey ?? input.system),
+    ...(stream ? { stream: true } : {}),
   }
 
   if (input.responseSchema) {
@@ -192,15 +186,21 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
       },
     }
   } else if (input.responseMimeType === 'application/json') {
-    body.text = {
-      format: {
-        type: 'json_object',
-      },
-    }
+    body.text = { format: { type: 'json_object' } }
   }
-  if (input.reasoningEffort) {
-    body.reasoning = { effort: input.reasoningEffort }
+  if (input.reasoningEffort) body.reasoning = { effort: input.reasoningEffort }
+  return body
+}
+
+export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY
+
+  if (!apiKey) {
+    throw new Error('Missing OPENAI_API_KEY in .env.local')
   }
+
+  const model = selectOpenAIModel(input)
+  const body = buildOpenAIRequestBody(input, model)
 
   const response = await aiFetch(OPENAI_ENDPOINT, {
     method: 'POST',
@@ -227,6 +227,57 @@ export async function generateWithOpenAI(input: OpenAIGenerateInput): Promise<st
   }
 
   return text
+}
+
+/** Stream Responses API output text deltas as they are generated. */
+export async function* streamWithOpenAI(input: OpenAIGenerateInput): AsyncGenerator<string> {
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('Missing OPENAI_API_KEY in .env.local')
+
+  const model = selectOpenAIModel(input)
+  const response = await aiFetch(OPENAI_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(buildOpenAIRequestBody(input, model, true)),
+  }, { signal: input.signal, timeoutMs: input.timeoutMs })
+
+  if (!response.ok) {
+    const data = (await response.json()) as OpenAIResponse
+    throw new Error(data.error?.message ?? `OpenAI stream failed with status ${response.status}`)
+  }
+  if (!response.body) throw new Error('OpenAI stream returned no response body')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary >= 0) {
+      const event = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      boundary = buffer.indexOf('\n\n')
+      const dataLine = event.split('\n').find((line) => line.startsWith('data:'))
+      if (!dataLine) continue
+      try {
+        const payload = JSON.parse(dataLine.slice(5).trim()) as { type?: string; delta?: string; error?: { message?: string } }
+        if (payload.type === 'response.output_text.delta' && typeof payload.delta === 'string') {
+          yield payload.delta
+        }
+        if (payload.type === 'error') throw new Error(payload.error?.message ?? 'OpenAI streaming error')
+      } catch (error) {
+        if (error instanceof SyntaxError) continue
+        throw error
+      }
+    }
+  }
 }
 
 export async function generateWithOpenAIWebSearch(input: OpenAIWebSearchInput): Promise<{

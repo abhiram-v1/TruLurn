@@ -1,0 +1,14 @@
+.vercel/
+.env
+.env.*
+.git/
+.next/
+.next-build/
+.next-sandbox/
+.next-sandbox-build/
+node_modules/
+services/markitdown/.venv/
+services/markitdown/__pycache__/
+*.pyc
+*.log
+*.err.log

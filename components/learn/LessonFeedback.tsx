@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { feedbackReasonToApproach } from '@/lib/learning/lessonFeedback'
 
 type Signal = 'got_it' | 'lost_me' | 'too_basic'
 
@@ -10,8 +11,15 @@ const NEVER_KEY = 'lf_never_ask'
 const OPTIONS: Array<{ signal: Signal; label: string; icon: string }> = [
   { signal: 'got_it',   label: 'Got it',   icon: '✓' },
   { signal: 'lost_me',  label: 'Lost me',  icon: '?' },
-  { signal: 'too_basic', label: 'Too basic', icon: '↑' },
+  { signal: 'too_basic', label: 'Too basic', icon: '!' },
 ]
+
+// Quick-tap reasons shown after a negative signal — kept short so answering
+// costs one click, not a form. "Other" reveals a short free-text field.
+const REASONS: Partial<Record<Signal, string[]>> = {
+  lost_me: ['Too much jargon', 'Moved too fast', 'Needed an example', 'Explanation was confusing'],
+  too_basic: ['Already knew this', 'Wanted more depth', 'Too repetitive', 'Skipped edge cases'],
+}
 
 // Compact acknowledgment shown after the student picks a signal.
 const ACK: Record<Signal, string> = {
@@ -19,6 +27,13 @@ const ACK: Record<Signal, string> = {
   lost_me:  'Next pages will be gentler.',
   too_basic: 'Next pages will go deeper.',
 }
+
+const APPROACH_LABELS = {
+  simplify: 'Re-explain more clearly →',
+  show_example: 'Re-explain with an example →',
+  go_deeper: 'Go deeper on this page →',
+  explain_again: 'Try a different explanation →',
+} as const
 
 export function LessonFeedback({
   courseId,
@@ -38,6 +53,12 @@ export function LessonFeedback({
   const [dismissed, setDismissed] = useState(false)
   const [menuOpen, setMenuOpen]   = useState(false)
 
+  // Reason follow-up, shown only after lost_me / too_basic.
+  const [reasonDone, setReasonDone] = useState(false)
+  const [showOtherInput, setShowOtherInput] = useState(false)
+  const [otherNote, setOtherNote] = useState('')
+  const [reasonApproach, setReasonApproach] = useState<keyof typeof APPROACH_LABELS | null>(null)
+
   // Read localStorage on the client only — avoid SSR mismatch.
   const [neverAsk, setNeverAsk] = useState(false)
   useEffect(() => {
@@ -53,6 +74,10 @@ export function LessonFeedback({
     setSelected(null)
     setDismissed(false)
     setMenuOpen(false)
+    setReasonDone(false)
+    setShowOtherInput(false)
+    setOtherNote('')
+    setReasonApproach(null)
   }, [topicId, pageNumber])
 
   // Close the dropdown when clicking outside.
@@ -94,6 +119,21 @@ export function LessonFeedback({
     }
   }
 
+  // Follow-up call — merges onto the same feedback document as `send()`.
+  async function sendReason(reason: string, note?: string) {
+    setReasonDone(true)
+    try {
+      await fetch('/api/lessons/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ courseId, topicId, pageNumber, signal: selected, reason, note }),
+      })
+      setReasonApproach(feedbackReasonToApproach(reason))
+    } catch {
+      // Non-critical.
+    }
+  }
+
   return (
     <div className="lf-bar">
       <div className="lf-content">
@@ -102,7 +142,7 @@ export function LessonFeedback({
           <div className="lf-ack">
             <span className="lf-ack-dot" aria-hidden="true">✓</span>
             <span className="lf-ack-text">{ACK[selected]}</span>
-            {selected === 'lost_me' && onReexplain ? (
+            {selected === 'lost_me' && onReexplain && !reasonApproach ? (
               <button
                 className="lf-reexplain"
                 type="button"
@@ -111,6 +151,70 @@ export function LessonFeedback({
               >
                 {isRegenerating ? 'Re-explaining…' : 'Re-explain simpler →'}
               </button>
+            ) : null}
+            {reasonApproach && onReexplain ? (
+              <button
+                className="lf-reexplain"
+                type="button"
+                onClick={() => onReexplain(reasonApproach)}
+                disabled={isRegenerating}
+              >
+                {isRegenerating ? 'Re-explaining…' : APPROACH_LABELS[reasonApproach]}
+              </button>
+            ) : null}
+
+            {/* ── Optional one-tap reason, only after a negative signal ── */}
+            {REASONS[selected] && !reasonDone ? (
+              showOtherInput ? (
+                <form
+                  className="lf-reason-other"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    if (otherNote.trim()) sendReason('other', otherNote.trim())
+                  }}
+                >
+                  <input
+                    type="text"
+                    className="lf-reason-input"
+                    value={otherNote}
+                    onChange={(e) => setOtherNote(e.target.value)}
+                    placeholder="Say more…"
+                    maxLength={300}
+                    autoFocus
+                  />
+                  <button type="submit" className="lf-reason-send" disabled={!otherNote.trim()}>
+                    Send
+                  </button>
+                </form>
+              ) : (
+                <div className="lf-reason" role="group" aria-label="Why?">
+                  <span className="lf-reason-prompt">Why?</span>
+                  {REASONS[selected]!.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      className="lf-reason-chip"
+                      onClick={() => sendReason(r)}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="lf-reason-chip"
+                    onClick={() => setShowOtherInput(true)}
+                  >
+                    Other
+                  </button>
+                  <button
+                    type="button"
+                    className="lf-reason-skip"
+                    onClick={() => setReasonDone(true)}
+                  >
+                    Skip
+                  </button>
+                </div>
+              )
             ) : null}
           </div>
         ) : (

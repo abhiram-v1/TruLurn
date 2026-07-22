@@ -4,6 +4,7 @@ import { useMemo } from 'react'
 import { parseTruViz } from '@/lib/trueviz/parser'
 import { NeuralNet } from './NeuralNet'
 import { DataChart } from './DataChart'
+import { CoordinateVectors } from './CoordinateVectors'
 
 /**
  * Entry point for TruViz diagrams.
@@ -43,6 +44,10 @@ export function TruViz({ raw }: { raw: string }) {
 
   if (spec.type === 'data-chart') {
     return <DataChart spec={spec} />
+  }
+
+  if (spec.type === 'coordinate-vectors') {
+    return <CoordinateVectors spec={spec} />
   }
 
   return (

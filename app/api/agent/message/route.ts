@@ -6,6 +6,7 @@ import { getDb } from '@/lib/db'
 import { handleMessage } from '@/lib/agent/handleMessage'
 import { getRequiredUserId } from '@/lib/server/currentUser'
 import { getCachedCourseTopics } from '@/lib/cache/courseData'
+import { generateConversationTitle } from '@/lib/chat/generateConversationTitle'
 
 export async function GET(request: Request) {
   try {
@@ -14,12 +15,19 @@ export async function GET(request: Request) {
     if (!courseId) {
       return NextResponse.json({ error: 'Missing courseId parameter.' }, { status: 400 })
     }
+    const conversationId = searchParams.get('conversationId')
 
     const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
-    
-    // Fetch doubt messages from MongoDB (indexed on user_id, course_id, created_at)
+
+    // Messages are grouped into saved chat threads (conversation_id). Older
+    // messages predate that grouping and have no conversation_id at all —
+    // they surface under the synthetic "legacy" thread.
+    const conversationFilter = !conversationId || conversationId === 'legacy'
+      ? { conversation_id: { $exists: false } }
+      : { conversation_id: conversationId }
+
     const messages = await db.collection('doubtMessages')
-      .find({ course_id: courseId, user_id: userId })
+      .find({ course_id: courseId, user_id: userId, ...conversationFilter })
       .sort({ created_at: -1 })
       .limit(50)
       .toArray()
@@ -50,11 +58,39 @@ export async function GET(request: Request) {
   }
 }
 
+// Bumps recency on every message; on the first message of a thread, names it
+// from the exchange (question + answer) the way ChatGPT/Claude auto-title a
+// new conversation. Later messages just touch updated_at — no repeat AI call.
+async function touchConversation(
+  db: any,
+  userId: string,
+  conversationId: string,
+  question: string,
+  answer: string,
+) {
+  const conversation = await db.collection('chatConversations').findOne({ _id: conversationId, user_id: userId })
+  if (!conversation) return
+
+  if (conversation.title) {
+    await db.collection('chatConversations').updateOne(
+      { _id: conversationId },
+      { $set: { updated_at: new Date() } },
+    )
+    return
+  }
+
+  const title = await generateConversationTitle(question, answer)
+  await db.collection('chatConversations').updateOne(
+    { _id: conversationId },
+    { $set: { title, updated_at: new Date() } },
+  )
+}
+
 export async function POST(request: Request) {
   const startedAt = performance.now()
   try {
     const body = await request.json()
-    const { courseId, topicId, pageNumber, message, selectedContext } = body
+    const { courseId, topicId, pageNumber, message, selectedContext, stream, conversationId } = body
 
     if (!courseId || !topicId || pageNumber === undefined || !message?.trim()) {
       return NextResponse.json({ error: 'Missing required agent parameters.' }, { status: 400 })
@@ -62,7 +98,7 @@ export async function POST(request: Request) {
 
     const [db, userId] = await Promise.all([getDb(), getRequiredUserId()])
     const contextReadyAt = performance.now()
-    const result = await handleMessage({
+    const input = {
       db,
       userId,
       courseId,
@@ -70,7 +106,58 @@ export async function POST(request: Request) {
       pageNumber: Number(pageNumber),
       message,
       selectedContext: typeof selectedContext === 'string' ? selectedContext : null,
-    })
+      conversationId: typeof conversationId === 'string' && conversationId !== 'legacy' ? conversationId : null,
+      signal: request.signal,
+    }
+
+    if (stream === true) {
+      const encoder = new TextEncoder()
+      const eventStream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          const send = (payload: Record<string, unknown>) => {
+            if (!request.signal.aborted) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+            }
+          }
+          try {
+            send({ type: 'status', message: 'Thinking…' })
+            const result = await handleMessage({
+              ...input,
+              onDelta: (delta) => send({ type: 'delta', delta }),
+            })
+            if (input.conversationId) {
+              void touchConversation(db, userId, input.conversationId, message, result.content).catch((error) => {
+                console.warn('[agent/message] Failed to touch conversation.', error)
+              })
+            }
+            send({ type: 'done', ...result })
+          } catch (error) {
+            if (!request.signal.aborted) {
+              send({ type: 'error', error: error instanceof Error ? error.message : 'Agent failed to respond.' })
+            }
+          } finally {
+            controller.close()
+          }
+        },
+      })
+
+      return new Response(eventStream, {
+        headers: {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        },
+      })
+    }
+
+    const result = await handleMessage(input)
+
+    if (input.conversationId) {
+      void touchConversation(db, userId, input.conversationId, message, result.content).catch((error) => {
+        console.warn('[agent/message] Failed to touch conversation.', error)
+      })
+    }
 
     const completedAt = performance.now()
     return NextResponse.json(result, {

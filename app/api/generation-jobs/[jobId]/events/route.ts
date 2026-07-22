@@ -27,6 +27,7 @@ import {
   finalizeCurriculum,
   generateCurriculum,
 } from '@/lib/course-generation/curriculumOrchestration'
+import { buildGoalCoverageReport } from '@/lib/course-generation/goalCoverage'
 import {
   enforceSourceGroundedMap,
 } from '@/lib/course-generation/sourceCurriculumIntegrity'
@@ -356,6 +357,14 @@ export async function GET(
           let curriculum = currentJob.curriculum
           if (!curriculum) {
             curriculum = await generateCurriculum(input, currentJob.researchReport || null)
+            // Advisory audit: did the plan cover every concept the learner
+            // explicitly asked for? Rendered as a warning on the review screen.
+            // Never blocks — a null report simply hides the warning.
+            const coverage = await buildGoalCoverageReport({
+              goals: input.goals,
+              curriculum,
+            })
+            if (coverage) curriculum.goal_coverage_report = coverage
           } else {
             curriculum = finalizeCurriculum(curriculum, input)
           }

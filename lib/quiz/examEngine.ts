@@ -14,6 +14,11 @@ import { syncLearnerMemoryV2 } from '@/lib/memory/service'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
 import { invalidateCourse } from '@/lib/cache/courseData'
+import {
+  validateQuizQuestion,
+  type QuizQuestionDraft,
+  type QuizQuestionQualityIssue,
+} from '@/lib/quiz/questionQuality'
 
 const FULL_TOPIC_MAX_FOLLOWUPS = 2
 const SPOT_CHECK_MAX = 3
@@ -399,6 +404,7 @@ function serializeTurn(turn: any) {
     status: String(turn.status ?? 'shown'),
     question: String(turn.question ?? ''),
     options: Array.isArray(turn.options) ? turn.options.map(String) : null,
+    draft_answer: typeof turn.draft_answer === 'string' ? turn.draft_answer : '',
     created_at: turn.created_at instanceof Date ? turn.created_at.toISOString() : new Date().toISOString(),
   }
 }
@@ -414,11 +420,27 @@ export function serializeExamSession(session: any, turn: any) {
       question_index: Number(session.question_index ?? 0),
       min_questions: Number(session.min_questions ?? 3),
       max_questions: Number(session.max_questions ?? 7),
+      answered_count: Number(session.answered_count ?? 0),
       followups_used: Number(session.followups_used ?? 0),
       max_followups: Number(session.max_followups ?? FULL_TOPIC_MAX_FOLLOWUPS),
       summary: session.summary ?? null,
     },
     turn: serializeTurn(turn),
+  }
+}
+
+function serializeCompletedExam(session: any, turns: any[]) {
+  return {
+    ...serializeExamSession(session, null),
+    turns: turns.map((turn) => ({
+      ...serializeTurn(turn),
+      answer: turn.answer ?? '',
+      evaluation: turn.evaluation ?? null,
+      rubric: turn.rubric ?? null,
+      correct_answer: turn.correct_answer ?? null,
+      answer_explanation: turn.answer_explanation ?? null,
+      answer_uncertain: Boolean(turn.answer_uncertain),
+    })),
   }
 }
 
@@ -683,18 +705,78 @@ function buildPointer({
   ].join('\n')
 }
 
+async function reviewQuestionSemantics({
+  pointer,
+  draft,
+  previousQuestions,
+}: {
+  pointer: string
+  draft: QuizQuestionDraft
+  previousQuestions: string[]
+}): Promise<QuizQuestionQualityIssue[]> {
+  const system = `You are a strict quiz quality reviewer. Decide whether one generated question is safe and useful to show a learner.
+
+Reject it when any of these are true:
+- It tests information not supported by the lesson pointer.
+- It is ambiguous, has more than one defensible answer, or its stored answer is wrong.
+- It leaks the answer or merely asks for vocabulary recall when reasoning was requested.
+- It substantially repeats a previous question.
+- Its explanation or rubric would not let a learner understand the reasoning.
+
+Do not rewrite the question. Return only JSON:
+{
+  "accepted": true,
+  "issues": []
+}`
+
+  const raw = await withRetry(() => generateAI({
+    feature: 'exam_question_validation',
+    system,
+    user: `${pointer}
+
+Previous questions:
+${previousQuestions.length ? previousQuestions.map((question, index) => `${index + 1}. ${question}`).join('\n') : 'None'}
+
+Candidate question:
+${JSON.stringify(draft, null, 2)}`,
+    responseMimeType: 'text/plain',
+    responseSchema: {
+      name: 'quiz_question_quality_review',
+      schema: {
+        type: 'object',
+        properties: {
+          accepted: { type: 'boolean' },
+          issues: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['accepted', 'issues'],
+      },
+    },
+  }), 2)
+  const parsed = parseAIJson<any>(raw)
+  if (Boolean(parsed.accepted) && (!Array.isArray(parsed.issues) || parsed.issues.length === 0)) return []
+  const messages: string[] = Array.isArray(parsed.issues) ? parsed.issues.map(String).filter(Boolean).slice(0, 6) : []
+  return (messages.length ? messages : ['The semantic reviewer did not approve this question.']).map((message) => ({
+    code: 'semantic_review',
+    message,
+  }))
+}
+
 async function generateTurnQuestion({
   blueprint,
   target,
   turns,
   source,
   quizPlan,
+  qualityAttempt = 1,
+  qualityIssues = [],
 }: {
   blueprint: Blueprint
   target: QuizTarget
   turns: any[]
   source: ExamTurnSource
   quizPlan?: QuizPlan | null
+  qualityAttempt?: number
+  qualityIssues?: QuizQuestionQualityIssue[]
 }) {
   const recentFailures = turns.slice(-4).filter((turn) => turn.evaluation && !turn.evaluation.passed).length
   const questionType = chooseType(target, turns, source, blueprint.isProgramming, quizPlan)
@@ -726,7 +808,9 @@ General rules:
 - For critical concepts, test reasoning or application. Never ask for pure recall.
 - If prior quiz evidence lists previously asked questions, you MUST NOT reproduce any of them. Write a distinct question that tests the same concept from a different scenario, framing, or abstraction level — one that would surface the same gap if the student still doesn't understand.
 - For code questions, ask for a bounded implementation of about 8–25 lines that demonstrates the concept in action.
+- For code questions, the response is reviewed for reasoning and is NOT executed. Never claim that tests will be run or that the answer will be compiled.
 - The rubric should describe what a genuinely clear answer looks like, not a perfect one.
+- Every objective question must include a concise answer explanation that teaches the reasoning, not merely restates the correct option.
 - When visual interpretation is the tested skill, the question may include a chart using the contract below. Otherwise do not add one.
 
 ${COMPACT_CHART_OUTPUT_CONTRACT}
@@ -754,13 +838,17 @@ Return ONLY valid JSON:
   "type": "${questionType}",
   "question": "...",
   "options": ${questionType === 'mcq' ? '["A. ...", "B. ...", "C. ...", "D. ..."]' : 'null'},
-  "correct_answer": ${questionType === 'mcq' ? '"A. ..."' : 'null'},
+  "correct_answer": ${questionType === 'mcq' ? '"A. ..."' : questionType === 'true_false' ? '"true"' : 'null'},
+  "answer_explanation": "Explain why the stored answer follows from the lesson mechanism.",
   "rubric": "..."
 }`
 
+  const repairBlock = qualityIssues.length
+    ? `\n\nQUALITY REPAIR REQUIRED:\n${qualityIssues.map((issue) => `- ${issue.message}`).join('\n')}\nRewrite from a genuinely different angle while preserving the engine-selected type and concept.`
+    : ''
   const user = `${pointer}
 
-Write exactly one ${questionType} question now.`
+Write exactly one ${questionType} question now.${repairBlock}`
 
   const raw = await withRetry(() =>
     generateAI({
@@ -777,9 +865,10 @@ Write exactly one ${questionType} question now.`
             question:       { type: 'string' },
             options:        { type: ['array', 'null'], items: { type: 'string' } },
             correct_answer: { type: ['string', 'null'] },
+            answer_explanation: { type: ['string', 'null'] },
             rubric:         { type: ['string', 'null'] },
           },
-          required: ['type', 'question', 'options', 'correct_answer', 'rubric'],
+          required: ['type', 'question', 'options', 'correct_answer', 'answer_explanation', 'rubric'],
         },
       },
     }),
@@ -791,6 +880,42 @@ Write exactly one ${questionType} question now.`
     ? parsed.options.map(String).slice(0, 4)
     : null
 
+  const isObjective = type === 'mcq' || type === 'true_false'
+  const draft: QuizQuestionDraft = {
+    type,
+    question: String(parsed.question ?? '').trim(),
+    options,
+    correct_answer: isObjective && parsed.correct_answer != null ? String(parsed.correct_answer).trim() : null,
+    answer_explanation: parsed.answer_explanation == null ? null : String(parsed.answer_explanation).trim(),
+    rubric: parsed.rubric == null ? null : String(parsed.rubric).trim(),
+  }
+  const previousQuestions = turns.map((turn) => String(turn.question ?? '')).filter(Boolean)
+  let failedChecks = validateQuizQuestion(draft, previousQuestions)
+  if (!failedChecks.length) {
+    try {
+      failedChecks = await reviewQuestionSemantics({ pointer, draft, previousQuestions })
+    } catch (error) {
+      // The semantic reviewer is an additional beta guardrail. If it is
+      // unavailable, a deterministic pass can still keep the quiz functional.
+      console.warn('[examEngine] Semantic question review unavailable; deterministic gate passed.', error)
+      failedChecks = []
+    }
+  }
+  if (failedChecks.length) {
+    if (qualityAttempt < 2) {
+      return generateTurnQuestion({
+        blueprint,
+        target,
+        turns,
+        source,
+        quizPlan,
+        qualityAttempt: qualityAttempt + 1,
+        qualityIssues: failedChecks,
+      })
+    }
+    throw new Error(`Quiz question failed quality review: ${failedChecks.map((issue) => issue.message).join(' ')}`)
+  }
+
   if (!String(parsed.question ?? '').trim()) {
     throw new Error('Learning checkpoint generation returned an empty question.')
   }
@@ -799,13 +924,9 @@ Write exactly one ${questionType} question now.`
   }
 
   return {
-    type,
+    ...draft,
     difficulty,
     pointer,
-    question: String(parsed.question).trim(),
-    options,
-    correct_answer: type === 'mcq' ? String(parsed.correct_answer) : null,
-    rubric: parsed.rubric == null ? null : String(parsed.rubric),
   }
 }
 
@@ -858,6 +979,7 @@ async function createTurn({
     question: generated.question,
     options: generated.options,
     correct_answer: generated.correct_answer,
+    answer_explanation: generated.answer_explanation,
     rubric: generated.rubric,
     pointer_snapshot: generated.pointer,
     created_at: now,
@@ -895,6 +1017,7 @@ export async function startOrResumeExam({
   userId,
   mode = 'full_topic',
   isReview = false,
+  forceNew = false,
 }: {
   db: Db
   courseId: string
@@ -902,6 +1025,8 @@ export async function startOrResumeExam({
   userId: string
   mode?: ExamMode
   isReview?: boolean
+  /** Only set by the explicit "Retake quiz" action. */
+  forceNew?: boolean
 }) {
   const [course, topic] = await Promise.all([
     db.collection('courses').findOne({ _id: courseId as any, user_id: userId }),
@@ -910,14 +1035,43 @@ export async function startOrResumeExam({
   if (!course) throw new Error('Course not found.')
   if (!topic) throw new Error('Topic not found.')
 
-  let session = await db.collection('examSessions').findOne({
+  const sessionScope = {
     course_id: courseId,
     topic_id: topicId,
     user_id: userId,
     mode,
-    status: 'active',
     is_review: isReview,
-  })
+  }
+
+  if (!forceNew) {
+    const activeSession = await db.collection('examSessions').findOne(
+      { ...sessionScope, status: 'active' },
+      { sort: { updated_at: -1 } },
+    )
+    if (activeSession) {
+      const turn = await ensureInitialTurns(db, activeSession)
+      return serializeExamSession(activeSession, turn)
+    }
+
+    // Reopening a quiz should show its stored result, never silently spend a
+    // new AI generation. A new attempt is created only by Retake quiz.
+    const completedSession = await db.collection('examSessions').findOne(
+      { ...sessionScope, status: 'completed' },
+      { sort: { completed_at: -1, updated_at: -1 } },
+    )
+    if (completedSession) {
+      return serializeCompletedExam(completedSession, await getSessionTurns(db, String(completedSession._id)))
+    }
+  } else {
+    // Retaking is deliberate. Retire any unfinished attempt so there is one
+    // clear session to resume the next time this quiz is opened.
+    await db.collection('examSessions').updateMany(
+      { ...sessionScope, status: 'active' },
+      { $set: { status: 'abandoned', abandoned_at: new Date(), updated_at: new Date() } },
+    )
+  }
+
+  let session: any = null
 
   if (!session) {
     // Build blueprint once here so createTurn can reuse it without re-fetching
@@ -944,6 +1098,7 @@ export async function startOrResumeExam({
       status: 'active',
       phase: 'mvp_linear',
       question_index: 0,
+      answered_count: 0,
       min_questions: minQ,
       max_questions: maxQ,
       quiz_plan: quizPlan,
@@ -954,7 +1109,19 @@ export async function startOrResumeExam({
       created_at: now,
       updated_at: now,
     }
-    await db.collection('examSessions').insertOne(session)
+    try {
+      await db.collection('examSessions').insertOne(session)
+    } catch (error: any) {
+      // A strict-mode double mount or rapid double-open can race. The index
+      // keeps the data singular; the losing request resumes the winner.
+      if (error?.code !== 11000) throw error
+      const activeSession = await db.collection('examSessions').findOne(
+        { ...sessionScope, status: 'active' },
+        { sort: { updated_at: -1 } },
+      )
+      if (!activeSession) throw error
+      session = activeSession
+    }
   }
 
   const turn = await ensureInitialTurns(db, session)
@@ -964,6 +1131,9 @@ export async function startOrResumeExam({
 export async function getExamState(db: Db, sessionId: string, userId: string) {
   const session = await db.collection('examSessions').findOne({ _id: sessionId as any, user_id: userId })
   if (!session) throw new Error('Exam session not found.')
+  if (session.status === 'completed') {
+    return serializeCompletedExam(session, await getSessionTurns(db, sessionId))
+  }
   const turn = await db.collection('examTurns').findOne({
     session_id: sessionId,
     user_id: userId,
@@ -977,14 +1147,29 @@ async function evaluateTurn(db: Db, session: any, turn: any): Promise<Evaluation
   if (turn.evaluation) return turn.evaluation as EvaluationResult
   const studentAnswer = String(turn.answer ?? '')
 
+  if (turn.answer_uncertain) {
+    const evaluation: EvaluationResult = {
+      level: 1,
+      passed: false,
+      feedback: 'You marked this one as uncertain, which is useful evidence. Review the reasoning below, then try the follow-up from a different angle.',
+      gap: `Build confidence with ${turn.concept} before relying on it in a new situation.`,
+      false_confidence: false,
+    }
+    await db.collection('examTurns').updateOne(
+      { _id: turn._id },
+      { $set: { evaluation, status: 'evaluated', evaluated_at: new Date(), updated_at: new Date() } },
+    )
+    return evaluation
+  }
+
   if ((turn.type === 'mcq' || turn.type === 'true_false') && turn.correct_answer != null) {
     const isCorrect = studentAnswer.trim().toLowerCase() === String(turn.correct_answer).trim().toLowerCase()
     const evaluation: EvaluationResult = {
       level: isCorrect ? 3 : 1,
       passed: isCorrect,
       feedback: isCorrect
-        ? 'Right answer — you identified the correct option.'
-        : `Not quite. Take another look at ${turn.concept} in the lesson to see where this one leads.`,
+        ? 'Right answer — your choice follows the mechanism tested here.'
+        : `Not quite. The stored answer is ${String(turn.correct_answer)}; use the explanation below to locate the reasoning step that changed the result.`,
       gap: isCorrect ? null : `Revisit ${turn.concept} in the lesson materials.`,
       false_confidence: false,
     }
@@ -1421,6 +1606,9 @@ async function finalizeExam(db: Db, session: any) {
       answer: turn.answer ?? '',
       evaluation: turn.evaluation ?? null,
       rubric: turn.rubric ?? null,
+      correct_answer: turn.correct_answer ?? null,
+      answer_explanation: turn.answer_explanation ?? null,
+      answer_uncertain: Boolean(turn.answer_uncertain),
     })),
   }
 }
@@ -1430,12 +1618,14 @@ export async function answerExamTurn({
   sessionId,
   turnId,
   answer,
+  uncertain = false,
   userId,
 }: {
   db: Db
   sessionId: string
   turnId: string
   answer: string
+  uncertain?: boolean
   userId: string
 }) {
   const session = await db.collection('examSessions').findOne({ _id: sessionId as any, user_id: userId, status: 'active' })
@@ -1446,7 +1636,11 @@ export async function answerExamTurn({
 
   await db.collection('examTurns').updateOne(
     { _id: turn._id },
-    { $set: { answer: String(answer ?? ''), status: 'answered', answered_at: new Date(), updated_at: new Date() } },
+    { $set: { answer: String(answer ?? ''), answer_uncertain: uncertain, draft_answer: '', status: 'answered', answered_at: new Date(), updated_at: new Date() } },
+  )
+  await db.collection('examSessions').updateOne(
+    { _id: session._id, status: 'active' },
+    { $inc: { answered_count: 1 }, $set: { updated_at: new Date() } },
   )
 
   const queued = await db.collection('examTurns')
@@ -1463,7 +1657,10 @@ export async function answerExamTurn({
     processAnsweredTurn(db, sessionId, turnId).catch((error) => {
       console.warn('[examEngine] Background evaluation failed:', error)
     })
-    return serializeExamSession(session, { ...queued, status: 'shown' })
+    return serializeExamSession(
+      { ...session, answered_count: Number(session.answered_count ?? 0) + 1 },
+      { ...queued, status: 'shown' },
+    )
   }
 
   await processAnsweredTurn(db, sessionId, turnId)
@@ -1500,4 +1697,35 @@ export async function answerExamTurn({
     status: 'shown',
   })
   return serializeExamSession(freshSession ?? session, next)
+}
+
+export async function saveExamDraft({
+  db,
+  sessionId,
+  turnId,
+  answer,
+  userId,
+}: {
+  db: Db
+  sessionId: string
+  turnId: string
+  answer: string
+  userId: string
+}) {
+  const now = new Date()
+  const result = await db.collection('examTurns').updateOne(
+    {
+      _id: turnId as any,
+      session_id: sessionId,
+      user_id: userId,
+      status: 'shown',
+      answer: { $exists: false },
+    },
+    { $set: { draft_answer: String(answer ?? ''), draft_saved_at: now, updated_at: now } },
+  )
+  if (!result.matchedCount) throw new Error('This quiz question is no longer available to save.')
+  await db.collection('examSessions').updateOne(
+    { _id: sessionId as any, user_id: userId, status: 'active' },
+    { $set: { updated_at: now } },
+  )
 }

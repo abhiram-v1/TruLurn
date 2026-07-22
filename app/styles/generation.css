@@ -608,3 +608,10 @@
 .missing-page-panel .button {
   justify-self: start;
 }
+
+.missing-page-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}

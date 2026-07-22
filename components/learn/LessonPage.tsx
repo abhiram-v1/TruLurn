@@ -29,6 +29,11 @@ export function LessonPage({
   const isStructured = Boolean(page.sections && page.sections.length > 0)
   const containerRef = useRef<HTMLDivElement>(null)
   const [showFeedback, setShowFeedback] = useState(false)
+  const activeProcessing = page.active_processing ?? null
+  const selfCheck = activeProcessing?.self_explanation_prompt
+    ?? activeProcessing?.transfer_prompt
+    ?? activeProcessing?.retrieval_prompt
+    ?? null
 
   // Reset showFeedback when the page changes
   useEffect(() => {
@@ -118,6 +123,13 @@ export function LessonPage({
             </div>
           </>
         )}
+
+        {screenPage === screenPageCount && selfCheck ? (
+          <aside className="lesson-self-check" aria-label="Check your understanding">
+            <span>Check yourself</span>
+            <p>{selfCheck}</p>
+          </aside>
+        ) : null}
 
         {page.source_citations?.length ? (
           <details className="lesson-source-citations">

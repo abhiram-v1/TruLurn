@@ -40,6 +40,10 @@
   padding: 0;
 }
 
+.roadmap-header {
+  margin-bottom: 0;
+}
+
 /* Panel headers — compact 44px, consistent */
 .roadmap-header,
 .lesson-toolbar,
@@ -529,12 +533,23 @@
 /* Roadmap scroll area */
 .roadmap-scroll {
   flex: 1;
-  overflow: auto;
-  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 0 0 10px;
 }
 
 .topic-group {
-  margin: 0;
+  --traccia-route-color: color-mix(in srgb, var(--color-detail-slate-ink) 38%, var(--color-border));
+  margin: 0 0 10px;
+  position: relative;
+}
+
+.topic-group.section-current {
+  --traccia-route-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+}
+
+.topic-group.section-locked {
+  --traccia-route-color: color-mix(in srgb, var(--color-detail-slate-ink) 30%, var(--color-border));
 }
 
 /* ── Course progress strip (top of Traccia) ── */
@@ -543,7 +558,7 @@
   border-bottom: none;
   display: flex;
   gap: 10px;
-  padding: 9px 16px;
+  padding: 10px 16px 12px;
 }
 
 .roadmap-progress-bar {
@@ -575,29 +590,56 @@
   align-items: center;
   background: transparent;
   color: var(--color-text-secondary);
-  display: flex;
+  display: grid;
   font-size: 11px;
   font-weight: 700;
-  gap: 8px;
-  justify-content: space-between;
+  gap: 12px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
   letter-spacing: 0.08em;
-  padding: 16px 16px 6px;
+  padding: 18px 16px 10px 12px;
   text-transform: uppercase;
-  border-top: 1px solid rgba(5, 5, 23, 0.04);
-  margin-top: 4px;
 }
 
 .roadmap-section-label:first-of-type {
-  border-top: none;
-  margin-top: 0;
-  padding-top: 12px;
+  padding-top: 6px;
+}
+
+.roadmap-section-marker {
+  align-items: center;
+  background: var(--color-bg-secondary);
+  border: 1.5px solid var(--traccia-route-color);
+  border-radius: 50%;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  height: 36px;
+  justify-content: center;
+  letter-spacing: 0;
+  position: relative;
+  width: 36px;
+  z-index: 2;
+}
+
+.section-current .roadmap-section-marker {
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-secondary));
+  color: var(--color-accent);
+}
+
+.section-locked .roadmap-section-marker {
+  color: var(--color-detail-slate-ink);
 }
 
 .roadmap-section-name {
+  color: var(--color-text-secondary);
+  line-height: 1.35;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--color-text-secondary);
+}
+
+.section-current .roadmap-section-name {
+  color: var(--color-text-primary);
 }
 
 .roadmap-section-count {
@@ -609,7 +651,19 @@
 
 /* Roadmap topic list — compact rows */
 .topic-list {
-  gap: 0;
+  padding-left: 0;
+  position: relative;
+}
+
+.roadmap-route-list::before {
+  background: var(--traccia-route-color);
+  bottom: 20px;
+  content: '';
+  left: 29px;
+  opacity: 0.9;
+  position: absolute;
+  top: -8px;
+  width: 1.5px;
 }
 
 .topic-link,
@@ -617,13 +671,18 @@
 .topic-container {
   border: 0;
   border-radius: 6px;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
-  gap: 10px;
-  min-height: 38px;
-  padding: 6px 12px;
-  margin: 2px 8px;
+  gap: 11px;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  margin: 1px 8px 1px 56px;
+  min-height: 34px;
+  padding: 8px 12px;
   position: relative;
   transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.topic-tree-row:not(.is-current) > .topic-link,
+.topic-tree-row:not(.is-current) > .topic-container {
+  width: calc(100% - 64px);
 }
 
 /* State adornments — lock / check / "you are here" on the row's right edge */
@@ -660,7 +719,7 @@
   border-bottom: none;
   display: flex;
   gap: 8px;
-  padding: 4px 12px 10px 30px;
+  padding: 1px 12px 12px 29px;
 }
 
 .tpp-bar {
@@ -696,11 +755,16 @@
 }
 
 .topic-tree-row.is-current {
-  background: var(--color-bg-primary);
-  border-radius: 6px;
-  box-shadow: 0 1.5px 3px var(--shadow-color);
-  margin: 4px 8px;
-  overflow: hidden;
+  background: var(--color-surface-elevated);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 20%, var(--color-border));
+  border-radius: var(--radius-lg);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--shadow-color) 55%, transparent);
+  margin: 4px 8px 8px 56px;
+  overflow: visible;
+  position: relative;
+}
+
+.topic-tree-row {
   position: relative;
 }
 
@@ -709,6 +773,7 @@
   background: transparent;
   box-shadow: none;
   margin: 0;
+  padding: 12px 12px 8px;
   border-radius: 0;
 }
 
@@ -721,8 +786,52 @@
   left: 0;
   position: absolute;
   top: 0;
-  width: 3.5px;
+  width: 3px;
   z-index: 2;
+}
+
+.topic-tree-row::after {
+  background: var(--traccia-route-color);
+  content: '';
+  height: 1.5px;
+  left: 34px;
+  opacity: 0.9;
+  position: absolute;
+  top: 50%;
+  width: 39px;
+  z-index: 0;
+}
+
+.topic-tree-row.is-current::after {
+  left: -22px;
+  width: 22px;
+}
+
+.route-junction {
+  background: var(--color-bg-secondary);
+  border: 1.5px solid var(--traccia-route-color);
+  border-radius: 50%;
+  height: 11px;
+  left: 24px;
+  position: absolute;
+  top: calc(50% - 5.5px);
+  width: 11px;
+  z-index: 2;
+}
+
+.topic-tree-row.is-current > .route-junction {
+  left: -32px;
+}
+
+.route-junction.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.route-junction.mastered,
+.route-junction.done {
+  background: var(--state-mastered-text);
 }
 
 .topic-tree-row.is-current .topic-name,
@@ -747,7 +856,7 @@
 
 .topic-link:hover,
 .topic-container:hover {
-  background: rgba(253, 247, 237, 0.45);
+  background: color-mix(in srgb, var(--color-surface-elevated) 58%, transparent);
 }
 
 .topic-locked:hover {
@@ -763,19 +872,21 @@
 }
 
 .topic-child-list {
-  background: rgba(245, 238, 224, 0.34);
+  border-left: 1px solid color-mix(in srgb, var(--traccia-route-color) 62%, transparent);
+  margin-left: 56px;
+  position: relative;
 }
 
 .topic-tree-row.level-1 .topic-link,
 .topic-tree-row.level-1 .topic-locked,
 .topic-tree-row.level-1 .topic-container {
-  padding-left: 32px;
+  padding-left: 14px;
 }
 
 .topic-tree-row.level-2 .topic-link,
 .topic-tree-row.level-2 .topic-locked,
 .topic-tree-row.level-2 .topic-container {
-  padding-left: 48px;
+  padding-left: 28px;
 }
 
 .topic-tree-row.level-1 .topic-name,
@@ -805,22 +916,55 @@
 
 /* Visual status indicator halos for roadmap topic state dots */
 .roadmap-panel .state-dot {
-  width: 7px;
-  height: 7px;
+  background: var(--color-bg-secondary);
+  border: 1.5px solid var(--traccia-route-color);
   border-radius: 50%;
   display: inline-block;
   flex-shrink: 0;
+  height: 10px;
+  position: relative;
   transition: all 0.2s ease;
+  width: 10px;
+  z-index: 2;
+}
+
+.roadmap-route-destination {
+  align-items: center;
+  border: 1.5px solid var(--traccia-route-color);
+  border-radius: 50%;
+  color: var(--color-detail-slate-ink);
+  display: flex;
+  height: 36px;
+  justify-content: center;
+  margin: 28px 0 6px 12px;
+  position: relative;
+  width: 36px;
+}
+
+.roadmap-route-destination::before {
+  border-left: 1.5px dashed var(--traccia-route-color);
+  bottom: 100%;
+  content: '';
+  height: 35px;
+  left: 16.5px;
+  position: absolute;
 }
 
 .roadmap-panel .state-dot.locked {
-  background: transparent;
-  border: 1.5px solid rgba(5, 5, 23, 0.25);
+  background: var(--color-bg-secondary);
+  border-color: var(--traccia-route-color);
+}
+
+.roadmap-panel .state-dot.available {
+  background: var(--color-bg-secondary);
+  border-color: var(--color-accent);
+  box-shadow: none;
 }
 
 .roadmap-panel .state-dot.active {
   background: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(211, 109, 74, 0.22);
+  border-color: color-mix(in srgb, var(--color-accent) 82%, var(--color-text-primary));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 .roadmap-panel .state-dot.mastered,
@@ -855,7 +999,7 @@
 .roadmap-next {
   display: grid;
   gap: 2px;
-  padding: 10px 16px 8px;
+  padding: 16px 16px 14px;
   transition: background 0.12s ease;
 }
 
@@ -895,6 +1039,12 @@ a.roadmap-next:hover .roadmap-next-arrow {
   transition: transform 0.15s ease;
 }
 
+.roadmap-next-icon {
+  color: var(--color-accent);
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
 .roadmap-graph-link {
   align-items: center;
   border-top: 0.5px solid var(--color-border);
@@ -903,7 +1053,7 @@ a.roadmap-next:hover .roadmap-next-arrow {
   font-size: var(--text-xs);
   font-weight: 500;
   gap: 6px;
-  padding: 8px 16px;
+  padding: 14px 16px;
   transition: background 0.12s ease, color 0.12s ease;
 }
 
@@ -1415,6 +1565,109 @@ a.roadmap-next:hover .roadmap-next-arrow {
 
 /* ── Data chart renderer ──────────────────────────────────────────────────── */
 
+/* Cartesian vector diagrams */
+.coordinate-vectors-wrap {
+  background: var(--color-bg-primary);
+  border: 1px solid color-mix(in srgb, var(--color-detail-slate) 25%, var(--color-border));
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  margin: 1.7em 0;
+  overflow: hidden;
+}
+
+.coordinate-vectors-heading {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  padding: 1rem 1.15rem .15rem;
+}
+
+.coordinate-vectors-heading strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: 650;
+}
+
+.coordinate-vectors-heading span {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.coordinate-vectors-wrap svg {
+  display: block;
+  height: auto;
+  max-height: 430px;
+  width: 100%;
+}
+
+.coordinate-grid line {
+  stroke: color-mix(in srgb, var(--color-detail-slate) 14%, transparent);
+  stroke-width: 1;
+}
+
+.coordinate-grid-3d line {
+  stroke-dasharray: 3 5;
+}
+
+.coordinate-axis line {
+  stroke: color-mix(in srgb, var(--color-text-secondary) 58%, transparent);
+  stroke-width: 1.5;
+}
+
+.coordinate-axis text,
+.coordinate-tick text,
+.coordinate-point text {
+  fill: var(--color-text-muted);
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+}
+
+.coordinate-tick line {
+  stroke: color-mix(in srgb, var(--color-text-secondary) 45%, transparent);
+  stroke-width: 1;
+}
+
+.coordinate-tick text {
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.coordinate-vector > line {
+  stroke-linecap: round;
+  stroke-width: 3.5;
+}
+
+.coordinate-vector > circle,
+.coordinate-point circle {
+  stroke: var(--color-bg-primary);
+  stroke-width: 2;
+}
+
+.coordinate-vector-label rect {
+  fill: color-mix(in srgb, var(--color-bg-primary) 91%, transparent);
+  stroke: color-mix(in srgb, var(--color-border) 75%, transparent);
+}
+
+.coordinate-vector-label text {
+  font-family: var(--font-mono, monospace);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.coordinate-vectors-note {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent);
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: var(--text-xs);
+  justify-content: space-between;
+  padding: .55rem 1rem;
+}
+
+.chat-md .coordinate-vectors-wrap,
+.quiz-question-md .coordinate-vectors-wrap {
+  margin: .8em 0;
+}
+
 .chart-wrap {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-surface-elevated) 72%, transparent), transparent),
@@ -1735,6 +1988,68 @@ a.roadmap-next:hover .roadmap-next-arrow {
 }
 .lf-reexplain:hover:not(:disabled) { text-decoration: underline; }
 .lf-reexplain:disabled { opacity: 0.55; cursor: default; }
+/* Optional one-tap reason after a negative signal */
+.lf-reason {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lf-reason-prompt {
+  font-size: 0.8rem;
+  color: #9a7b55;
+}
+.lf-reason-chip {
+  padding: 4px 10px;
+  border: 1px solid #e0d4bf;
+  border-radius: 999px;
+  background: #fff;
+  color: #5a4632;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 0.13s, background 0.13s;
+}
+.lf-reason-chip:hover {
+  border-color: #d36d4a;
+  background: #fff6f1;
+}
+.lf-reason-skip {
+  border: none;
+  background: none;
+  color: #b3a48d;
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 4px 4px;
+}
+.lf-reason-skip:hover { color: #7a6248; }
+.lf-reason-other {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lf-reason-input {
+  padding: 5px 10px;
+  border: 1px solid #e0d4bf;
+  border-radius: 999px;
+  background: #fff;
+  color: #3a2f22;
+  font-size: 0.8rem;
+  min-width: 200px;
+}
+.lf-reason-input:focus {
+  outline: none;
+  border-color: #d36d4a;
+}
+.lf-reason-send {
+  border: none;
+  background: none;
+  color: #d36d4a;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.lf-reason-send:disabled { opacity: 0.5; cursor: default; }
 /* X dismiss button + dropdown */
 .lf-dismiss {
   position: relative;
@@ -2067,6 +2382,101 @@ a.roadmap-next:hover .roadmap-next-arrow {
   text-align: right;
 }
 
+/* Nested sub-topic levels — indented, with a hairline spine on the left */
+.curriculum-subtopics {
+  margin-left: 22px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+
+.curriculum-subtopics .curriculum-topic-title {
+  font-size: var(--text-sm);
+}
+
+.curriculum-topic-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+  transition: transform 0.15s, color 0.15s;
+}
+
+.curriculum-topic-toggle.open {
+  transform: rotate(90deg);
+}
+
+.curriculum-topic-toggle:hover {
+  color: var(--color-accent);
+}
+
+/* Concepts the learner named that the plan doesn't cover yet */
+.curriculum-coverage-warning {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 42%, var(--color-border));
+  border-radius: var(--radius-lg);
+  background: var(--state-partial-bg);
+}
+
+.curriculum-coverage-warning strong {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--state-partial-text);
+  margin-bottom: 8px;
+}
+
+.curriculum-coverage-warning ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.curriculum-coverage-warning li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+}
+
+.curriculum-coverage-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.curriculum-coverage-actions button {
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 45%, var(--color-border));
+  border-radius: 99px;
+  background: var(--color-bg-primary);
+  color: var(--state-partial-text);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.curriculum-coverage-actions button:hover {
+  border-color: var(--color-warning);
+  background: color-mix(in srgb, var(--state-partial-bg) 55%, var(--color-bg-primary));
+}
+
+.curriculum-coverage-dismiss {
+  opacity: 0.75;
+}
+
 .curriculum-topic-fields {
   flex: 1;
   min-width: 0;
@@ -2363,6 +2773,754 @@ a.roadmap-next:hover .roadmap-next-arrow {
 .chat-stop:hover {
   background: var(--color-accent);
   color: #fff;
+}
+
+.chat-stream-status {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  font-size: var(--text-sm);
+  gap: 7px;
+}
+
+.chat-stream-status::before {
+  animation: chat-stream-pulse 1.1s ease-in-out infinite;
+  background: var(--color-accent);
+  border-radius: 50%;
+  content: '';
+  height: 6px;
+  width: 6px;
+}
+
+.message.assistant.streaming .chat-md > :last-child::after {
+  animation: chat-stream-caret .8s step-end infinite;
+  background: var(--color-accent);
+  content: '';
+  display: inline-block;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.18em;
+  width: 2px;
+}
+
+@keyframes chat-stream-pulse {
+  50% { opacity: .3; transform: scale(.7); }
+}
+
+@keyframes chat-stream-caret {
+  50% { opacity: 0; }
+}
+
+/* Traccia rail — visual hierarchy adapted from the supplied route reference. */
+.roadmap-panel {
+  background: var(--color-bg-primary);
+  border-right: 1px solid var(--color-border);
+}
+
+.roadmap-header {
+  align-items: flex-start;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  height: auto;
+  min-height: 62px;
+  padding: 14px 14px 12px 16px;
+}
+
+.traccia-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.traccia-heading .panel-label {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 750;
+  letter-spacing: .2em;
+  line-height: 1;
+}
+
+.traccia-heading-note {
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  letter-spacing: .01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roadmap-progress {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 66%, transparent);
+  display: grid;
+  gap: 8px 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 13px 16px 12px;
+}
+
+.roadmap-progress-bar {
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  border-radius: 99px;
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+}
+
+.roadmap-progress-bar span {
+  background: linear-gradient(
+    90deg,
+    var(--state-mastered-text),
+    color-mix(in srgb, var(--state-mastered-text) 55%, var(--color-accent))
+  );
+  border-radius: 99px;
+  transition: width 1s cubic-bezier(.22, 1, .36, 1);
+}
+
+.roadmap-progress-text {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.roadmap-progress-text b { color: var(--color-text-primary); font-weight: 620; }
+
+.roadmap-progress-pct {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.topic-group {
+  margin-bottom: 18px;
+}
+
+.roadmap-section-label {
+  gap: 10px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  letter-spacing: .055em;
+  padding: 16px 14px 9px 13px;
+}
+
+.roadmap-section-marker {
+  background: var(--color-bg-primary);
+  height: 32px;
+  width: 32px;
+}
+
+.section-current .roadmap-section-marker {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-line);
+  color: var(--color-accent);
+}
+
+.roadmap-route-list::before {
+  left: 28px;
+  opacity: .58;
+  top: -4px;
+}
+
+.topic-link,
+.topic-locked,
+.topic-container {
+  border-radius: 8px;
+  gap: 10px;
+  margin-left: 51px;
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.topic-tree-row:not(.is-current) > .topic-link,
+.topic-tree-row:not(.is-current) > .topic-container {
+  width: calc(100% - 59px);
+}
+
+.topic-tree-row::after {
+  left: 33px;
+  width: 28px;
+}
+
+.route-junction { left: 23px; }
+
+.topic-tree-row.is-current {
+  background: var(--color-accent-soft);
+  border-color: var(--color-accent-line);
+  border-radius: 8px;
+  box-shadow: none;
+  margin: 5px 8px 9px 51px;
+}
+
+.topic-tree-row.is-current::before {
+  background: var(--color-accent);
+  width: 3px;
+}
+
+.topic-tree-row.is-current::after {
+  left: -20px;
+  width: 20px;
+}
+
+.topic-tree-row.is-current > .route-junction { left: -30px; }
+
+.topic-tree-row.is-current .topic-link,
+.topic-tree-row.is-current .topic-container {
+  padding: 10px 11px 7px;
+}
+
+.topic-page-progress {
+  gap: 9px;
+  padding: 0 11px 11px;
+}
+
+.tpp-bar {
+  background: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+  max-width: none;
+}
+
+.tpp-bar span { background: var(--color-accent); }
+
+.roadmap-footer-stack {
+  background: var(--color-bg-primary);
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  gap: 0;
+  padding: 10px 10px 0;
+}
+
+.roadmap-next {
+  align-items: center;
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-line);
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+}
+
+a.roadmap-next:hover { background: color-mix(in srgb, var(--color-accent) 17%, var(--color-bg-primary)); }
+
+.roadmap-next-icon-shell {
+  align-items: center;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-accent-line);
+  border-radius: 7px;
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-content: center;
+}
+
+.roadmap-next-copy { display: grid; gap: 2px; min-width: 0; }
+.roadmap-next-label { color: var(--color-accent-strong); font-size: 10px; }
+.roadmap-next-title { display: block; font-size: 12px; font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roadmap-next-arrow { color: var(--color-accent-strong); margin-left: auto; }
+
+.roadmap-graph-link {
+  border-top: 0;
+  justify-content: center;
+  margin-top: 3px;
+  padding: 11px 8px;
+}
+
+/* Source-style hierarchy: section -> lesson -> topic, with one calm route line. */
+.traccia-section {
+  margin: 0 0 16px;
+  padding: 0 10px;
+  position: relative;
+}
+
+.traccia-section-head {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  display: grid;
+  gap: 11px;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  padding: 9px 6px 9px 2px;
+  text-align: left;
+  width: 100%;
+}
+
+.traccia-section-head:hover { background: color-mix(in srgb, var(--color-surface-elevated) 72%, transparent); }
+
+.traccia-section-marker {
+  align-items: center;
+  background: var(--color-surface-elevated);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--color-text-secondary) 42%, var(--color-border));
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  height: 36px;
+  justify-content: center;
+  width: 36px;
+}
+
+.section-current .traccia-section-marker {
+  background: var(--color-accent-soft);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent-line);
+  color: var(--color-accent-strong);
+}
+
+.section-done .traccia-section-marker {
+  background: var(--state-mastered-bg);
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--state-mastered-text) 45%, transparent);
+  color: var(--state-mastered-text);
+}
+
+.section-locked .traccia-section-marker { color: var(--color-text-tertiary); opacity: .8; }
+
+.traccia-section-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.traccia-section-name {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 750;
+  letter-spacing: .055em;
+  line-height: 1.35;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+
+.section-locked .traccia-section-name { color: var(--color-text-tertiary); }
+
+.traccia-section-meta {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.traccia-section .roadmap-section-count {
+  background: color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+  border-radius: 99px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  padding: 1px 8px;
+}
+
+.section-current .roadmap-section-count {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
+.section-done .roadmap-section-count {
+  background: var(--state-mastered-bg);
+  color: var(--state-mastered-text);
+}
+
+.traccia-section-here {
+  align-items: center;
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: 9.5px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.traccia-section-here::before {
+  background: var(--color-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+  content: '';
+  height: 5px;
+  width: 5px;
+}
+
+.traccia-section-chevron { color: var(--color-text-tertiary); }
+
+.traccia-section-thread {
+  margin-left: 12px;
+  padding: 2px 0 5px 22px;
+  position: relative;
+}
+
+/* Neutral guide line running through the lesson/topic markers */
+.traccia-section-thread::before {
+  background: color-mix(in srgb, var(--color-text-primary) 13%, transparent);
+  border-radius: 2px;
+  content: '';
+  height: calc(100% - 15px);
+  left: 31px;
+  position: absolute;
+  top: 4px;
+  width: 2px;
+}
+
+.traccia-lesson {
+  position: relative;
+}
+
+.traccia-lesson-head {
+  align-items: flex-start;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 8px 5px 8px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.traccia-lesson-head:hover:not(:disabled) { background: color-mix(in srgb, var(--color-surface-elevated) 64%, transparent); }
+.traccia-lesson-head:disabled { cursor: default; opacity: .55; }
+
+.traccia-lesson-node {
+  background: var(--color-bg-primary);
+  border: 2px solid color-mix(in srgb, var(--color-text-secondary) 58%, var(--color-border));
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--color-bg-primary);
+  height: 12px;
+  justify-self: center;
+  margin-top: 4px;
+  position: relative;
+  width: 12px;
+  z-index: 1;
+}
+
+.traccia-lesson-node.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-bg-primary), 0 0 0 4px var(--color-accent-soft);
+}
+
+.traccia-lesson-copy { display: grid; gap: 4px; min-width: 0; }
+
+.traccia-lesson-title {
+  color: var(--color-text-primary);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.34;
+  text-wrap: pretty;
+}
+
+.is-locked .traccia-lesson-title { color: var(--color-text-tertiary); font-weight: 500; }
+
+.traccia-lesson-sub {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.traccia-lesson-frac {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.traccia-lesson-minibar {
+  background: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  border-radius: 2px;
+  flex: 1;
+  height: 3px;
+  max-width: 76px;
+  overflow: hidden;
+}
+
+.traccia-lesson-minibar i {
+  background: var(--color-accent);
+  border-radius: 2px;
+  display: block;
+  height: 100%;
+}
+
+.traccia-lesson-chevron,
+.traccia-lesson-lock { color: var(--color-text-secondary); margin-top: 3px; }
+
+.traccia-topic-thread {
+  --lit: 0;
+  margin: 0 0 4px 10px;
+  padding: 1px 0;
+  position: relative;
+}
+
+/* Neutral guide + lit overlay through the topic markers */
+.traccia-topic-thread::before {
+  background: color-mix(in srgb, var(--color-text-primary) 13%, transparent);
+  border-radius: 2px;
+  content: '';
+  height: calc(100% - 16px);
+  left: 9px;
+  position: absolute;
+  top: 6px;
+  width: 2px;
+}
+
+.traccia-topics-lit {
+  background: var(--color-accent);
+  border-radius: 2px;
+  height: calc((100% - 16px) * var(--lit, 0));
+  left: 9px;
+  position: absolute;
+  top: 6px;
+  transition: height 1s cubic-bezier(.22, 1, .36, 1);
+  width: 2px;
+}
+
+.traccia-topic-row {
+  position: relative;
+}
+
+.traccia-topic-link {
+  align-items: flex-start;
+  border: 0;
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 40px;
+  padding: 8px 8px 8px 0;
+  text-decoration: none;
+}
+
+a.traccia-topic-link:hover { background: color-mix(in srgb, var(--color-surface-elevated) 72%, transparent); color: var(--color-text-primary); }
+.traccia-topic-row.is-locked .traccia-topic-link { cursor: not-allowed; }
+
+/* ── Topic markers strung on the thread ── */
+.tk-mk {
+  align-items: center;
+  border-radius: 50%;
+  box-shadow: 0 0 0 3px var(--color-bg-primary);
+  display: inline-flex;
+  flex-shrink: 0;
+  height: 20px;
+  justify-content: center;
+  justify-self: center;
+  position: relative;
+  width: 20px;
+  z-index: 1;
+}
+
+.tk-mk--done {
+  background: var(--state-mastered-text);
+  color: var(--color-bg-primary);
+}
+
+.tk-mk--current { background: var(--color-accent); }
+
+.tk-mk--current .tk-mk-core {
+  background: #fff;
+  border-radius: 50%;
+  height: 6px;
+  width: 6px;
+}
+
+.tk-mk-pulse {
+  animation: traccia-pulse 2.2s ease-out infinite;
+  border: 2px solid var(--color-accent);
+  border-radius: 50%;
+  inset: -4px;
+  position: absolute;
+}
+
+@keyframes traccia-pulse {
+  0% { opacity: .8; transform: scale(.7); }
+  70%, 100% { opacity: 0; transform: scale(1.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tk-mk-pulse { animation: none; }
+}
+
+.tk-mk--avail {
+  background: var(--color-bg-primary);
+  box-shadow: 0 0 0 3px var(--color-bg-primary), inset 0 0 0 2px var(--color-accent);
+}
+
+.tk-mk--avail .tk-mk-core {
+  background: var(--color-accent);
+  border-radius: 50%;
+  height: 5px;
+  width: 5px;
+}
+
+.tk-mk--locked {
+  background: var(--color-bg-primary);
+  box-shadow: 0 0 0 3px var(--color-bg-primary), inset 0 0 0 1.5px var(--color-border);
+  color: var(--color-text-tertiary);
+}
+
+.traccia-topic-copy { display: grid; gap: 4px; min-width: 0; }
+
+.traccia-topic-title {
+  font-size: 13px;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.traccia-topic-row.is-done .traccia-topic-title { color: var(--color-text-secondary); }
+.traccia-topic-row.is-locked .traccia-topic-title { color: var(--color-text-tertiary); }
+
+.traccia-topic-row.is-current { margin: 2px 0; }
+
+.traccia-topic-row.is-current .traccia-topic-link {
+  background: var(--color-accent-soft);
+}
+
+.traccia-topic-row.is-current .traccia-topic-title {
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+/* "Reading now" tag under the current topic's title */
+.tk-here {
+  align-items: center;
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: 9.5px;
+  font-weight: 700;
+  gap: 5px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.traccia-topic-row .topic-page-progress {
+  gap: 8px;
+  padding: 0;
+}
+.traccia-topic-row .tpp-bar { max-width: 90px; }
+.traccia-topic-row .tpp-text { color: var(--color-text-secondary); font-size: 11px; }
+
+.traccia-route-destination {
+  align-items: center;
+  border: 1.5px dashed color-mix(in srgb, var(--color-accent) 50%, var(--color-border));
+  border-radius: 50%;
+  color: var(--color-accent);
+  display: flex;
+  height: 30px;
+  justify-content: center;
+  margin: 14px 0 0 6px;
+  width: 30px;
+}
+
+/* ── Section medallion: glyph + done/locked badge overlay ── */
+.traccia-section-marker { position: relative; }
+
+.traccia-section-badge {
+  align-items: center;
+  background: var(--color-bg-primary);
+  border-radius: 50%;
+  bottom: -2px;
+  box-shadow: 0 0 0 1.5px var(--color-bg-primary);
+  color: var(--state-mastered-text);
+  display: inline-flex;
+  height: 13px;
+  justify-content: center;
+  position: absolute;
+  right: -2px;
+  width: 13px;
+}
+
+.traccia-section-badge.is-locked { color: var(--color-text-tertiary); }
+
+/* ── Section thread lights up proportionally to progress through it ── */
+.traccia-section-thread { --lit: 0; }
+
+.traccia-section-thread::after {
+  background: var(--color-accent);
+  border-radius: 2px;
+  content: '';
+  height: calc((100% - 15px) * var(--lit, 0));
+  left: 31px;
+  position: absolute;
+  top: 4px;
+  transition: height 1s cubic-bezier(.22, 1, .36, 1);
+  width: 2px;
+}
+
+.section-done .traccia-section-thread::after { background: var(--state-mastered-text); }
+
+.traccia-lesson-node.done {
+  background: var(--state-mastered-text);
+  border-color: var(--state-mastered-text);
+}
+
+/* ── "In this topic" page list, shown under the current topic ── */
+.traccia-pages-panel {
+  background: color-mix(in srgb, var(--color-surface-elevated) 70%, transparent);
+  border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-border) 78%, transparent);
+  margin: 2px 6px 8px 30px;
+  padding: 9px 11px 8px;
+}
+
+.traccia-pages-head {
+  align-items: center;
+  color: var(--color-text-tertiary);
+  display: flex;
+  font-size: 10px;
+  font-weight: 700;
+  justify-content: space-between;
+  letter-spacing: .06em;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.traccia-pages-count { color: var(--color-accent-strong); white-space: nowrap; }
+
+.traccia-page-row {
+  align-items: center;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  display: flex;
+  gap: 8px;
+  padding: 4px 5px;
+  text-decoration: none;
+}
+
+.traccia-page-row:hover { background: color-mix(in srgb, var(--color-bg-primary) 55%, transparent); }
+
+.traccia-page-pip {
+  align-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--color-border);
+  color: var(--color-text-tertiary);
+  display: inline-flex;
+  flex-shrink: 0;
+  font-size: 8.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  height: 15px;
+  justify-content: center;
+  width: 15px;
+}
+
+.traccia-page-row.is-done .traccia-page-pip {
+  background: var(--state-mastered-text);
+  box-shadow: none;
+  color: var(--color-bg-primary);
+}
+
+.traccia-page-row.is-current .traccia-page-pip {
+  background: var(--color-accent);
+  box-shadow: none;
+  color: var(--color-bg-primary);
+}
+
+.traccia-page-row.is-current .traccia-page-name { color: var(--color-text-primary); font-weight: 620; }
+.traccia-page-row.is-todo .traccia-page-name { color: var(--color-text-tertiary); }
+
+.traccia-page-name {
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-wrap: pretty;
 }
 
 @media (max-width: 920px) {

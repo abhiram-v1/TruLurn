@@ -16,6 +16,7 @@ import {
 } from '@/lib/cache/courseData'
 import { computeGlobalPagePosition, sortCourseTopics } from '@/lib/course-pages/globalPageNumbers'
 import { firstTeachableDescendant, isContainerTopic, nextRecommendedTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
+import { computeQuizNudge } from '@/lib/quiz/courseQuizNudge'
 
 function isBlankGeneratedPage(page: any) {
   const content = String(page?.content ?? '').trim()
@@ -145,9 +146,9 @@ export default async function LearnTopicPage({
 
   // Only per-topic pages are live reads now; course structure
   // is served from cache above. branchTopics/courseTopics derive from it.
-  // Doubt messages are loaded asynchronously client-side.
+  // Doubt messages (and which saved chat thread is open) are loaded
+  // asynchronously client-side.
   const allRawPages = await getCachedTopicPages(db, params.courseId, topicId)
-  const messages: any[] = []
   const branchTopics = allTopics
     .filter((t) => String(t.branch_id) === String(topic.branch_id))
     .sort((a, b) => (Number(a.sequence_index ?? 0) - Number(b.sequence_index ?? 0)) || (Number(a.position ?? 0) - Number(b.position ?? 0)))
@@ -212,10 +213,6 @@ export default async function LearnTopicPage({
       />
     )
   }
-
-  const messageTopicTitleById = new Map(
-    courseTopics.map((messageTopic) => [String(messageTopic._id), messageTopic.title]),
-  )
 
   // 7. Format data for LearnExperience component
   const serializedTopic = {
@@ -289,6 +286,24 @@ export default async function LearnTopicPage({
     source_citations: Array.isArray(storedPage.source_citations) ? storedPage.source_citations : undefined,
     figures: Array.isArray(storedPage.figures) ? storedPage.figures : undefined,
     grounding: storedPage.grounding ?? null,
+    learning_architecture: storedPage.learning_architecture ?? null,
+    target_understanding: storedPage.target_understanding
+      ?? storedPage.learning_architecture?.target_understanding
+      ?? null,
+    success_criteria: Array.isArray(storedPage.success_criteria)
+      ? storedPage.success_criteria.map(String)
+      : Array.isArray(storedPage.learning_architecture?.success_criteria)
+        ? storedPage.learning_architecture.success_criteria.map(String)
+        : [],
+    active_processing: storedPage.active_processing
+      ?? storedPage.learning_architecture?.active_processing
+      ?? null,
+    retention_hooks: storedPage.retention_hooks
+      ?? storedPage.learning_architecture?.retention_hooks
+      ?? null,
+    page_sequence_role: storedPage.page_sequence_role
+      ?? storedPage.learning_architecture?.page_sequence_role
+      ?? null,
   })
   const serializedPage = serializePage(activePage)
   const serializedConceptPages = pages.map((storedPage) => ({
@@ -296,18 +311,6 @@ export default async function LearnTopicPage({
     page_number: Number(storedPage.page_number),
     concepts: collectPageConcepts(storedPage),
     summary: storedPage.summary ? String(storedPage.summary) : null,
-  }))
-
-  const serializedMessages = messages.reverse().map((m) => ({
-    id: String(m._id),
-    topic_id: String(m.topic_id),
-    page_number: m.page_number,
-    topic_title: messageTopicTitleById.get(String(m.topic_id)) ?? null,
-    role: m.role as any,
-    content: m.content,
-    source_citations: Array.isArray(m.source_citations) ? m.source_citations : undefined,
-    grounding: m.grounding ?? null,
-    created_at: m.created_at.toISOString(),
   }))
 
   const orderedStudyTopics = sortTracciaTopics(orderedCourseTopics as any)
@@ -329,9 +332,18 @@ export default async function LearnTopicPage({
     ? topic.review_gaps.map(String).filter(Boolean)
     : []
 
+  // Balanced-mode-only nudge toward a quiz once completed topics pile up
+  // without one. Guided courses gate on quizzes elsewhere; open courses are
+  // left alone, so skip the extra query for both.
+  const learningControl = String(course.learning_control ?? 'balanced')
+  const quizNudge = learningControl === 'balanced'
+    ? await computeQuizNudge(db, userId, params.courseId, allTopics as any)
+    : null
+
   return (
     <LearnExperience
       courseId={params.courseId}
+      courseTitle={String(course.title ?? '')}
       topic={serializedTopic}
       topics={serializedTopics}
       page={serializedPage}
@@ -340,9 +352,10 @@ export default async function LearnTopicPage({
       estimatedPages={estimatedPages}
       globalPageNumber={globalPage.globalPageNumber}
       globalPageTotal={globalPage.globalPageTotal}
-      initialMessages={serializedMessages}
       nextTopic={serializedNextTopic}
       reviewGaps={reviewGaps}
+      learningControl={learningControl}
+      quizNudge={quizNudge}
     />
   )
 }

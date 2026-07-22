@@ -23,8 +23,16 @@ import {
 } from '@/components/recall/RecallBreakOverlay'
 import { useRecallBreak } from '@/components/recall/useRecallBreak'
 import { QuizInviteBanner } from '@/components/quiz/QuizInviteBanner'
+import { QuizNudgeBanner } from '@/components/quiz/QuizNudgeBanner'
+import { useQuizNudge, type QuizNudgeData } from '@/components/quiz/useQuizNudge'
 import { paginateLessonMarkdown } from '@/lib/lesson-pagination'
-import type { DoubtMessage, Page, Topic } from '@/types'
+import {
+  expandMarkdownSelectionToSentence,
+  replaceMarkdownSelection,
+  type MarkdownSelectionAnchor,
+} from '@/lib/markdown-selection'
+import { inferSelectionShape } from '@/lib/topic-transform'
+import type { Page, Topic } from '@/types'
 
 // ── Module-level page cache ───────────────────────────────────────────────────
 // Lives outside React so it survives re-renders and soft navigations within the
@@ -62,41 +70,9 @@ async function fetchAndCachePage(
   }
 }
 
-// ── Inline text replacement ───────────────────────────────────────────────────
-// DOM-selected text and stored markdown diverge in whitespace: the DOM collapses
-// `\n` paragraph breaks into spaces, and normalizeLessonMarkdown may insert `\n\n`
-// inside long paragraphs. We handle this by building a regex that allows any
-// run of whitespace where the selected text had a single space.
-//
-// Fallback strategy: if matching fails, APPEND the result rather than replacing
-// the whole section — so existing content is never lost.
-
-function spliceIntoMarkdown(source: string, selectedText: string, replacement: string): string {
-  const trimmed = selectedText.trim()
-
-  // 1. Exact match (fastest path — works when markdown has no newlines in the passage)
-  if (source.includes(trimmed)) {
-    return source.replace(trimmed, replacement)
-  }
-
-  // 2. Flexible-whitespace regex — handles \n vs space mismatch between DOM and markdown
-  try {
-    const pattern = trimmed
-      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&') // escape regex metacharacters
-      .replace(/\s+/g, '\\s+')                 // any whitespace run matches
-    const regex = new RegExp(pattern)
-    const result = source.replace(regex, replacement)
-    if (result !== source) return result
-  } catch {
-    // Invalid regex (e.g., the selected text has unbalanced brackets after escaping)
-  }
-
-  // 3. Safe fallback: append below a divider — content is never lost
-  return `${source}\n\n---\n\n${replacement}`
-}
-
 export function LearnExperience({
   courseId,
+  courseTitle,
   topic,
   topics,
   page,
@@ -105,11 +81,13 @@ export function LearnExperience({
   estimatedPages,
   globalPageNumber,
   globalPageTotal,
-  initialMessages,
   nextTopic,
   reviewGaps = [],
+  learningControl,
+  quizNudge,
 }: {
   courseId: string
+  courseTitle?: string
   topic: Topic
   topics: Topic[]
   page: Page
@@ -118,9 +96,10 @@ export function LearnExperience({
   estimatedPages: number
   globalPageNumber: number
   globalPageTotal: number
-  initialMessages: DoubtMessage[]
   nextTopic?: Pick<Topic, 'id' | 'title'> | null
   reviewGaps?: string[]
+  learningControl?: string
+  quizNudge?: QuizNudgeData | null
 }) {
   const router = useRouter()
   const [roadmapCollapsed, setRoadmapCollapsed] = useState(false)
@@ -283,6 +262,8 @@ export function LearnExperience({
     pageSummary: activePage.summary ?? null,
   })
 
+  const quizNudgeState = useQuizNudge({ courseId, learningControl, quizNudge })
+
   // Clear overrides whenever the page changes
   useEffect(() => {
     setSectionOverrides(new Map())
@@ -296,22 +277,34 @@ export function LearnExperience({
 
   function applyInlineTransform(
     sectionIdx: number,
-    selectedText: string,
+    selection: MarkdownSelectionAnchor,
     result: string,
     action: TransformAction,
-  ) {
-    if (!activePage.sections || sectionIdx < 0 || sectionIdx >= activePage.sections.length) return
+  ): boolean {
+    if (!activePage.sections || sectionIdx < 0 || sectionIdx >= activePage.sections.length) return false
 
-    setSectionOverrides((prev) => {
-      const currentContent = prev.get(sectionIdx)?.modified ?? activePage.sections![sectionIdx].content
-      const original = prev.get(sectionIdx)?.original ?? activePage.sections![sectionIdx].content
+    const currentOverride = sectionOverrides.get(sectionIdx)
+    const currentContent = currentOverride?.modified ?? activePage.sections[sectionIdx].content
+    const replaced = replaceMarkdownSelection(currentContent, selection, result)
+    if (!replaced) return false
 
-      const modified = action === 'example'
-        ? spliceIntoMarkdown(currentContent, selectedText, `${selectedText}\n\n${result}`)
-        : spliceIntoMarkdown(currentContent, selectedText, result)
+    const original = currentOverride?.original ?? activePage.sections[sectionIdx].content
+    setSectionOverrides((prev) => new Map(prev).set(sectionIdx, {
+      original,
+      modified: replaced.value,
+      action,
+    }))
+    return true
+  }
 
-      return new Map(prev).set(sectionIdx, { original, modified, action })
-    })
+  function prepareInlineTransform(
+    sectionIdx: number,
+    selection: MarkdownSelectionAnchor,
+  ): MarkdownSelectionAnchor | null {
+    if (!activePage.sections || sectionIdx < 0 || sectionIdx >= activePage.sections.length) return null
+    const currentContent = sectionOverrides.get(sectionIdx)?.modified ?? activePage.sections[sectionIdx].content
+    if (inferSelectionShape(selection.before, selection.after) === 'passage') return selection
+    return expandMarkdownSelectionToSentence(currentContent, selection)
   }
 
   function restoreSection(sectionIdx: number) {
@@ -473,8 +466,9 @@ export function LearnExperience({
   }, [activePage.page_number, topic.id, courseId, activeEstimatedPages, activeTotalPages, prefetchPageToCache])
 
   return (
-    <div className="study-shell">
-      <ThreePanelLayout
+    <>
+      <div className="study-shell">
+        <ThreePanelLayout
         roadmapCollapsed={roadmapCollapsed}
         doubtsExpanded={doubtsExpanded}
         lessonPanelRef={lessonPanelRef}
@@ -483,10 +477,12 @@ export function LearnExperience({
             topics={topics}
             currentTopicId={topic.id}
             courseId={courseId}
+            courseTitle={courseTitle}
             collapsed={roadmapCollapsed}
             onToggle={() => setRoadmapCollapsed((collapsed) => !collapsed)}
             currentPageNumber={activePage.page_number}
             totalPlannedPages={totalPlanned}
+            conceptPages={conceptPages}
           />
         }
         middle={
@@ -537,6 +533,14 @@ export function LearnExperience({
             ) : null}
             {recall.error && !recall.overlay ? (
               <div className="recall-inline-error">{recall.error}</div>
+            ) : null}
+
+            {quizNudgeState.active && quizNudgeState.topicId ? (
+              <QuizNudgeBanner
+                topicTitle={quizNudgeState.topicTitle ?? 'that topic'}
+                quizHref={`/quiz/${encodeURIComponent(quizNudgeState.topicId)}?mode=checkpoint`}
+                onDismiss={quizNudgeState.dismiss}
+              />
             ) : null}
 
             {reviewGaps.length > 0 && activePage.page_number === 1 && lessonPageIndex === 0 ? (
@@ -593,6 +597,7 @@ export function LearnExperience({
               topicId={topic.id}
               courseId={courseId}
               topicTitle={topic.title}
+              prepareTransform={prepareInlineTransform}
               onTransformComplete={applyInlineTransform}
               onAttachToChat={(text) => {
                 setSelectedChatContext({ id: Date.now(), text })
@@ -641,11 +646,11 @@ export function LearnExperience({
                 </div>
                 {hasScreenParts ? (
                   <span className="lesson-page-context">
-                    Course page {activeGlobalPageNumber} of {globalPageTotal} - Part {lessonPageIndex + 1} of {lessonPages.length}
+                    Course page {activeGlobalPageNumber} - Part {lessonPageIndex + 1} of {lessonPages.length}
                   </span>
                 ) : (
                   <span className="lesson-page-context">
-                    Course page {activeGlobalPageNumber} of {globalPageTotal}
+                    Course page {activeGlobalPageNumber}
                   </span>
                 )}
               </div>
@@ -658,6 +663,15 @@ export function LearnExperience({
                     onClick={() => setLessonPageIndex((index) => Math.min(lessonPages.length - 1, index + 1))}
                   >
                     Next
+                  </button>
+                ) : isLast && nextTopic && quizNudgeState.active ? (
+                  <button
+                    className="lesson-nav-btn lesson-nav-next is-blocked"
+                    type="button"
+                    disabled
+                    title={`Take the quiz above to unlock ${nextTopic.title}`}
+                  >
+                    Quiz required
                   </button>
                 ) : isLast ? (
                   <Link
@@ -689,7 +703,6 @@ export function LearnExperience({
             topicTitle={topic.title}
             pageNumber={activePage.page_number}
             globalPageNumber={activeGlobalPageNumber}
-            initialMessages={initialMessages}
             expanded={doubtsExpanded}
             onExpandedChange={setDoubtsExpanded}
             draftSeed={draftSeed}
@@ -699,23 +712,25 @@ export function LearnExperience({
             onGenerateCustomPage={generateCustomPage}
           />
         }
-      />
-      {recall.rest ? <RecallBreakCountdown rest={recall.rest} onSkipRest={recall.skipRestToReview} /> : null}
-      {recall.overlay ? (
-        <RecallBreakOverlay
-          content={recall.overlay}
-          onComplete={recall.completeBreak}
-          onTag={recall.tagReminder}
-          onDismiss={recall.dismissOverlay}
         />
-      ) : null}
+        {recall.rest ? <RecallBreakCountdown rest={recall.rest} onSkipRest={recall.skipRestToReview} /> : null}
+        {recall.overlay ? (
+          <RecallBreakOverlay
+            content={recall.overlay}
+            onComplete={recall.completeBreak}
+            onTag={recall.tagReminder}
+            onDismiss={recall.dismissOverlay}
+          />
+        ) : null}
+        <BottomNav courseId={courseId} />
+      </div>
+      {/* Keep the printable tree outside study-shell: print CSS hides the app shell. */}
       <LessonPdfDocument
         entries={pdfEntries}
         currentPageId={activePage.id}
         currentPageOverrides={sectionOverrides}
         globalPageTotal={pdfGlobalPageTotal}
       />
-      <BottomNav courseId={courseId} />
-    </div>
+    </>
   )
 }

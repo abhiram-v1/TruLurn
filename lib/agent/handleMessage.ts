@@ -15,10 +15,15 @@ type HandleMessageInput = {
   pageNumber: number
   message: string
   selectedContext?: string | null
+  /** Which saved chat thread this message belongs to — a display grouping
+   *  only; it does not affect the agent's course-wide memory/retrieval. */
+  conversationId?: string | null
+  onDelta?: (delta: string) => void
+  signal?: AbortSignal
 }
 
 export async function handleMessage(input: HandleMessageInput): Promise<AgentMessage> {
-  const { db, userId, courseId, topicId, pageNumber, message, selectedContext } = input
+  const { db, userId, courseId, topicId, pageNumber, message, selectedContext, conversationId, onDelta, signal } = input
 
   const immediateClassification = classifyIntentDeterministically(message)
 
@@ -73,7 +78,10 @@ export async function handleMessage(input: HandleMessageInput): Promise<AgentMes
     pageNumber,
     question: message,
     selectedContext,
+    conversationId,
     preClassifiedType: classification.questionType,
+    onDelta,
+    signal,
   })
 
   return {

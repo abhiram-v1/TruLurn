@@ -445,6 +445,9 @@ export async function findRelevantPages({
             },
           },
         },
+        // A failed re-embed can leave an older vector on the document. Do not
+        // let that stale vector enter lesson or doubt context.
+        { $match: { embedding_status: 'ready' } },
         {
           $lookup: {
             from: 'topics',
@@ -496,6 +499,7 @@ export async function findRelevantPages({
         },
       },
     },
+    { $match: { embedding_status: 'ready' } },
     { $limit: candidateLimit },
     {
       $lookup: {
@@ -639,6 +643,8 @@ export async function findRelevantDoubtMessages({
             filter,
           },
         },
+        // See the matching pages retrieval guard above.
+        { $match: { embedding_status: 'ready' } },
         {
           $lookup: {
             from: 'topics',
@@ -679,6 +685,7 @@ export async function findRelevantDoubtMessages({
   }
   const lexicalPromise = collectShadow ? db.collection('doubtMessages').aggregate([
     { $search: { index: LEXICAL_INDEX_NAMES.doubtMessages, compound } },
+    { $match: { embedding_status: 'ready' } },
     { $limit: candidateLimit },
     {
       $lookup: {
@@ -825,6 +832,7 @@ export async function findRelevantSourceChunks({
             filter: tenantFilter(courseId, userId),
           },
         },
+        { $match: { embedding_status: 'ready' } },
         {
           $project: {
             _id: 1,
@@ -876,6 +884,7 @@ export async function findRelevantSourceChunks({
         },
       },
     },
+    { $match: { embedding_status: 'ready' } },
     { $limit: candidateLimit },
     {
       $project: {

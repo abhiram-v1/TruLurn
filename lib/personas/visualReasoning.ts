@@ -9,7 +9,8 @@ const SURFACE_RULES: Record<PersonaSurface, string> = {
 
 export function buildPersonaVisualReasoningDirective(surface: PersonaSurface) {
   return `VISUAL REASONING:
-- Prefer prose, math, code, or a table unless a chart materially clarifies a trend, distribution, comparison, correlation, tradeoff, or changing quantity.
+- Prefer prose, math, code, or a table unless a chart materially clarifies quantitative shape or a coordinate diagram materially clarifies a spatial relationship.
+- Use the coordinate-vector renderer for 2D/3D vectors and geometry; never imitate a diagram with ASCII text.
 - Every visual must do teaching work. Explain what to inspect and why it matters; label invented pedagogical values as illustrative.
 - Follow the active course skill context and its visual rules when supplied.
 ${SURFACE_RULES[surface]}`

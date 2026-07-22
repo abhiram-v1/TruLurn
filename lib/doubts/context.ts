@@ -9,6 +9,7 @@ import {
   formatSourceEvidencePackets,
 } from '@/lib/grounding/sourceGrounding'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
+import { COMPACT_VECTOR_OUTPUT_CONTRACT } from '@/lib/ai/skills/vectorDiagram'
 
 type DoubtHistoryMessage = {
   role: 'user' | 'assistant'
@@ -111,7 +112,9 @@ FORMATTING RULES — follow exactly, every response:
 - Use numbered or bullet lists for steps or multiple parallel points.
 - End with a follow-up question only when it would genuinely advance the student's thinking.
 
-${COMPACT_CHART_OUTPUT_CONTRACT}`
+${COMPACT_CHART_OUTPUT_CONTRACT}
+
+${COMPACT_VECTOR_OUTPUT_CONTRACT}`
 
 // ── Student state snapshot ─────────────────────────────────────────────────
 // Always injected regardless of question type so the agent always knows the

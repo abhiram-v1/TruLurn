@@ -1,6 +1,7 @@
 import { AppFrame } from '@/components/navigation/AppFrame'
 import { RecallBreakSetting } from '@/components/settings/RecallBreakSetting'
 import { ThemeSetting } from '@/components/settings/ThemeSetting'
+import { AccentSetting } from '@/components/settings/AccentSetting'
 import { LearnerMemorySetting } from '@/components/settings/LearnerMemorySetting'
 
 export default function SettingsPage() {
@@ -17,6 +18,7 @@ export default function SettingsPage() {
         <p className="section-label compact">Appearance</p>
         <div className="settings-list">
           <ThemeSetting />
+          <AccentSetting />
         </div>
         <p className="section-label">Learning</p>
         <div className="settings-list">

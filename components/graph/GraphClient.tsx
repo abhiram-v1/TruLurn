@@ -26,9 +26,9 @@ type Filters = typeof DEFAULT_FILTERS
 
 // ── Main client component ────────────────────────────────────────────────────
 
-function overviewView(graph: GraphData) {
+function overviewView(graph: GraphData, panelW = 0) {
   const availableHeight = Math.max(420, window.innerHeight - 52)
-  const availableWidth = Math.max(520, window.innerWidth - 232 - 320)
+  const availableWidth = Math.max(520, window.innerWidth - 232 - panelW)
   const scale = Math.min(
     0.78,
     Math.max(0.18, (availableHeight - 56) / Math.max(graph.canvasH, 1)),
@@ -46,6 +46,9 @@ export function GraphClient({ courseId }: { courseId: string }) {
   const [loading, setLoading] = useState(true)
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Detail panel collapse — the panel only exists when a node is selected,
+  // and even then the learner can tuck it away to give the graph full width.
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
   const [hoverId, setHoverId] = useState<string | null>(null)
   const [activeBranch, setActiveBranch] = useState<string>('all')
   const [search, setSearch] = useState('')
@@ -74,10 +77,9 @@ export function GraphClient({ courseId }: { courseId: string }) {
       const data: GraphData = await res.json()
       setGraphData(data)
       if (refit) {
+        // No auto-select: the graph loads clean, and the detail panel only
+        // appears when the learner clicks a node.
         setView(overviewView(data))
-        // Auto-select the current / active topic on load
-        const current = data.nodes.find((n) => n.current) ?? data.nodes.find((n) => n.state === 'active')
-        if (current) setSelectedId(current.id)
       }
     } catch (e) {
       setError('Network error loading graph.')
@@ -122,6 +124,7 @@ export function GraphClient({ courseId }: { courseId: string }) {
       return
     }
     setSelectedId(id)
+    setPanelCollapsed(false) // clicking a node always brings the panel back
   }
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────
@@ -214,22 +217,13 @@ export function GraphClient({ courseId }: { courseId: string }) {
     })
   }, [graphData, selectedNode])
 
-  // ── Orientation (persistent "where am I / what's next") ────────────────────
-  const orientation = useMemo(() => {
-    if (!graphData) return null
-    const nodes = graphData.nodes
-    const current = nodes.find((n) => n.current) ?? nodes.find((n) => n.state === 'active') ?? null
-    const next = graphData.nextBestNodeId
-      ? nodes.find((n) => n.id === graphData.nextBestNodeId) ?? null
-      : null
-    const totalStages = nodes.reduce((m, n) => Math.max(m, n.layer ?? 0), 0) + 1
-    return { current, next, totalStages, mastery: graphData.course.masteryScore }
-  }, [graphData])
+  // Panel is visible only when a node is selected and it isn't collapsed.
+  const panelOpen = Boolean(selectedNode) && !panelCollapsed
 
   // ── States ────────────────────────────────────────────────────────────────
   function centerNode(node: GraphNode | null = selectedNode) {
     if (!node) return
-    const mainW = Math.max(520, window.innerWidth - 232 - 320)
+    const mainW = Math.max(520, window.innerWidth - 232 - (panelOpen ? 320 : 0))
     const mainH = Math.max(420, window.innerHeight - 52)
     const nextK = Math.max(0.55, Math.min(1.3, view.k))
     // node.x / node.y are TOP-LEFT; centre on the card's middle
@@ -278,9 +272,6 @@ export function GraphClient({ courseId }: { courseId: string }) {
   }
 
   const { course } = visibleData
-  const total = course.topicCount || 1
-  const seg = (n: number) => `${(n / total) * 100}%`
-  const solidCount = course.mastered + course.functional
   const isMac = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform)
 
   return (
@@ -327,17 +318,6 @@ export function GraphClient({ courseId }: { courseId: string }) {
             </button>
           </div>
 
-          <div className="kg-topbar-progress">
-            <div className="kg-progress-bar">
-              <span className="pb-mastered"   style={{ width: seg(course.mastered) }} />
-              <span className="pb-functional" style={{ width: seg(course.functional) }} />
-              <span className="pb-partial"    style={{ width: seg(course.partial) }} />
-              <span className="pb-unstable"   style={{ width: seg(course.unstable) }} />
-            </div>
-            <div className="kg-progress-num">
-              {solidCount}/{course.topicCount} solid
-            </div>
-          </div>
         </div>
 
         <div className="kg-topbar-right">
@@ -351,32 +331,6 @@ export function GraphClient({ courseId }: { courseId: string }) {
             />
             <kbd>{isMac ? '⌘K' : 'Ctrl K'}</kbd>
           </div>
-          <button className="kg-tb-btn" type="button" onClick={() => centerNode(selectedNode)} disabled={!selectedNode}>
-            Center
-          </button>
-          {selectedNode?.teachable && (
-            <button
-              className={`kg-tb-btn${connectingFrom ? ' accent' : ''}`}
-              type="button"
-              onClick={() => {
-                setConnectionNote('')
-                setConnectingFrom(connectingFrom ? null : selectedNode.id)
-              }}
-              title="Link this concept to another one you know"
-            >
-              {connectingFrom ? 'Cancel link' : '⌁ Connect'}
-            </button>
-          )}
-          <Link className="kg-tb-btn" href={`/course/${courseId}`}>Atlas</Link>
-          {selectedNode?.teachable && selectedNode.state !== 'locked' && (
-            <Link
-              className="kg-tb-btn accent"
-              href={`/learn/${courseId}/${encodeURIComponent(selectedNode.id)}`}
-            >
-              <span className="dot" />
-              {selectedNode.state === 'active' ? 'Continue study' : 'Open topic'}
-            </Link>
-          )}
         </div>
       </header>
 
@@ -411,53 +365,6 @@ export function GraphClient({ courseId }: { courseId: string }) {
           collapsedBranches={collapsedBranches}
           onToggleBranch={toggleBranch}
         />
-
-        {/* Orientation HUD — where am I · what's next · recenter */}
-        {orientation && (
-          <div className="kg-canvas-overlay kg-hud">
-            {graphView === 'knowledge' && typeof graphData?.fullTopicCount === 'number' && (
-              <>
-                <div className="kg-hud-current" title="Concepts on your personal map vs the whole course">
-                  <span className="kg-hud-stage">On your map</span>
-                  <strong>{graphData.course.topicCount} / {graphData.fullTopicCount}</strong>
-                </div>
-                <div className="kg-hud-sep" />
-              </>
-            )}
-            <div className="kg-hud-mastery" title="Overall mastery">
-              <span className="kg-hud-bar"><span style={{ width: `${orientation.mastery}%` }} /></span>
-              <span className="kg-hud-pct">{orientation.mastery}%</span>
-            </div>
-            <div className="kg-hud-sep" />
-            <div className="kg-hud-current">
-              {orientation.current ? (
-                <>
-                  <span className="kg-hud-stage">Stage {(orientation.current.layer ?? 0) + 1}/{orientation.totalStages}</span>
-                  <strong title={orientation.current.title}>{orientation.current.title}</strong>
-                </>
-              ) : (
-                <span className="kg-hud-stage">Not started yet</span>
-              )}
-            </div>
-            {orientation.next && (
-              <button
-                className="kg-hud-next"
-                onClick={() => { setSelectedId(orientation.next!.id); centerNode(orientation.next) }}
-                title={`Recommended next: ${orientation.next.title}`}
-              >
-                Next: {orientation.next.title} <span className="arrow">→</span>
-              </button>
-            )}
-            <button
-              className="kg-hud-recenter"
-              onClick={() => { if (orientation.current) { setSelectedId(orientation.current.id); centerNode(orientation.current) } }}
-              disabled={!orientation.current}
-              title="Recenter on current topic"
-            >
-              ◎ Recenter
-            </button>
-          </div>
-        )}
 
         {/* Connect mode bar — pick the second concept, optionally annotate the link */}
         {connectingFrom && (
@@ -519,22 +426,6 @@ export function GraphClient({ courseId }: { courseId: string }) {
           <div className="kg-zoom-value">{Math.round(view.k * 100)}%</div>
         </div>
 
-        {/* Legend */}
-        <div className="kg-canvas-overlay kg-legend-card">
-          {[
-            ['mastered', 'Mastered'],
-            ['functional', 'Functional'],
-            ['partial', 'Developing'],
-            ['unstable', 'Review'],
-            ['locked', 'Locked'],
-          ].map(([s, label]) => (
-            <span key={s}>
-              <span className="kg-pip" style={{ background: `var(--kg-${s === 'locked' ? 'locked-line' : s + '-dot'})` }} />
-              {label}
-            </span>
-          ))}
-        </div>
-
         {/* Focus mode banner */}
         {focusId && selectedNode && (
           <div className="kg-canvas-overlay kg-focus-banner">
@@ -546,18 +437,40 @@ export function GraphClient({ courseId }: { courseId: string }) {
 
         {/* Minimap */}
         <GraphMinimap data={visibleData} selectedId={selectedId} view={view} setView={setView} />
+
+        {/* Reopen tab — only when a node is selected but the panel is tucked away */}
+        {selectedNode && panelCollapsed && (
+          <button
+            className="kg-canvas-overlay kg-panel-reopen"
+            type="button"
+            onClick={() => setPanelCollapsed(false)}
+            title={`Show details for ${selectedNode.title}`}
+            aria-label="Show concept details"
+          >
+            ❮
+          </button>
+        )}
       </main>
 
-      {/* ── Right detail panel ── */}
-      <GraphDetailPanel
-        node={selectedNode}
-        data={visibleData}
-        courseId={courseId}
-        onSelect={setSelectedId}
-        focusMode={filters.focusMode}
-        onToggleFocus={() => toggleFilter('focusMode')}
-        onDeleteConnection={deleteConnection}
-      />
+      {/* ── Right detail panel — exists only for a clicked node ── */}
+      {panelOpen && (
+        <GraphDetailPanel
+          node={selectedNode}
+          data={visibleData}
+          courseId={courseId}
+          onSelect={handleSelect}
+          focusMode={filters.focusMode}
+          onToggleFocus={() => toggleFilter('focusMode')}
+          onDeleteConnection={deleteConnection}
+          onCollapse={() => setPanelCollapsed(true)}
+          connecting={Boolean(connectingFrom)}
+          onStartConnect={() => {
+            if (!selectedNode?.teachable) return
+            setConnectionNote('')
+            setConnectingFrom(connectingFrom ? null : selectedNode.id)
+          }}
+        />
+      )}
     </div>
   )
 }

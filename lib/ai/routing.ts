@@ -9,6 +9,7 @@ import {
   COURSE_PLANNING_ROUTE_OWNERSHIP,
   GRAPH_GENERATION_ROUTE_OWNERSHIP,
   GRAPH_MAINTENANCE_ROUTE_OWNERSHIP,
+  LESSON_WRITING_ROUTE_OWNERSHIP,
 } from './routeOwnership.ts'
 import { looksLikeValidModelId } from './modelIdHeuristics.ts'
 
@@ -102,6 +103,7 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
   agent_action: tierRoute('fast', 'agent'),
   agent_intent: tierRoute('fast', 'agent'),
   agent_style: tierRoute('fast', 'agent'),
+  chat_title: tierRoute('fast', 'agent'),
   curriculum_generation: route('primary', {
     openai: ['OPENAI_CURRICULUM_MODEL', 'OPENAI_PRIMARY_MODEL'],
     gemini: ['GEMINI_CURRICULUM_MODEL', 'GEMINI_MODEL'],
@@ -128,6 +130,7 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
   },
   exam_evaluation: tierRoute('control', 'agent'),
   exam_question_generation: tierRoute('premium', 'primary'),
+  exam_question_validation: tierRoute('control', 'agent'),
   exam_strategy: tierRoute('control', 'agent'),
   flow_tracking: tierRoute('fast', 'agent'),
   graph_interaction_analyzer: route(
@@ -217,6 +220,9 @@ const FEATURE_ROUTES: Record<AIFeature, AIFeatureRoute> = {
       gemini: ['GEMINI_PREVIEW_MODEL'],
     }),
   },
+  // Audits a generated curriculum against the learner's stated goal — cheap,
+  // advisory, and non-blocking, so the fast tier is enough.
+  goal_coverage_check: tierRoute('fast', 'agent'),
 }
 
 for (const feature of COURSE_PLANNING_ROUTE_OWNERSHIP.features) {
@@ -229,11 +235,22 @@ for (const feature of COURSE_PLANNING_ROUTE_OWNERSHIP.features) {
   }
 }
 
+for (const feature of LESSON_WRITING_ROUTE_OWNERSHIP.features) {
+  FEATURE_ROUTES[feature] = {
+    ...FEATURE_ROUTES[feature],
+    defaultProvider: LESSON_WRITING_ROUTE_OWNERSHIP.provider,
+    lockedProvider: LESSON_WRITING_ROUTE_OWNERSHIP.provider,
+    lockedModel: LESSON_WRITING_ROUTE_OWNERSHIP.model,
+    disableAutomaticFallback: true,
+  }
+}
+
 for (const feature of GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.features) {
   FEATURE_ROUTES[feature] = {
     ...FEATURE_ROUTES[feature],
     defaultProvider: GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider,
     lockedProvider: GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider,
+    lockedModel: GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.model,
     disableAutomaticFallback: true,
   }
 }

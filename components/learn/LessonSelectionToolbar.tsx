@@ -2,11 +2,12 @@
 
 import { IconBulb, IconListDetails, IconMessageCircle, IconRefresh, IconSparkles, IconX } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
+import { normalizeSelectionText, type MarkdownSelectionAnchor } from '@/lib/markdown-selection'
+import type { TransformAction } from '@/lib/topic-transform'
 
-export type TransformAction = 'simplify' | 'deeper' | 'example'
+export type { TransformAction } from '@/lib/topic-transform'
 
-type SelectionInfo = {
-  text: string
+type SelectionInfo = MarkdownSelectionAnchor & {
   sectionIdx: number   // -1 for legacy .lesson-body pages
   x: number
   above: number
@@ -28,14 +29,17 @@ export function LessonSelectionToolbar({
   topicId,
   courseId,
   topicTitle,
+  prepareTransform,
   onTransformComplete,
   onAttachToChat,
 }: {
   topicId: string
   courseId: string
   topicTitle: string
+  /** Resolves/expands rendered text to a safe Markdown-backed edit target before calling AI. */
+  prepareTransform?: (sectionIdx: number, selection: MarkdownSelectionAnchor, action: TransformAction) => MarkdownSelectionAnchor | null
   /** Called when the AI returns a result. The caller applies it inline. */
-  onTransformComplete: (sectionIdx: number, selectedText: string, result: string, action: TransformAction) => void
+  onTransformComplete: (sectionIdx: number, selection: MarkdownSelectionAnchor, result: string, action: TransformAction) => boolean
   onAttachToChat?: (selectedText: string) => void
 }) {
   const [state, setState] = useState<ToolbarState>({ phase: 'idle' })
@@ -59,8 +63,8 @@ export function LessonSelectionToolbar({
         set({ phase: 'idle' })
         return
       }
-      const text = selection.toString().replace(/\s+/g, ' ').trim()
-      if (text.length < 5) { set({ phase: 'idle' }); return }
+      const text = normalizeSelectionText(selection.toString())
+      if (text.length < 5 || text.length > 6000) { set({ phase: 'idle' }); return }
 
       const range = selection.getRangeAt(0)
       const node = range.commonAncestorContainer
@@ -70,6 +74,21 @@ export function LessonSelectionToolbar({
       // Which section is this text in? (structured pages only)
       const sectionEl = el.closest('[data-section-index]')
       const sectionIdx = sectionEl ? parseInt(sectionEl.getAttribute('data-section-index') ?? '-1') : -1
+      if (el.closest('.lesson-sections') && !sectionEl) { set({ phase: 'idle' }); return }
+
+      let before = ''
+      let after = ''
+      if (sectionEl && sectionEl.contains(range.startContainer) && sectionEl.contains(range.endContainer)) {
+        const beforeRange = range.cloneRange()
+        beforeRange.selectNodeContents(sectionEl)
+        beforeRange.setEnd(range.startContainer, range.startOffset)
+        before = normalizeSelectionText(beforeRange.toString()).slice(-240)
+
+        const afterRange = range.cloneRange()
+        afterRange.selectNodeContents(sectionEl)
+        afterRange.setStart(range.endContainer, range.endOffset)
+        after = normalizeSelectionText(afterRange.toString()).slice(0, 240)
+      }
 
       const rect = range.getBoundingClientRect()
       const fr = range.getClientRects()[0]
@@ -78,7 +97,7 @@ export function LessonSelectionToolbar({
 
       set({
         phase: 'ready',
-        sel: { text: text.slice(0, 2000), sectionIdx, x: r.left + r.width / 2, above: Math.max(60, r.top - 8) },
+        sel: { text, before, after, sectionIdx, x: r.left + r.width / 2, above: Math.max(60, r.top - 8) },
       })
     }
 
@@ -104,11 +123,21 @@ export function LessonSelectionToolbar({
       const res = await fetch(`/api/topics/${encodeURIComponent(topicId)}/transform`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ courseId, action, selectedText: sel.text, topicTitle }),
+        body: JSON.stringify({
+          courseId,
+          action,
+          selectedText: sel.text,
+          contextBefore: sel.before,
+          contextAfter: sel.after,
+          topicTitle,
+        }),
       })
       const data = await res.json() as { result?: string; error?: string }
       if (!res.ok || !data.result) throw new Error(data.error ?? 'Transform failed.')
-      onTransformComplete(sel.sectionIdx, sel.text, data.result, action)
+      const applied = onTransformComplete(sel.sectionIdx, sel, data.result, action)
+      if (!applied) {
+        throw new Error('That selection could not be matched safely. Select the passage again and retry.')
+      }
       set({ phase: 'idle' })
     } catch (err) {
       set({ phase: 'error', sel, action, message: err instanceof Error ? err.message : 'Something went wrong.' })
@@ -117,8 +146,20 @@ export function LessonSelectionToolbar({
 
   function runTransform(action: TransformAction) {
     if (state.phase !== 'ready') return
+    const prepared = prepareTransform
+      ? prepareTransform(state.sel.sectionIdx, state.sel, action)
+      : state.sel
+    if (!prepared) {
+      set({
+        phase: 'error',
+        sel: state.sel,
+        action,
+        message: 'That selection could not be matched safely. Select the passage again and retry.',
+      })
+      return
+    }
     window.getSelection()?.removeAllRanges()
-    callTransform(state.sel, action)
+    callTransform({ ...state.sel, ...prepared }, action)
   }
 
   function attachToChat() {
@@ -131,7 +172,11 @@ export function LessonSelectionToolbar({
 
   function retry() {
     if (state.phase !== 'error') return
-    callTransform(state.sel, state.action)
+    const prepared = prepareTransform
+      ? prepareTransform(state.sel.sectionIdx, state.sel, state.action)
+      : state.sel
+    if (!prepared) return
+    callTransform({ ...state.sel, ...prepared }, state.action)
   }
 
   if (state.phase === 'idle') return null
@@ -179,7 +224,7 @@ export function LessonSelectionToolbar({
 
       {state.phase === 'error' && (
         <>
-          <span className="selection-toolbar-error-msg">Failed</span>
+          <span className="selection-toolbar-error-msg" title={state.message} aria-label={state.message}>Failed</span>
           <span className="selection-toolbar-divider" aria-hidden />
           <button type="button" onClick={retry}>
             <IconRefresh size={13} stroke={2} aria-hidden />

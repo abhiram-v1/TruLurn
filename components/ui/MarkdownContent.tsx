@@ -31,6 +31,7 @@ import {
 } from '@tabler/icons-react'
 import { TruViz } from '@/components/trueviz/TruViz'
 import { LessonImage } from '@/components/ui/LessonImage'
+import { repairMathFences } from '@/lib/lesson-markdown'
 
 SyntaxHighlighter.registerLanguage('python', python)
 SyntaxHighlighter.registerLanguage('sql', sql)
@@ -389,8 +390,9 @@ interface MarkdownContentProps {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function MarkdownContent({ children, className = '' }: MarkdownContentProps) {
-  // Linkify figure references against the images this page embeds.
-  const processed = useMemo(() => linkFigureReferences(children), [children])
+  // Repair malformed $$ fences first — stored pages may predate generation-time
+  // repair — then linkify figure references against the images this page embeds.
+  const processed = useMemo(() => linkFigureReferences(repairMathFences(children)), [children])
   return (
     <div className={`md-content ${className}`.trim()}>
       <ReactMarkdown

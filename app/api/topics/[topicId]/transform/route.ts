@@ -5,48 +5,12 @@ import { getRequiredUserId } from '@/lib/server/currentUser'
 import { buildPersonaDirective } from '@/lib/personas'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
 import { COMPACT_CHART_OUTPUT_CONTRACT } from '@/lib/ai/skills/dataChart'
-
-type TransformAction = 'simplify' | 'deeper' | 'example'
-
-const SYSTEM: Record<TransformAction, string> = {
-  simplify: `You are TruLurn's lesson editor. Rewrite a selected passage in simpler, clearer language.
-Rules:
-- Preserve every concept — never drop an idea, only lower the vocabulary and sentence complexity
-- Use shorter sentences. Prefer plain words over technical synonyms where possible
-- Keep all math exactly as given (do not simplify or approximate LaTeX expressions)
-- Write in the same style as the surrounding lesson (clear, direct, not chatty)
-- Return clean Markdown only. No preamble, no "Here is the simplified version" prefix`,
-
-  deeper: `You are TruLurn's lesson editor. Expand on a selected passage with one level more depth.
-Rules:
-- Explain the mechanism or reasoning behind the statement, not just what it says
-- Add one concrete layer of precision: the why, the edge case, the underlying model
-- Stay tightly scoped — do not drift to adjacent topics
-- Use math where it sharpens the point
-- Return clean Markdown only. No preamble`,
-
-  example: `You are TruLurn's lesson editor. Generate one concrete example that illustrates a selected passage.
-Rules:
-- Use real numbers, a specific scenario, or a step-by-step worked case
-- One excellent example — not a list of examples
-- Show math with LaTeX when it helps the example
-- Keep it tight: 3–8 sentences or a compact worked solution
-- Return clean Markdown only. No preamble`,
-}
-
-function buildUserPrompt(action: TransformAction, selectedText: string, topicTitle: string) {
-  const instructions = {
-    simplify: 'Rewrite this in simpler language without losing any concept.',
-    deeper:   'Expand this with one level more depth and precision.',
-    example:  'Generate one concrete example that makes this clear.',
-  }
-  return `Topic: ${topicTitle}
-
-Selected passage:
-${selectedText}
-
-${instructions[action]}`
-}
+import {
+  buildTransformUserPrompt,
+  buildTransformSystem,
+  validateTransformResult,
+  type TransformAction,
+} from '@/lib/topic-transform'
 
 export async function POST(
   request: Request,
@@ -58,9 +22,11 @@ export async function POST(
       action?: string
       selectedText?: string
       topicTitle?: string
+      contextBefore?: string
+      contextAfter?: string
     }
 
-    const { courseId, action, selectedText, topicTitle } = body
+    const { courseId, action, selectedText, topicTitle, contextBefore, contextAfter } = body
 
     if (!courseId || !action || !selectedText?.trim()) {
       return NextResponse.json({ error: 'courseId, action, and selectedText are required.' }, { status: 400 })
@@ -68,6 +34,10 @@ export async function POST(
 
     if (!['simplify', 'deeper', 'example'].includes(action)) {
       return NextResponse.json({ error: 'Invalid action.' }, { status: 400 })
+    }
+
+    if (selectedText.length > 6000) {
+      return NextResponse.json({ error: 'Select a shorter passage (6,000 characters or fewer).' }, { status: 400 })
     }
 
     const db = await getDb()
@@ -88,25 +58,41 @@ export async function POST(
       console.warn('[transform] Course skill context unavailable.', error)
       return null
     })
-    const result = await generateAI({
-      feature: 'topic_transform',
-      system: [
-        SYSTEM[typedAction],
-        buildPersonaDirective({
-          surface: 'lesson',
-          lesson: {
-            contentKind: 'section',
-            focus: topicTitle ?? 'the current topic',
-          },
-        }),
-        courseSkillContext?.text,
-        typedAction === 'simplify' ? null : COMPACT_CHART_OUTPUT_CONTRACT,
-      ].filter(Boolean).join('\n\n'),
-      user: buildUserPrompt(typedAction, selectedText.trim(), topicTitle ?? 'the current topic'),
-      responseMimeType: 'text/plain',
+    const basePrompt = buildTransformUserPrompt({
+      action: typedAction,
+      selectedText: selectedText.trim(),
+      topicTitle: topicTitle ?? 'the current topic',
+      contextBefore: contextBefore?.slice(-240),
+      contextAfter: contextAfter?.slice(0, 240),
     })
+    let repair = ''
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const result = (await generateAI({
+        feature: 'topic_transform',
+        system: [
+          buildTransformSystem(typedAction),
+          buildPersonaDirective({
+            surface: 'lesson',
+            lesson: {
+              contentKind: 'section',
+              focus: topicTitle ?? 'the current topic',
+            },
+          }),
+          courseSkillContext?.text,
+          typedAction === 'simplify' ? null : COMPACT_CHART_OUTPUT_CONTRACT,
+        ].filter(Boolean).join('\n\n'),
+        user: `${basePrompt}${repair}`,
+        responseMimeType: 'text/plain',
+      })).trim()
+      const issues = validateTransformResult(typedAction, selectedText, result, {
+        before: contextBefore,
+        after: contextAfter,
+      })
+      if (issues.length === 0) return NextResponse.json({ result })
+      repair = `\n\nYour previous candidate failed these checks:\n${issues.map((issue) => `- ${issue}`).join('\n')}\nWrite a corrected replacement only.`
+    }
 
-    return NextResponse.json({ result: result.trim() })
+    throw new Error('The transform could not produce a safe in-place replacement after two attempts.')
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Transform failed.'
     const status = message.includes('sign in') ? 401 : 500

@@ -1,6 +1,6 @@
 import crypto from 'crypto'
 import type { Db } from 'mongodb'
-import { generateAI } from '@/lib/ai'
+import { generateAI, streamAI } from '@/lib/ai'
 import { classifyQuestion, type DoubtQuestionType } from '@/lib/doubts/classifyQuestion'
 import { getConceptMap, invalidateConceptMapCache } from '@/lib/doubts/conceptMap'
 import { buildDoubtPrompt, type TopicStateSnapshot } from '@/lib/doubts/context'
@@ -41,6 +41,7 @@ import {
   recordConceptDiscussion,
 } from '@/lib/agent/conceptMentionTracker'
 import { retrieveCourseSkillContext } from '@/lib/course-skills/context'
+import { resolveDoubtReasoningEffort } from './reasoning'
 
 type HandleDoubtInput = {
   db: Db
@@ -50,7 +51,11 @@ type HandleDoubtInput = {
   pageNumber: number
   question: string
   selectedContext?: string | null
+  /** Saved chat thread this exchange belongs to — display grouping only. */
+  conversationId?: string | null
   preClassifiedType?: DoubtQuestionType
+  onDelta?: (delta: string) => void
+  signal?: AbortSignal
 }
 
 async function fetchCurrentPosition(
@@ -302,6 +307,8 @@ async function generateAnswer({
   topicState,
   relevantPages,
   memory,
+  onDelta,
+  signal,
 }: {
   db: Db
   type: DoubtQuestionType
@@ -317,6 +324,8 @@ async function generateAnswer({
   topicState: TopicStateSnapshot
   relevantPages: RelevantPage[]
   memory: CourseMemoryContext
+  onDelta?: (delta: string) => void
+  signal?: AbortSignal
 }) {
   const prompt = buildDoubtPrompt({
     type,
@@ -332,12 +341,32 @@ async function generateAnswer({
     relevantSources: memory.sourceChunks,
   })
 
-  const generatedText = await generateAI({
-    feature: 'doubt_answer',
+  const request = {
+    feature: 'doubt_answer' as const,
     ...prompt,
-    purpose: 'agent',
-    responseMimeType: 'text/plain',
-  })
+    purpose: 'agent' as const,
+    reasoningEffort: resolveDoubtReasoningEffort(type, question),
+    responseMimeType: 'text/plain' as const,
+    signal,
+  }
+  let generatedText: string
+  if (onDelta) {
+    let visibleBuffer = ''
+    generatedText = ''
+    for await (const delta of streamAI(request)) {
+      generatedText += delta
+      visibleBuffer += delta
+      // Keep control tokens private: a retrieval retry must never flash into
+      // the learner's bubble before the safe replacement answer arrives.
+      if (visibleBuffer.length < 20) continue
+      if (visibleBuffer.startsWith('NEEDS_RETRIEVAL:')) continue
+      onDelta(visibleBuffer)
+      visibleBuffer = ''
+    }
+    if (visibleBuffer && !visibleBuffer.startsWith('NEEDS_RETRIEVAL:')) onDelta(visibleBuffer)
+  } else {
+    generatedText = await generateAI(request)
+  }
   const answer = generatedText.trim() || 'I am sorry, I could not formulate a scoped response.'
 
   // If the model signals it needs retrieval, retry with course-specific context
@@ -367,6 +396,8 @@ async function generateAnswer({
       topicState,
       relevantPages: retryPages,
       memory,
+      onDelta,
+      signal,
     })
   }
 
@@ -391,6 +422,7 @@ async function storeMessage({
   topicId,
   pageNumber,
   globalPageNumber,
+  conversationId,
   role,
   content,
   sourceCitations = [],
@@ -403,6 +435,7 @@ async function storeMessage({
   topicId: string
   pageNumber: number
   globalPageNumber?: number
+  conversationId?: string | null
   role: 'user' | 'assistant'
   content: string
   sourceCitations?: SourceCitation[]
@@ -418,6 +451,9 @@ async function storeMessage({
     topic_id: topicId,
     page_number: pageNumber,
     global_page_number: globalPageNumber ?? null,
+    // Omitted entirely (not even null) when absent, so pre-existing history
+    // stays distinguishable from messages sent within a saved thread.
+    ...(conversationId ? { conversation_id: conversationId } : {}),
     role,
     content,
     source_citations: sourceCitations,
@@ -474,35 +510,67 @@ export async function handleDoubt(input: HandleDoubtInput) {
     ? Promise.resolve(input.preClassifiedType)
     : classifyQuestion(questionWithContext, position.page.content, conceptMap)
 
+  // Start all type-independent work while the fallback classifier is running.
+  const workspaceContextPromise = buildAgentWorkspaceContext({
+    db: input.db,
+    courseId: input.courseId,
+    userId: input.userId,
+    currentTopicId: input.topicId,
+    plan: contextPlan,
+    query: questionWithContext,
+  })
+  const explicitPageContextPromise = fetchExplicitPageReferences({
+    db: input.db,
+    courseId: input.courseId,
+    question,
+    orderedTopics: position.orderedTopics,
+    branches: position.branches,
+  })
+  const teachingAdjustmentPromise = detectTeachingAdjustment(question)
+  const courseSkillContextPromise = retrieveCourseSkillContext({
+    db: input.db,
+    course: position.course,
+    query: questionWithContext,
+    surface: 'agent',
+  }).catch((error) => {
+    console.warn('[doubts] Course skill context unavailable.', error)
+    return null
+  })
+
+  const type = await typePromise
+  const shouldRetrieveMemory = contextPlan.needsSemanticMemory
+    || (
+      !contextPlan.needsAppKnowledge
+      && (
+        type === 'course_specific'
+        || (
+          String(position.course.mode ?? '') === 'source_grounded'
+          && type !== 'general_knowledge'
+        )
+      )
+    )
+  const memoryPromise = shouldRetrieveMemory
+    ? retrieveCourseMemory({
+        db: input.db,
+        query: questionWithContext,
+        courseId: input.courseId,
+        userId: input.userId,
+        currentTopicId: input.topicId,
+        pageLimit: 3,
+        doubtLimit: 4,
+        sourceLimit: String(position.course.mode ?? '') === 'source_grounded' ? 5 : 3,
+        workflow: 'doubt_answer',
+      })
+    : Promise.resolve({ pages: [], doubtMessages: [], sourceChunks: [], traceId: null })
+
   // Explicit difficulty, source-coverage, and audience corrections ride the
   // same parallel batch. Teaching delivery itself stays persona-owned.
-  const [type, workspaceContext, explicitPageContext, teachingAdjustment, courseSkillContext] = await Promise.all([
-    typePromise,
-    buildAgentWorkspaceContext({
-      db: input.db,
-      courseId: input.courseId,
-      userId: input.userId,
-      currentTopicId: input.topicId,
-      plan: contextPlan,
-      query: questionWithContext,
-    }),
-    fetchExplicitPageReferences({
-      db: input.db,
-      courseId: input.courseId,
-      question,
-      orderedTopics: position.orderedTopics,
-      branches: position.branches,
-    }),
-    detectTeachingAdjustment(question),
-    retrieveCourseSkillContext({
-      db: input.db,
-      course: position.course,
-      query: questionWithContext,
-      surface: 'agent',
-    }).catch((error) => {
-      console.warn('[doubts] Course skill context unavailable.', error)
-      return null
-    }),
+  const [workspaceContext, explicitPageContext, teachingAdjustment, courseSkillContext, memory] = await Promise.all([
+    workspaceContextPromise,
+    explicitPageContextPromise,
+    teachingAdjustmentPromise,
+    courseSkillContextPromise,
+    memoryPromise,
   ])
 
   let adjustmentContext = ''
@@ -556,31 +624,6 @@ export async function handleDoubt(input: HandleDoubtInput) {
   // general_knowledge: model answers from its own knowledge — no retrieval at all.
   // current_page: page content is already in the prompt — no cross-topic retrieval.
   // course_specific: full vector retrieval for cross-topic context.
-  const shouldRetrieveMemory = contextPlan.needsSemanticMemory
-    || (
-      !contextPlan.needsAppKnowledge
-      && (
-        type === 'course_specific'
-        || (
-          String(position.course.mode ?? '') === 'source_grounded'
-          && type !== 'general_knowledge'
-        )
-      )
-    )
-  const memory = shouldRetrieveMemory
-    ? await retrieveCourseMemory({
-        db: input.db,
-        query: questionWithContext,
-        courseId: input.courseId,
-        userId: input.userId,
-        currentTopicId: input.topicId,
-        pageLimit: 3,
-        doubtLimit: 4,
-        sourceLimit: String(position.course.mode ?? '') === 'source_grounded' ? 5 : 3,
-        workflow: 'doubt_answer',
-      })
-    : { pages: [], doubtMessages: [], sourceChunks: [], traceId: null }
-
   const relevantPages = shouldRetrieveMemory ? memory.pages : []
   const sourceEvidence = buildSourceEvidencePackets(memory.sourceChunks)
   const requiresSourceGrounding = String(position.course.mode ?? '') === 'source_grounded'
@@ -590,13 +633,14 @@ export async function handleDoubt(input: HandleDoubtInput) {
   const exploratory = isOutOfScopeQuestion(type)
 
   // Fire-and-forget — don't block answer generation on the DB write.
-  await storeMessage({
+  void storeMessage({
     db: input.db,
     courseId: input.courseId,
     userId: input.userId,
     topicId: input.topicId,
     pageNumber: input.pageNumber,
     globalPageNumber: position.promptPage.globalPageNumber,
+    conversationId: input.conversationId,
     role: 'user',
     content: question,
     isExploratory: exploratory,
@@ -633,6 +677,10 @@ export async function handleDoubt(input: HandleDoubtInput) {
       topicState,
       relevantPages,
       memory,
+      // Source-grounded content is claim-checked after generation. Keep that
+      // raw draft private until verification has either repaired or approved it.
+      onDelta: requiresSourceGrounding ? undefined : input.onDelta,
+      signal: input.signal,
     })
     if (requiresSourceGrounding) {
       const verified = await verifyGroundedAnswer({
@@ -667,6 +715,7 @@ export async function handleDoubt(input: HandleDoubtInput) {
     topicId: input.topicId,
     pageNumber: input.pageNumber,
     globalPageNumber: position.promptPage.globalPageNumber,
+    conversationId: input.conversationId,
     role: 'assistant',
     content: cleanResponse,
     sourceCitations,

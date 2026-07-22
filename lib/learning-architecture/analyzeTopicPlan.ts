@@ -272,7 +272,7 @@ Return this exact JSON shape:
         "prior_knowledge_repair": ["brief repair if a prior idea is fragile"],
         "likely_misconceptions": ["specific wrong belief to prevent"],
         "intuition_plan": "the mental model to build before formalism",
-        "representation_plan": ["prose", "bullets", "data chart", "math", "code", "table"],
+        "representation_plan": ["prose", "bullets", "data chart", "coordinate vector diagram", "math", "code", "table"],
         "example_strategy": {
           "opening_example": "concrete opener or null",
           "worked_example_needed": true,

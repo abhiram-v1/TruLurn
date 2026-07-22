@@ -7,6 +7,17 @@ export async function ensureIndexes(db: Db): Promise<void> {
       { user_id: 1, course_id: 1, topic_id: 1, mode: 1, status: 1 },
       { background: true, name: 'exam_sessions_resume' },
     ),
+    // Completed sessions stay as history, but only one session can be active
+    // for a given learner and quiz scope at a time.
+    db.collection('examSessions').createIndex(
+      { user_id: 1, course_id: 1, topic_id: 1, mode: 1, is_review: 1 },
+      {
+        background: true,
+        unique: true,
+        partialFilterExpression: { status: 'active' },
+        name: 'exam_sessions_one_active',
+      },
+    ),
     // Session list by user+course
     db.collection('examSessions').createIndex(
       { user_id: 1, course_id: 1, updated_at: -1 },
@@ -178,6 +189,16 @@ export async function ensureIndexes(db: Db): Promise<void> {
     db.collection('doubtMessages').createIndex(
       { user_id: 1, course_id: 1, role: 1, created_at: -1 },
       { background: true, name: 'doubt_messages_latest_role' },
+    ),
+    // Per-conversation history fetch (saved chat threads).
+    db.collection('doubtMessages').createIndex(
+      { user_id: 1, course_id: 1, conversation_id: 1, created_at: 1 },
+      { background: true, name: 'doubt_messages_conversation' },
+    ),
+    // Saved chat thread list, most-recently-active first.
+    db.collection('chatConversations').createIndex(
+      { user_id: 1, course_id: 1, deleted_at: 1, updated_at: -1 },
+      { background: true, name: 'chat_conversations_list' },
     ),
     // Retrieval traces support incident diagnosis, evaluation, and cost attribution.
     db.collection('retrievalTraces').createIndex(

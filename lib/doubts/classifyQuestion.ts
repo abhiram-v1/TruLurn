@@ -42,6 +42,7 @@ Return JSON:
   "reason": "one sentence"
 }`,
       purpose: 'agent',
+      reasoningEffort: 'minimal',
       responseMimeType: 'application/json',
     })
 

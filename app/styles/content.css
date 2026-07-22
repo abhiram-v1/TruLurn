@@ -211,10 +211,83 @@
   height: 100%;
 }
 
+.quiz-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.quiz-progress > div {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.quiz-progress strong {
+  color: var(--color-text-primary);
+  font-size: var(--text-sm);
+}
+
+.quiz-progress span {
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.quiz-progress progress {
+  accent-color: var(--color-accent);
+  height: 7px;
+  width: 100%;
+}
+
+.quiz-submit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.result-correct-answer,
+.result-explanation {
+  margin-top: 12px;
+}
+
+.result-correct-answer p,
+.result-explanation p {
+  margin: 0;
+}
+
 .question-block,
 .result-block {
   border-top: 1px solid var(--color-border);
   padding-top: 18px;
+}
+
+.lesson-self-check {
+  background: color-mix(in srgb, var(--color-accent-soft) 48%, var(--color-bg-primary));
+  border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+  border-radius: var(--radius-md);
+  color: var(--color-text-secondary);
+  display: grid;
+  gap: 8px;
+  margin: 0 0 24px;
+  padding: 14px 16px;
+}
+
+.lesson-self-check > span {
+  color: var(--color-accent-strong);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.lesson-self-check {
+  margin: 28px 0 8px;
+}
+
+.lesson-self-check p {
+  color: var(--color-text-primary);
+  line-height: 1.55;
+  margin: 0;
 }
 
 /* Pass / fail tint on result blocks */

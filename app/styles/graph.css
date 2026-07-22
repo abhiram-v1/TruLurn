@@ -78,7 +78,9 @@
   --kg-panel-radius: 11px;
 
   display: grid;
-  grid-template-columns: 232px minmax(0,1fr) 320px;
+  /* Third column sizes to the detail panel when it's mounted; when no node
+     is selected (or the panel is collapsed) the canvas takes the full width. */
+  grid-template-columns: 232px minmax(0,1fr) auto;
   grid-template-rows: 52px minmax(0,1fr);
   height: 100vh;
   width: 100vw;
@@ -1400,10 +1402,42 @@
 
 /* ── Right detail panel ── */
 .kg-detail {
+  width: 320px;
   border-left: 1px solid var(--kg-line);
   background: var(--kg-bg);
   display: flex; flex-direction: column; overflow: hidden;
 }
+
+/* ── Panel collapse / reopen ── */
+.kg-panel-collapse {
+  position: absolute;
+  top: 14px; right: 14px;
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  border: 1px solid var(--kg-line);
+  border-radius: 6px;
+  background: var(--kg-bg);
+  color: var(--kg-muted);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color .13s ease, border-color .13s ease;
+}
+.kg-panel-collapse:hover { color: var(--kg-ink); border-color: var(--kg-ink); }
+.kg-panel-reopen {
+  top: 50%; right: 0; transform: translateY(-50%);
+  padding: 14px 7px;
+  border: 1px solid var(--kg-panel-border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--kg-panel-bg);
+  box-shadow: var(--kg-panel-shadow);
+  backdrop-filter: var(--kg-panel-blur);
+  color: var(--kg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color .13s ease;
+}
+.kg-panel-reopen:hover { color: var(--kg-ink); }
 .kg-empty-detail {
   display: grid; place-content: center; text-align: center;
   height: 100%; padding: 24px; color: var(--kg-muted); font-size: 13px; gap: 6px;
@@ -1468,7 +1502,8 @@
 .kg-branch-dot-sm.functional { background: var(--kg-functional); }
 .kg-branch-dot-sm.locked     { background: var(--kg-locked-line); }
 .kg-detail-head {
-  padding: 18px 22px 16px;
+  position: relative; /* anchors the collapse button */
+  padding: 18px 44px 16px 22px; /* right padding clears the collapse button */
   border-bottom: 1px solid var(--kg-line);
 }
 .kg-detail-kicker {

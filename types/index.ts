@@ -33,6 +33,12 @@ export interface LessonExampleRef {
   excerpt: string
 }
 
+export interface LessonActiveProcessing {
+  retrieval_prompt?: string | null
+  self_explanation_prompt?: string | null
+  transfer_prompt?: string | null
+}
+
 export interface Course {
   id: string
   user_id: string
@@ -170,7 +176,7 @@ export interface Page {
   learning_architecture?: unknown | null
   target_understanding?: string | null
   success_criteria?: string[]
-  active_processing?: unknown | null
+  active_processing?: LessonActiveProcessing | null
   retention_hooks?: unknown | null
   page_sequence_role?: PageSequenceRole | null
   sections?: LessonSection[]
@@ -189,6 +195,16 @@ export interface DoubtMessage {
   source_citations?: SourceCitation[]
   grounding?: unknown | null
   created_at: string
+}
+
+/** One saved agent chat thread. Purely a display/navigation grouping — the
+ *  agent's course-wide memory and retrieval are unaffected by which
+ *  conversation a message belongs to. */
+export interface ChatConversation {
+  id: string
+  title: string | null
+  createdAt: string
+  updatedAt: string
 }
 
 export interface QuizQuestion {
@@ -240,5 +256,6 @@ export interface ExamTurn {
   status: ExamTurnStatus
   question: string
   options?: string[] | null
+  draft_answer?: string
   created_at: string
 }

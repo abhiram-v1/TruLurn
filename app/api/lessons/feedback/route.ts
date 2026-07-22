@@ -17,6 +17,10 @@ const SHIFT_BY_SIGNAL: Record<Signal, number> = {
   too_basic: 1,
 }
 
+// Optional short reason chips shown after a negative signal. Free text
+// ("other") is capped so this stays a quick tap, not a form.
+const MAX_NOTE_LENGTH = 300
+
 export async function POST(request: Request) {
   try {
     const userId = await getRequiredUserId()
@@ -25,6 +29,8 @@ export async function POST(request: Request) {
     const topicId = String(body.topicId ?? '')
     const pageNumber = Number(body.pageNumber ?? 0)
     const signal = String(body.signal ?? '') as Signal
+    const reason = body.reason != null ? String(body.reason).slice(0, 80) : undefined
+    const note = body.note != null ? String(body.note).slice(0, MAX_NOTE_LENGTH) : undefined
 
     if (!courseId || !topicId || !SIGNALS.includes(signal)) {
       return NextResponse.json({ error: 'Missing or invalid feedback parameters.' }, { status: 400 })
@@ -44,10 +50,18 @@ export async function POST(request: Request) {
     const now = new Date()
 
     // Record the raw event (one per page click; upsert so re-clicking updates).
+    // The reason/note may arrive on this same call or a follow-up call once
+    // the student picks why — either way it merges onto the same document.
+    // Reasons are also copied to the topic below so the next page writer can
+    // change teaching strategy without another feedback lookup.
+    const setFields: Record<string, unknown> = { signal, updated_at: now }
+    if (reason !== undefined) setFields.reason = reason
+    if (note !== undefined) setFields.note = note
+
     await db.collection('lessonFeedback').updateOne(
       { user_id: userId, course_id: courseId, topic_id: topicId, page_number: pageNumber },
       {
-        $set: { signal, updated_at: now },
+        $set: setFields,
         $setOnInsert: { _id: crypto.randomUUID() as any, created_at: now },
       },
       { upsert: true },
@@ -56,16 +70,23 @@ export async function POST(request: Request) {
     // Derive a level shift for future page generation of this topic. The most
     // recent signal wins — it reflects how the student feels right now.
     const shift = SHIFT_BY_SIGNAL[signal]
+    const topicFeedback: Record<string, unknown> = {
+      feedback_level_shift: shift,
+      feedback_last_signal: signal,
+      feedback_last_at: now,
+      updated_at: now,
+    }
+    if (reason !== undefined) topicFeedback.feedback_last_reason = reason
+    if (note !== undefined) topicFeedback.feedback_last_note = note
+
+    const topicUpdate: Record<string, unknown> = { $set: topicFeedback }
+    if (reason === undefined && note === undefined) {
+      topicUpdate.$unset = { feedback_last_reason: '', feedback_last_note: '' }
+    }
+
     await db.collection('topics').updateOne(
       { _id: topicId as any, course_id: courseId },
-      {
-        $set: {
-          feedback_level_shift: shift,
-          feedback_last_signal: signal,
-          feedback_last_at: now,
-          updated_at: now,
-        },
-      },
+      topicUpdate,
     )
     await syncLearnerMemoryV2({ db, userId, courseId, force: true }).catch((error) => {
       console.warn('[lessonFeedback] Memory V2 sync failed.', error)

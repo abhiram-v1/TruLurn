@@ -4,16 +4,26 @@ import {
   COURSE_PLANNING_ROUTE_OWNERSHIP,
   GRAPH_GENERATION_ROUTE_OWNERSHIP,
   GRAPH_MAINTENANCE_ROUTE_OWNERSHIP,
+  LESSON_WRITING_ROUTE_OWNERSHIP,
 } from './routeOwnership.ts'
 
-test('course planning and lesson preparation are fixed to GPT-5.4', () => {
+test('course planning is fixed to GPT-5.5', () => {
   assert.equal(COURSE_PLANNING_ROUTE_OWNERSHIP.provider, 'openai')
-  assert.equal(COURSE_PLANNING_ROUTE_OWNERSHIP.model, 'gpt-5.4')
+  assert.equal(COURSE_PLANNING_ROUTE_OWNERSHIP.model, 'gpt-5.5')
   assert.deepEqual(COURSE_PLANNING_ROUTE_OWNERSHIP.fallbackProviders, [])
   assert.deepEqual(COURSE_PLANNING_ROUTE_OWNERSHIP.features, [
     'curriculum_preview',
     'curriculum_generation',
     'topic_plan_analysis',
+  ])
+})
+
+test('lesson page writing is fixed to GPT-5.5', () => {
+  assert.equal(LESSON_WRITING_ROUTE_OWNERSHIP.provider, 'openai')
+  assert.equal(LESSON_WRITING_ROUTE_OWNERSHIP.model, 'gpt-5.5')
+  assert.deepEqual(LESSON_WRITING_ROUTE_OWNERSHIP.fallbackProviders, [])
+  assert.deepEqual(LESSON_WRITING_ROUTE_OWNERSHIP.features, [
+    'topic_page_generation',
   ])
 })
 
@@ -23,8 +33,9 @@ test('graph generation is fixed to a Gemini 3.1 flash model without fallbacks', 
   assert.deepEqual(GRAPH_GENERATION_ROUTE_OWNERSHIP.fallbackProviders, [])
 })
 
-test('model-assisted graph maintenance remains OpenAI-only', () => {
-  assert.equal(GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider, 'openai')
+test('model-assisted graph maintenance is fixed to Gemini, matching graph generation', () => {
+  assert.equal(GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.provider, 'gemini')
+  assert.equal(GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.model, GRAPH_GENERATION_ROUTE_OWNERSHIP.model)
   assert.deepEqual(GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.fallbackProviders, [])
   assert.deepEqual(GRAPH_MAINTENANCE_ROUTE_OWNERSHIP.features, [
     'graph_interaction_analyzer',

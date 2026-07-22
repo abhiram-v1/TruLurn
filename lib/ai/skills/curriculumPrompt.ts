@@ -64,6 +64,16 @@ function learnerSettings(input: CurriculumSkillInput, sourceMode: boolean) {
   ].join('\n')
 }
 
+const AI_GOAL_ALIGNMENT_CONTRACT = `Goal alignment contract:
+- Treat the learner goal as a contract, not decoration. Internally derive the target capability, concrete tasks or deliverables, named concepts or tools, desired depth, learner context, and boundaries.
+- Every branch should either build a foundation required by that contract or directly advance the target capability. Avoid generic syllabus branches that would fit any version of the subject.
+- In structure_reasoning, explain how the roadmap serves the learner goal and name any explicit goal request that is intentionally compressed, deferred, or out of scope.`
+
+const SOURCE_GOAL_ALIGNMENT_CONTRACT = `Goal alignment within the source boundary:
+- Treat the learner goal as a prioritization contract inside the supplied sources. Internally derive the target capability, concrete tasks or deliverables, named concepts or tools, desired depth, learner context, and boundaries.
+- Every branch should either organize source-backed foundations required by that contract or directly advance the target capability. Avoid generic syllabus branches that would fit any version of the subject.
+- If the goal asks for something the sources do not teach, do not invent it; in structure_reasoning, say which explicit request is outside the uploaded source boundary or intentionally compressed.`
+
 export function buildSourceCurriculumPrompt(
   input: CurriculumSkillInput,
   context: {
@@ -80,14 +90,18 @@ ${input.goals}
 Learner settings:
 ${learnerSettings(input, true)}
 
+${SOURCE_GOAL_ALIGNMENT_CONTRACT}
+
 Source contract:
 - The supplied evidence is the complete syllabus boundary. Organize what it teaches; never complete the broader subject from general knowledge.
 - Every topic must cite one or more exact section IDs such as "s1:3" in source_refs. Reuse the source's terminology and section names.
 - Merge repeated concepts across sources. Use prerequisites to connect genuinely dependent ideas across files.
+- Design for cross-course coherence: prerequisites should capture genuine conceptual dependence across sources, not just document order, so a later lesson can honestly say "you already know this" instead of re-introducing the same idea under a new name.
 - Preserve uploaded source order unless the material itself establishes a prerequisite that requires reordering; explain any reorder in structure_reasoning.
 - concept_group is prequel for source-taught foundations, current for the main body, and sequel for source-taught extensions.
 - Assumed background and merely mentioned follow-ups are not topics. They are hydrated into out_of_scope from the source profile.
 - Topic count follows conceptual structure, not document or heading count. A cohesive document is usually one rich topic; split only independently learnable subject areas.
+- Concepts the learner names explicitly in the goal are mandatory when the sources teach them: each must appear as a topic or nested child topic. If the sources do not cover a named concept, leave it out of the roadmap (it belongs in out_of_scope) rather than inventing untaught content.
 - Page estimates must be proportional to the amount and importance of supporting evidence.
 ${context.fidelityNote ?? ''}
 
@@ -110,12 +124,16 @@ ${input.goals}
 Learner settings:
 ${learnerSettings(input, false)}
 
+${AI_GOAL_ALIGNMENT_CONTRACT}
+
 Curriculum contract:
 - Determine scope and roadmap size from the learner goal, subject difficulty, and selected depth.
+- Concepts the learner names explicitly in the goal are mandatory coverage: each one must appear as a topic or nested child topic, under its standard name. Consolidating related ideas is fine, but never consolidate a named concept out of the roadmap.
 - Cover domain-defining concepts without generic prerequisite padding.
 - Keep Atlas branches high-level and place useful detail in recursive Traccia topics.
 - Include foundations only when later topics genuinely depend on them.
 - Use examples, projects, comparisons, proofs, or advanced topics only when they fit the learner settings and improve the roadmap.
+- Design for cross-course coherence: prefer a small set of recurring examples, motifs, or running threads that later topics can build on and refer back to, over each topic introducing an unrelated frame. Prerequisites should capture genuine conceptual dependence, not just outline order, so a later lesson can honestly say "you already know this."
 - Page estimates are ceilings: light=1-2, medium=2-3, important=3-5, critical=5-8.
 
 Research calibration:

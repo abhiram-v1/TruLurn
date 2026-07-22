@@ -81,6 +81,24 @@ export async function GET(
         : undefined,
       figures: Array.isArray(storedPage.figures) ? storedPage.figures : undefined,
       grounding: storedPage.grounding ?? null,
+      learning_architecture: storedPage.learning_architecture ?? null,
+      target_understanding: storedPage.target_understanding
+        ?? storedPage.learning_architecture?.target_understanding
+        ?? null,
+      success_criteria: Array.isArray(storedPage.success_criteria)
+        ? storedPage.success_criteria.map(String)
+        : Array.isArray(storedPage.learning_architecture?.success_criteria)
+          ? storedPage.learning_architecture.success_criteria.map(String)
+          : [],
+      active_processing: storedPage.active_processing
+        ?? storedPage.learning_architecture?.active_processing
+        ?? null,
+      retention_hooks: storedPage.retention_hooks
+        ?? storedPage.learning_architecture?.retention_hooks
+        ?? null,
+      page_sequence_role: storedPage.page_sequence_role
+        ?? storedPage.learning_architecture?.page_sequence_role
+        ?? null,
     }
 
     return NextResponse.json({ page, totalPages, estimatedPages })

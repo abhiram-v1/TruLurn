@@ -118,6 +118,36 @@
   --code-inserted: #a7cd83;
 }
 
+/* Accent palettes — one semantic accent drives progress, focus, and actions. */
+:root,
+[data-accent='terracotta'] {
+  --color-accent: #d36d4a;
+  --color-accent-strong: #b9512f;
+  --color-accent-soft: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 34%, var(--color-border));
+  --color-accent-glow: color-mix(in srgb, var(--color-accent) 24%, transparent);
+}
+
+[data-accent='indigo'] {
+  --color-accent: #5b6cd6;
+  --color-accent-strong: #3f4fbe;
+}
+
+[data-accent='teal'] {
+  --color-accent: #1f9b86;
+  --color-accent-strong: #137a69;
+}
+
+[data-accent='plum'] {
+  --color-accent: #a2569c;
+  --color-accent-strong: #833f7e;
+}
+
+[data-theme='dark'][data-accent='terracotta'] { --color-accent: #e07b56; --color-accent-strong: #f09a78; }
+[data-theme='dark'][data-accent='indigo'] { --color-accent: #8b96ed; --color-accent-strong: #b1b8f7; }
+[data-theme='dark'][data-accent='teal'] { --color-accent: #56b9a7; --color-accent-strong: #86d5c6; }
+[data-theme='dark'][data-accent='plum'] { --color-accent: #d08bcb; --color-accent-strong: #edb9e8; }
+
 * {
   box-sizing: border-box;
 }
@@ -132,6 +162,40 @@ body {
   font-size: var(--text-base);
   font-weight: 400;
   letter-spacing: 0;
+}
+
+/* ── Vintage paper texture — the default surface of the whole product ──
+   A fixed overlay above all views so every screen (landing, learn, graph)
+   reads as printed on the same sheet. Three layers, all self-contained:
+   1. fine grain   — high-frequency turbulence, the tooth of the paper
+   2. mottling     — low-frequency blotches, the aging/fiber variation
+   3. vignette     — slight warm darkening at the edges
+   Visibility is tuned by the two alpha values in the feColorMatrix rows
+   (currently 0.55 grain / 0.20 mottle) — raise or lower those to taste. */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+  background-image:
+    radial-gradient(ellipse 120% 100% at 50% 40%, transparent 62%, rgba(112, 82, 46, 0.09) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.009 0.013' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.52 0 0 0 0 0.40 0 0 0 0 0.24 0 0 0 0.11 0'/%3E%3C/filter%3E%3Crect width='600' height='600' filter='url(%23m)'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 0.40 0 0 0 0 0.31 0 0 0 0 0.19 0 0 0 0.30 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: auto, 600px 600px, 200px 200px;
+}
+
+/* Dark theme: multiply would muddy dark surfaces — soften the effect instead. */
+[data-theme='dark'] body::after {
+  mix-blend-mode: soft-light;
+  opacity: 0.55;
+}
+
+@media print {
+  body::after {
+    display: none;
+  }
 }
 
 ::selection {

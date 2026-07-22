@@ -23,6 +23,7 @@ const FAST_FEATURES: AIFeature[] = [
 
 const CONTROL_FEATURES: AIFeature[] = [
   'exam_evaluation',
+  'exam_question_validation',
   'exam_strategy',
   'page_analysis',
   'prerequisite_gap_analysis',
@@ -89,7 +90,7 @@ test('supporting features resolve through explicit model tiers', () => {
   })
 })
 
-test('course planning routes resolve to GPT-5.4 and ignore provider overrides', () => {
+test('course planning routes resolve to GPT-5.5 and ignore provider overrides', () => {
   withoutRoutingEnvironment(() => {
     process.env.AI_FEATURE_CURRICULUM_PREVIEW_PROVIDER = 'gemini'
     process.env.AI_FEATURE_CURRICULUM_GENERATION_PROVIDER = 'gemini'
@@ -102,7 +103,37 @@ test('course planning routes resolve to GPT-5.4 and ignore provider overrides', 
     ] as const) {
       const route = resolveAIFeatureRoute(feature)
       assert.equal(route.provider, 'openai', feature)
-      assert.equal(route.model, 'gpt-5.4', feature)
+      assert.equal(route.model, 'gpt-5.5', feature)
+      assert.deepEqual(route.fallbackProviders, [], feature)
+    }
+  })
+})
+
+test('lesson page writing resolves to GPT-5.5 and ignores provider overrides', () => {
+  withoutRoutingEnvironment(() => {
+    process.env.AI_FEATURE_TOPIC_PAGE_GENERATION_PROVIDER = 'gemini'
+
+    const route = resolveAIFeatureRoute('topic_page_generation')
+    assert.equal(route.provider, 'openai')
+    assert.equal(route.model, 'gpt-5.5')
+    assert.deepEqual(route.fallbackProviders, [])
+  })
+})
+
+test('graph maintenance features resolve exclusively to Gemini and ignore provider overrides', () => {
+  withoutRoutingEnvironment(() => {
+    process.env.AI_FEATURE_GRAPH_INTERACTION_ANALYZER_PROVIDER = 'openai'
+    process.env.AI_FEATURE_GRAPH_MANAGER_PROVIDER = 'openai'
+    process.env.AI_FEATURE_GRAPH_RECOMMENDATION_PROVIDER = 'openai'
+
+    for (const feature of [
+      'graph_interaction_analyzer',
+      'graph_manager',
+      'graph_recommendation',
+    ] as const) {
+      const route = resolveAIFeatureRoute(feature)
+      assert.equal(route.provider, 'gemini', feature)
+      assert.equal(route.model, 'gemini-3.1-flash-lite', feature)
       assert.deepEqual(route.fallbackProviders, [], feature)
     }
   })
@@ -122,7 +153,11 @@ test('specialized lesson, curriculum, research, embedding, and graph routes are 
         assert.deepEqual(route.fallbackProviders, [])
       } else if (feature === 'curriculum_generation') {
         assert.equal(route.provider, 'openai', feature)
-        assert.equal(route.model, 'gpt-5.4', feature)
+        assert.equal(route.model, 'gpt-5.5', feature)
+        assert.deepEqual(route.fallbackProviders, [], feature)
+      } else if (feature === 'topic_page_generation') {
+        assert.equal(route.provider, 'openai', feature)
+        assert.equal(route.model, 'gpt-5.5', feature)
         assert.deepEqual(route.fallbackProviders, [], feature)
       } else {
         assert.equal(route.provider, 'openai', feature)

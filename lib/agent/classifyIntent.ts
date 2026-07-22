@@ -207,6 +207,7 @@ export async function classifyIntent(
       system: REINFORCED_SYSTEM,
       user: lines.join('\n'),
       purpose: 'agent',
+      reasoningEffort: 'minimal',
       responseMimeType: 'text/plain',
     })
 

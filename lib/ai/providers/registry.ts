@@ -1,8 +1,9 @@
-import { generateWithGemini } from '@/lib/ai/gemini/client'
+import { generateWithGemini, streamWithGemini } from '@/lib/ai/gemini/client'
 import { embedText as embedTextWithGemini } from '@/lib/ai/gemini/embeddings'
 import {
   generateWithOpenAI,
   generateWithOpenAIWebSearch,
+  streamWithOpenAI,
 } from '@/lib/ai/openai/client'
 import { embedTextWithOpenAI } from '@/lib/ai/openai/embeddings'
 import type { AICapability, AIProviderAdapter, AIProviderName } from '@/lib/ai/types'
@@ -13,6 +14,7 @@ const providers: Record<AIProviderName, AIProviderAdapter> = {
     capabilities: new Set<AICapability>(['text', 'embeddings']),
     isConfigured: () => Boolean(process.env.GOOGLE_GENERATIVE_AI_API_KEY ?? process.env.GEMINI_API_KEY),
     generate: generateWithGemini,
+    stream: streamWithGemini,
     embed: ({ text, taskType, model, dimensions }) =>
       embedTextWithGemini(text, taskType, { model, dimensions }),
   },
@@ -21,6 +23,7 @@ const providers: Record<AIProviderName, AIProviderAdapter> = {
     capabilities: new Set<AICapability>(['text', 'web_search', 'embeddings']),
     isConfigured: () => Boolean(process.env.OPENAI_API_KEY),
     generate: generateWithOpenAI,
+    stream: streamWithOpenAI,
     webSearch: generateWithOpenAIWebSearch,
     embed: ({ text, model, dimensions }) =>
       embedTextWithOpenAI(text, { model, dimensions }),

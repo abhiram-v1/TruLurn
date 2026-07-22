@@ -1,4 +1,4 @@
-export { generateAI, generateAIResult, searchAI } from '@/lib/ai/router'
+export { generateAI, generateAIResult, searchAI, streamAI } from '@/lib/ai/router'
 export { parseAIJson } from '@/lib/ai/json'
 export {
   resolveAIFeatureRoute,

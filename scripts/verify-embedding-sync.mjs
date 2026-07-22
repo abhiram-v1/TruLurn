@@ -18,6 +18,7 @@ function loadEnv() {
 }
 
 const env = loadEnv()
+const databaseName = env.MONGODB_DB || 'trulurn'
 const provider = env.AI_FEATURE_EMBEDDINGS_PROVIDER || env.AI_PROVIDER || (env.OPENAI_API_KEY ? 'openai' : 'gemini')
 const model = env.AI_FEATURE_EMBEDDINGS_MODEL
   || (provider === 'openai' ? env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small'
@@ -28,11 +29,12 @@ const dims = Number(env.AI_FEATURE_EMBEDDINGS_DIMENSIONS
 const ACTIVE = ['rag-v2', provider, model, dims, 'content-v1'].join(':')
 
 console.log(`Active embedding_version the app expects:\n  ${ACTIVE}\n`)
+console.log(`Application database:\n  ${databaseName}\n`)
 
 const client = new MongoClient(env.MONGODB_URI, { serverSelectionTimeoutMS: 8000 })
 try {
   await client.connect()
-  const db = client.db()
+  const db = client.db(databaseName)
   for (const coll of ['pages', 'sourceChunks', 'sourcePassages', 'doubtMessages']) {
     const c = db.collection(coll)
     const total = await c.countDocuments()

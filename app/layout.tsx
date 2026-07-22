@@ -25,11 +25,17 @@ const themeScript = `
   (function () {
     try {
       var storedTheme = localStorage.getItem('trulurn-theme');
+      var storedAccent = localStorage.getItem('trulurn-accent');
       var theme = storedTheme === 'dark' ? 'dark' : 'light';
+      var accent = ['terracotta', 'indigo', 'teal', 'plum'].indexOf(storedAccent) >= 0
+        ? storedAccent
+        : 'terracotta';
       document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.accent = accent;
       document.documentElement.style.colorScheme = theme;
     } catch (error) {
       document.documentElement.dataset.theme = 'light';
+      document.documentElement.dataset.accent = 'terracotta';
       document.documentElement.style.colorScheme = 'light';
     }
   })();

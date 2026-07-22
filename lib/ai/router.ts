@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { getAIProvider } from '@/lib/ai/providers/registry'
 import { resolveAIFeatureRoute, resolveAIProviderModel } from '@/lib/ai/routing'
 import { recordAIUsageEvent } from '@/lib/ai/usage'
+import { resolveAIFeatureTimeoutMs } from '@/lib/ai/timeouts'
 import type {
   AIFeature,
   AIProviderGenerateInput,
@@ -76,6 +77,7 @@ function requestHash(kind: 'generate' | 'search', input: GenerateAIInput | Searc
       responseMimeType: input.responseMimeType ?? null,
       responseSchema: serializableSchema,
       reasoningEffort: input.reasoningEffort ?? null,
+      timeoutMs: input.timeoutMs ?? null,
       searchContextSize: 'searchContextSize' in input ? input.searchContextSize ?? null : null,
     }))
     .digest('hex')
@@ -173,8 +175,10 @@ async function executeGeneration(input: GenerateAIInput): Promise<AIGenerationRe
       const responseSchema = typeof request.responseSchema === 'function'
         ? request.responseSchema(providerName)
         : request.responseSchema
+      const timeoutMs = resolveAIFeatureTimeoutMs(feature, request.timeoutMs)
       const text = await provider.generate({
         ...request,
+        timeoutMs,
         responseSchema,
         model,
         purpose: purpose ?? route.purpose,
@@ -251,6 +255,83 @@ export async function generateAIResult(input: GenerateAIInput): Promise<AIGenera
 
 export async function generateAI(input: GenerateAIInput) {
   return (await generateAIResult(input)).text
+}
+
+/**
+ * Stream text tokens for interactive surfaces such as the learner chat.
+ * Streaming deliberately skips singleflight: every browser connection needs its
+ * own ordered delta sequence and may be cancelled independently.
+ */
+export async function* streamAI(input: GenerateAIInput): AsyncGenerator<string> {
+  logRequest(input)
+  const { route, providers } = providerSequence(input.feature)
+  const failures: Array<{ provider: AIProviderName; error: unknown }> = []
+  const { feature, purpose, validateResponse, ...request } = input
+
+  for (const providerName of providers) {
+    const startedAt = performance.now()
+    let emitted = false
+    try {
+      const provider = assertProvider(feature, providerName)
+      if (!provider.stream) throw new Error(`Provider "${providerName}" has no streaming text adapter.`)
+      const model = providerName === route.provider
+        ? route.model
+        : resolveAIProviderModel(feature, providerName, false)
+      const responseSchema = typeof request.responseSchema === 'function'
+        ? request.responseSchema(providerName)
+        : request.responseSchema
+      const timeoutMs = resolveAIFeatureTimeoutMs(feature, request.timeoutMs)
+      let fullText = ''
+      for await (const delta of provider.stream({
+        ...request,
+        timeoutMs,
+        responseSchema,
+        model,
+        purpose: purpose ?? route.purpose,
+        auditFeature: feature,
+        promptCacheKey: promptFamilyKey(feature, providerName, model),
+      })) {
+        if (!delta) continue
+        emitted = true
+        fullText += delta
+        yield delta
+      }
+      if (!fullText.trim()) throw new Error(`Provider "${providerName}" returned an empty stream.`)
+      if (validateResponse && !validateResponse(fullText)) {
+        throw new Error(`Provider "${providerName}" returned an invalid streamed response.`)
+      }
+      logRoute(feature, providerName, model)
+      recordAIUsageEvent({
+        feature,
+        provider: providerName,
+        model,
+        operation: 'generation',
+        status: 'succeeded',
+        durationMs: performance.now() - startedAt,
+        systemChars: request.system.length,
+        userChars: request.user.length,
+        estimatedInputTokens: Math.ceil((request.system.length + request.user.length) / 4),
+      })
+      return
+    } catch (error) {
+      recordAIUsageEvent({
+        feature,
+        provider: providerName,
+        operation: 'generation',
+        status: 'failed',
+        durationMs: performance.now() - startedAt,
+        systemChars: request.system.length,
+        userChars: request.user.length,
+        estimatedInputTokens: Math.ceil((request.system.length + request.user.length) / 4),
+        error,
+      })
+      // A provider can only fail over safely before any token is visible.
+      if (emitted || request.signal?.aborted) throw error
+      failures.push({ provider: providerName, error })
+    }
+  }
+
+  throw aggregateError(feature, failures)
 }
 
 async function executeSearch(input: SearchAIInput): Promise<AISearchResult> {

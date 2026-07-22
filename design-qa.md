@@ -48,3 +48,56 @@ The plot and label region was inspected at full screenshot resolution. Axis valu
 - [x] TypeScript validation
 
 final result: passed
+
+---
+
+# Traccia Route Map Design QA
+
+- source visual truth path: `C:\Users\ASUS\.codex\generated_images\019f4d89-7e98-7180-a6c0-c8781cbe6e98\exec-18279a2b-f1b3-4236-9f8e-a5a7cb508edd.png`
+- implementation screenshot path: `C:\Projects\TruLurn\report\design-qa\traccia-implementation.png`
+- combined comparison path: `C:\Projects\TruLurn\report\design-qa\traccia-reference-comparison.png`
+- viewport: 280 × 815 CSS pixels, matching the reference aspect ratio
+- state: dark theme, first topic current, page 1 of 2, first section available, second section locked
+
+**Full-view comparison evidence**
+
+The rendered panel now matches the reference structure: a large section waypoint aligns to a continuous vertical route, each lesson branches to a distinct content node, the current lesson occupies an offset elevated surface, the future route uses a subdued slate treatment, and the route ends in a flag before the persistent Up next and knowledge-graph actions.
+
+**Focused region comparison evidence**
+
+The current-topic and first-section region was compared at the same aspect ratio. Card offset, route/node alignment, title hierarchy, page-progress placement, section marker scale, and sibling spacing now follow the reference. The future-section region preserves readable locks and truncation without widening the panel. Standard Tabler icons are used for book, chart, flag, calendar, lock, and graph actions; no placeholder or custom-drawn image assets were introduced.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: existing TruLurn UI typography is retained; uppercase section hierarchy, topic weights, line height, and truncation match the reference intent.
+- Spacing and layout rhythm: the separate spine, branch ticks, offset content nodes, current card, destination marker, and footer proportions were aligned to the reference.
+- Colors and visual tokens: all surfaces and states use the existing dark-theme, terracotta, slate, border, and text tokens.
+- Image quality and asset fidelity: the target contains no raster product imagery; all standard interface symbols use the installed Tabler icon family.
+- Copy and content: existing dynamic topic titles, progress counts, page progress, Up next copy, and graph navigation remain intact.
+- Accessibility and interaction: semantic links/buttons remain keyboard reachable; current, available, completed, and locked states retain non-color cues; horizontal overflow is absent.
+
+**Comparison history**
+
+- Initial P1: the first implementation placed lesson dots directly on the spine and used undersized section markers, so it still read like a decorated list. Fixed by separating route junctions from lesson nodes, offsetting lesson content, enlarging waypoints, and adding branch connectors.
+- Initial P2: the future route lacked the reference destination treatment and the footer lacked its calendar cue. Fixed with Tabler chart, flag, and calendar icons.
+- Initial P2: non-current `active` topics appeared as filled current stops. Fixed by mapping them to a hollow available state while preserving the actual topic state data.
+- Initial P2: topic links extended beyond the scroll region. Fixed with constrained row widths; browser verification reports equal scroll and client widths.
+- Post-fix evidence: the browser-rendered comparison is saved above; map/tagged view switching was tested; the browser console reported no warnings or errors.
+
+**Findings**
+
+- No actionable P0, P1, or P2 findings remain.
+- [P3] The generated reference shows a partially filled course bar alongside `0/9 topics`; the implementation intentionally keeps the bar data-truthful at zero.
+
+**Implementation checklist**
+
+- [x] Distinct section waypoints and lesson nodes
+- [x] Continuous active and future route spines
+- [x] Offset current-topic surface with page progress
+- [x] Hollow available stops and muted locked stops
+- [x] Destination flag and calendar cue
+- [x] Existing collapse, tagged-reminder, lesson, and graph interactions preserved
+- [x] TypeScript and component lint checks pass
+- [x] No horizontal panel overflow
+
+final result: passed

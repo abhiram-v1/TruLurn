@@ -3,6 +3,12 @@ import {
   buildAppKnowledgeContext,
   shouldRetrieveAppKnowledge,
 } from '@/lib/agent/appKnowledge'
+import {
+  isTeachableTopic,
+  nextRecommendedTeachableTopic,
+  previousTeachableTopic,
+  sortTracciaTopics,
+} from '@/lib/traccia/sequence'
 
 type HistoryMessage = {
   role: 'user' | 'assistant'
@@ -37,6 +43,14 @@ const ATLAS_SIGNALS = [
   'locked',
   'where am i',
   'what should i study',
+  'completed',
+  'complete',
+  'finished',
+  'done so far',
+  'covered so far',
+  'how far',
+  'up to',
+  'upto',
 ]
 
 const GRAPH_SIGNALS = [
@@ -160,6 +174,50 @@ function stateLabel(state: unknown) {
   if (value === 'unstable') return 'needs review'
   if (value === 'active') return 'active'
   return 'locked'
+}
+
+function isProgressState(state: unknown) {
+  return ['mastered', 'functional', 'done'].includes(String(state ?? ''))
+}
+
+export function formatSequenceProgress({
+  topics,
+  currentTopicId,
+}: {
+  topics: any[]
+  currentTopicId: string
+}) {
+  const ordered = sortTracciaTopics(topics as any).filter((topic) => isTeachableTopic(topic as any))
+  const currentIndex = ordered.findIndex((topic) => String(topic._id) === currentTopicId)
+  const current = currentIndex >= 0 ? ordered[currentIndex] : null
+  const beforeCurrent = currentIndex >= 0 ? ordered.slice(0, currentIndex) : []
+  const completedBefore = beforeCurrent.filter((topic) => isProgressState(topic.state))
+  const pendingBefore = beforeCurrent.filter((topic) => !isProgressState(topic.state) && String(topic.state ?? '') !== 'locked')
+  const mostRecentProgress = [...ordered]
+    .filter((topic) => isProgressState(topic.state))
+    .at(-1)
+  const previous = current ? previousTeachableTopic(ordered as any, currentTopicId) : null
+  const next = current ? nextRecommendedTeachableTopic(ordered as any, currentTopicId, { allowLocked: true }) : null
+
+  const lines = ['TRACCIA SEQUENCE PROGRESS:']
+  if (current) {
+    lines.push(`Current teachable node: ${current.title} (${currentIndex + 1} of ${ordered.length}, ${stateLabel(current.state)})`)
+  } else {
+    lines.push(`Current teachable node: unknown (${ordered.length} teachable nodes in course)`)
+  }
+  lines.push(`Learner-evidenced progress before current: ${completedBefore.length} of ${Math.max(currentIndex, 0)} prior teachable nodes are settled or usable.`)
+
+  if (mostRecentProgress) {
+    lines.push(`Most recent settled/usable node: ${mostRecentProgress.title} (${stateLabel(mostRecentProgress.state)})`)
+  }
+  if (pendingBefore.length) {
+    lines.push(`Earlier nodes not yet settled: ${pendingBefore.slice(-4).map((topic) => `${topic.title} (${stateLabel(topic.state)})`).join(', ')}`)
+  }
+  if (previous) lines.push(`Previous teachable node: ${previous.title} (${stateLabel(previous.state)})`)
+  if (next) lines.push(`Next teachable node: ${next.title} (${stateLabel(next.state)})`)
+  lines.push('Interpretation rule: generated pages are not proof of mastery. Treat only mastered, functional, or done states as learner-evidenced completion.')
+
+  return lines.join('\n')
 }
 
 function formatAtlas({
@@ -318,6 +376,7 @@ export async function buildAgentWorkspaceContext({
   const blocks = [`AGENT WORKSPACE CONTEXT:\nCourse: ${course.title ?? course.topic ?? 'Untitled course'}\nContext plan: ${plan.reason}`]
 
   if (plan.needsAtlas) {
+    blocks.push(formatSequenceProgress({ topics, currentTopicId }))
     blocks.push(formatAtlas({ branches, topics, currentTopicId }))
   }
 
