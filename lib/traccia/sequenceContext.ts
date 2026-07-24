@@ -1,6 +1,12 @@
 import type { Db } from 'mongodb'
+import type { LessonHardStampedInsight } from '@/types'
 import type { CourseMemoryContext } from '@/lib/vector/retrieval'
 import { isTeachableTopic, nextRecommendedTeachableTopic, sortTracciaTopics } from '@/lib/traccia/sequence'
+import {
+  buildCourseContinuityContext,
+  formatCourseContinuityContext,
+  type CourseContinuityContext,
+} from '@/lib/topic-pages/courseContinuity'
 
 export type SequenceCoverageState =
   | 'new'
@@ -22,6 +28,7 @@ export type SequenceContextPack = {
   reusedConcepts: string[]
   reminderConcepts: string[]
   exampleRefs: SequenceExampleRef[]
+  continuity: CourseContinuityContext
 }
 
 type TopicLike = {
@@ -40,6 +47,7 @@ type TopicLike = {
   key_concepts?: string[]
   summary?: string | null
   description?: string | null
+  prerequisite_strength?: Record<string, string>
   node_type?: string
   children_count?: number
 }
@@ -148,6 +156,11 @@ export async function buildSequenceContextPack({
         state: 1,
         content_state: 1,
         recommended_next_ids: 1,
+        prerequisites: 1,
+        prerequisite_strength: 1,
+        key_concepts: 1,
+        summary: 1,
+        description: 1,
       })
       .toArray(),
     prerequisiteIds.length
@@ -168,6 +181,7 @@ export async function buildSequenceContextPack({
         reused_concepts: 1,
         reminder_concepts: 1,
         example_refs: 1,
+        hard_stamped_insights: 1,
         created_at: 1,
       })
       .sort({ created_at: -1 })
@@ -201,6 +215,44 @@ export async function buildSequenceContextPack({
   const priorOnlyMemoryPages = currentOrderIndex >= 0
     ? (memory?.pages ?? []).filter((page) => priorTopicIds.has(String(page.topic_id)))
     : []
+
+  const summariesByTopic = new Map<string, { summary?: string | null; key_concepts?: string[]; hard_stamped_insights?: LessonHardStampedInsight[] }>()
+  for (const summary of priorOnlySummaries) {
+    const summaryTopicId = String(summary.topic_id)
+    if (summariesByTopic.has(summaryTopicId)) continue
+    summariesByTopic.set(summaryTopicId, {
+      summary: summary.summary ?? summary.focus ?? null,
+      key_concepts: [
+        ...(Array.isArray(summary.key_concepts) ? summary.key_concepts.map(String) : []),
+        ...(Array.isArray(summary.covered_concepts) ? summary.covered_concepts.map(String) : []),
+      ],
+      hard_stamped_insights: Array.isArray(summary.hard_stamped_insights)
+        ? summary.hard_stamped_insights
+        : [],
+    })
+  }
+  for (const page of priorOnlyMemoryPages) {
+    if (!page.hard_stamped_insights?.length) continue
+    const topicId = String(page.topic_id)
+    const existing = summariesByTopic.get(topicId) ?? {}
+    summariesByTopic.set(topicId, {
+      ...existing,
+      hard_stamped_insights: [
+        ...(existing.hard_stamped_insights ?? []),
+        ...page.hard_stamped_insights,
+      ],
+    })
+  }
+  const taughtTopicIds = new Set<string>([
+    ...priorOnlySummaries.map((summary) => String(summary.topic_id)),
+    ...priorOnlyMemoryPages.map((page) => String(page.topic_id)),
+  ])
+  const continuity = buildCourseContinuityContext({
+    topics: branchTopics as any,
+    currentTopicId: topicId,
+    taughtTopicIds,
+    summariesByTopic,
+  })
 
   const candidates = conceptCandidates(topic, prerequisiteTopics)
   const priorPages = [
@@ -271,6 +323,7 @@ export async function buildSequenceContextPack({
     `Prior generated-page memory considered: ${priorOnlySummaries.length} prior-in-sequence summaries; future or out-of-order summaries ignored.`,
     next ? `Recommended next teachable node: ${next.title}` : 'Recommended next teachable node: none',
     siblings.length ? `Nearby sibling nodes: ${siblings.join(', ')}` : null,
+    formatCourseContinuityContext(continuity),
   ].filter(Boolean) as string[]
 
   const byState = (state: SequenceCoverageState) => cues.filter(([, cue]) => cue.state === state)
@@ -300,7 +353,7 @@ export async function buildSequenceContextPack({
   }
 
   lines.push(
-    'Continuity instructions: if a concept is already explained, give 2-4 reminder bullets or a one-paragraph bridge only. Reuse listed examples unless they would mislead in this context. Explain only the contextual difference when the same idea appears under a new node.',
+    'Continuity instructions: if a concept is already explained, use only the minimum callback needed to support the new mechanism. Reuse listed examples unless they would mislead in this context. The required concept bridges above must be visible in lesson prose and must distinguish the concepts rather than collapsing them together.',
   )
 
   return {
@@ -309,5 +362,6 @@ export async function buildSequenceContextPack({
     reusedConcepts: already.map(([concept]) => titleCase(concept)).slice(0, 8),
     reminderConcepts: [...hints, ...avoid].map(([concept]) => titleCase(concept)).slice(0, 8),
     exampleRefs,
+    continuity,
   }
 }

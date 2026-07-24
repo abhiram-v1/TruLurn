@@ -204,8 +204,8 @@
 }
 
 [data-theme='dark'] .md-callout-definition {
-  background: color-mix(in srgb, var(--color-detail-mineral) 8%, var(--color-surface-elevated));
-  border-left-color: var(--color-detail-slate-ink);
+  --md-callout-border: color-mix(in srgb, var(--color-detail-slate-ink) 38%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, var(--color-detail-slate-ink) 3%, var(--color-surface-elevated));
 }
 
 [data-theme='dark'] .md-callout-definition .md-callout-icon,
@@ -213,18 +213,23 @@
   color: var(--color-detail-slate-ink);
 }
 
-[data-theme='dark'] .md-callout-example,
 [data-theme='dark'] .md-th {
   background: rgba(232, 181, 109, 0.09);
 }
 
 [data-theme='dark'] .md-callout-example {
-  border-left-color: #c99d60;
+  --md-callout-border: color-mix(in srgb, #c99d60 34%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, #c99d60 3%, var(--color-surface-elevated));
 }
 
 [data-theme='dark'] .md-callout-example .md-callout-icon,
 [data-theme='dark'] .md-callout-example .md-strong {
-  color: #e8b56d;
+  color: color-mix(in srgb, #e8b56d 72%, var(--color-text-primary));
+}
+
+[data-theme='dark'] .md-callout-insight {
+  --md-callout-border: color-mix(in srgb, var(--color-accent) 32%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, var(--color-accent) 3%, var(--color-surface-elevated));
 }
 
 [data-theme='dark'] .md-td {

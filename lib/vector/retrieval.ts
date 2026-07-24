@@ -8,12 +8,13 @@ import {
   embedText,
 } from '@/lib/ai/embeddings'
 import { LEXICAL_INDEX_NAMES, VECTOR_INDEX_NAMES } from '@/lib/vector/indexes'
-import { denseRank, hybridRank, type RetrievalMethod } from '@/lib/vector/ranking'
+import { denseRank, hybridRank, tokenize, type RetrievalMethod } from '@/lib/vector/ranking'
 import {
   resolveRetrievalCutover,
   type RetrievalSelectionVersion,
 } from '@/lib/vector/cutover'
 import { embedSourcePassageById } from '@/lib/sources/ingestion'
+import type { LessonHardStampedInsight } from '@/types'
 
 export type RetrievalWorkflow =
   | 'generic'
@@ -37,6 +38,7 @@ export type RelevantPage = RetrievalEvidence & {
   summary: string | null
   content: string
   score: number | null
+  hard_stamped_insights?: LessonHardStampedInsight[]
 }
 
 export type RelevantDoubtMemory = RetrievalEvidence & {
@@ -403,6 +405,7 @@ export async function findRelevantPages({
   selectionVersion = 'hybrid-v2',
   collectShadow = true,
   diagnostics,
+  allowedTopicIds,
 }: {
   db: Db
   query: string
@@ -418,8 +421,14 @@ export async function findRelevantPages({
   selectionVersion?: RetrievalSelectionVersion
   collectShadow?: boolean
   diagnostics?: RetrievalDiagnostics
+  /** Only pages from topics the learner could already have encountered. */
+  allowedTopicIds?: string[]
 }): Promise<RelevantPage[]> {
   if (limit <= 0) return []
+  const eligibleTopicIds = allowedTopicIds
+    ? [...new Set(allowedTopicIds.map(String).filter((id) => id && id !== excludeTopicId))]
+    : null
+  if (eligibleTopicIds && eligibleTopicIds.length === 0) return []
   const candidateLimit = Math.max(20, limit * candidateMultiplier)
   let queryVector = precomputedVector
   if (!skipDense && !queryVector) {
@@ -441,7 +450,9 @@ export async function findRelevantPages({
             limit: candidateLimit,
             filter: {
               ...tenantFilter(courseId, userId),
-              topic_id: { $ne: excludeTopicId },
+              topic_id: eligibleTopicIds
+                ? { $in: eligibleTopicIds }
+                : { $ne: excludeTopicId },
             },
           },
         },
@@ -464,6 +475,7 @@ export async function findRelevantPages({
             focus: 1,
             summary: 1,
             content: 1,
+            hard_stamped_insights: 1,
             topic_title: { $first: '$topic.title' },
             score: { $meta: 'vectorSearchScore' },
           },
@@ -494,8 +506,13 @@ export async function findRelevantPages({
             { equals: { path: 'course_id', value: courseId } },
             { equals: { path: 'user_id', value: userId } },
             { equals: { path: 'embedding_version', value: ACTIVE_EMBEDDING_VERSION } },
+            ...(eligibleTopicIds
+              ? [{ in: { path: 'topic_id', value: eligibleTopicIds } }]
+              : []),
           ],
-          mustNot: [{ equals: { path: 'topic_id', value: excludeTopicId } }],
+          mustNot: eligibleTopicIds
+            ? []
+            : [{ equals: { path: 'topic_id', value: excludeTopicId } }],
         },
       },
     },
@@ -517,6 +534,7 @@ export async function findRelevantPages({
         focus: 1,
         summary: 1,
         content: 1,
+        hard_stamped_insights: 1,
         topic_title: { $first: '$topic.title' },
         score: { $meta: 'searchScore' },
       },
@@ -536,13 +554,20 @@ export async function findRelevantPages({
       summary: page.summary ?? null,
       content: page.content,
       score: typeof page.score === 'number' ? page.score : null,
+      hard_stamped_insights: Array.isArray(page.hard_stamped_insights) ? page.hard_stamped_insights : [],
     })
   const toCandidate = (page: any) => {
     const item = mapPage(page)
     return {
       id: item.id,
       item,
-      text: [item.topic_title, item.focus, item.summary, item.content].filter(Boolean).join('\n'),
+      text: [
+        item.topic_title,
+        item.focus,
+        item.summary,
+        ...(item.hard_stamped_insights ?? []).flatMap((stamp) => [stamp.statement, stamp.mapping, stamp.boundary]),
+        item.content,
+      ].filter(Boolean).join('\n'),
       groupKey: item.topic_id,
       score: item.score,
     }
@@ -582,6 +607,131 @@ export async function findRelevantPages({
     lexical_score: candidate.lexicalScore,
     fused_score: candidate.fusedScore,
   }))
+}
+
+function lexicalCoverage(query: string, candidate: string) {
+  const queryTokens = new Set(tokenize(query))
+  if (!queryTokens.size) return 0
+  const candidateTokens = new Set(tokenize(candidate))
+  let matches = 0
+  for (const token of queryTokens) {
+    if (candidateTokens.has(token)) matches += 1
+  }
+  return matches / queryTokens.size
+}
+
+/**
+ * Deterministic dependency retrieval. Vector similarity is useful for discovery,
+ * but it must never be the only route to a declared prerequisite. This fallback
+ * selects the most relevant generated page from every required earlier topic,
+ * even when its embedding is missing or its wording differs from the new topic.
+ */
+export async function findRequiredPageAnchors({
+  db,
+  query,
+  courseId,
+  userId,
+  requiredTopicIds,
+  maxPerTopic = 1,
+}: {
+  db: Db
+  query: string
+  courseId: string
+  userId: string
+  requiredTopicIds: string[]
+  maxPerTopic?: number
+}): Promise<RelevantPage[]> {
+  const required = [...new Set(requiredTopicIds.map(String).filter(Boolean))]
+  if (!required.length || maxPerTopic <= 0) return []
+
+  const [pages, topics] = await Promise.all([
+    db.collection('pages')
+      .find({
+        course_id: courseId,
+        user_id: userId,
+        topic_id: { $in: required },
+        content: { $type: 'string', $ne: '' },
+      })
+      .project({
+        _id: 1,
+        topic_id: 1,
+        page_number: 1,
+        focus: 1,
+        summary: 1,
+        key_concepts: 1,
+        content: 1,
+        hard_stamped_insights: 1,
+      })
+      .toArray(),
+    db.collection('topics')
+      .find({ course_id: courseId, _id: { $in: required as any[] } })
+      .project({ title: 1 })
+      .toArray(),
+  ])
+  const titles = new Map(topics.map((topic) => [String(topic._id), String(topic.title ?? 'Earlier topic')]))
+  const grouped = new Map<string, Array<{ page: any; relevance: number }>>()
+
+  for (const page of pages) {
+    const topicId = String(page.topic_id)
+    const text = [
+      titles.get(topicId),
+      page.focus,
+      page.summary,
+      ...(Array.isArray(page.key_concepts) ? page.key_concepts : []),
+      page.content,
+    ].filter(Boolean).join('\n')
+    const relevance = lexicalCoverage(query, text) + Math.min(0.08, Number(page.page_number ?? 0) * 0.005)
+    const bucket = grouped.get(topicId) ?? []
+    bucket.push({ page, relevance })
+    grouped.set(topicId, bucket)
+  }
+
+  const selected: RelevantPage[] = []
+  for (const topicId of required) {
+    const candidates = grouped.get(topicId) ?? []
+    candidates.sort((left, right) =>
+      right.relevance - left.relevance
+      || Number(right.page.page_number ?? 0) - Number(left.page.page_number ?? 0)
+    )
+    for (const { page, relevance } of candidates.slice(0, maxPerTopic)) {
+      selected.push({
+        id: String(page._id),
+        topic_id: topicId,
+        topic_title: titles.get(topicId) ?? 'Earlier topic',
+        page_number: Number(page.page_number ?? 0),
+        focus: page.focus ?? null,
+        summary: page.summary ?? null,
+        content: String(page.content ?? '').slice(0, 5_000),
+        score: relevance,
+        hard_stamped_insights: Array.isArray(page.hard_stamped_insights) ? page.hard_stamped_insights : [],
+        retrieval_methods: ['dependency'],
+        dense_score: null,
+        lexical_score: relevance,
+        fused_score: relevance,
+      })
+    }
+  }
+  return selected
+}
+
+export function mergeCourseMemoryPages({
+  required,
+  relevant,
+  limit,
+}: {
+  required: RelevantPage[]
+  relevant: RelevantPage[]
+  limit: number
+}) {
+  const merged: RelevantPage[] = []
+  const seen = new Set<string>()
+  for (const page of [...required, ...relevant]) {
+    if (seen.has(page.id)) continue
+    seen.add(page.id)
+    merged.push(page)
+    if (merged.length >= Math.max(limit, required.length)) break
+  }
+  return merged
 }
 
 export async function findRelevantDoubtMessages({
@@ -998,6 +1148,8 @@ export async function retrieveCourseMemory({
   doubtLimit = 4,
   sourceLimit = 3,
   workflow = 'generic',
+  allowedPageTopicIds,
+  requiredPageTopicIds = [],
 }: {
   db: Db
   query: string
@@ -1008,9 +1160,16 @@ export async function retrieveCourseMemory({
   doubtLimit?: number
   sourceLimit?: number
   workflow?: RetrievalWorkflow
+  /** Curriculum/sequence gate applied before page candidates are selected. */
+  allowedPageTopicIds?: string[]
+  /** Earlier dependency/sequence topics that must contribute an anchor page. */
+  requiredPageTopicIds?: string[]
 }): Promise<CourseMemoryContext> {
   const needsAny = Boolean(
-    (currentTopicId && pageLimit > 0) || doubtLimit > 0 || sourceLimit > 0,
+    (currentTopicId && pageLimit > 0)
+    || requiredPageTopicIds.length > 0
+    || doubtLimit > 0
+    || sourceLimit > 0,
   )
   const traceId = crypto.randomUUID()
   const startedAt = new Date()
@@ -1057,7 +1216,7 @@ export async function retrieveCourseMemory({
     }
   }
 
-  const [pages, doubtMessages, sourceChunks] = await Promise.all([
+  const [relevantPages, requiredPages, doubtMessages, sourceChunks] = await Promise.all([
     currentTopicId && pageLimit > 0
       ? findRelevantPages({
           db,
@@ -1074,6 +1233,19 @@ export async function retrieveCourseMemory({
           selectionVersion: cutover.selectionVersion,
           collectShadow: cutover.collectShadow,
           diagnostics,
+          allowedTopicIds: allowedPageTopicIds,
+        })
+      : Promise.resolve([]),
+    requiredPageTopicIds.length
+      ? findRequiredPageAnchors({
+          db,
+          query,
+          courseId,
+          userId,
+          requiredTopicIds: requiredPageTopicIds,
+        }).catch((error) => {
+          recordRetrievalError(diagnostics, 'pages', 'lexical', error)
+          return []
         })
       : Promise.resolve([]),
     doubtLimit > 0
@@ -1113,6 +1285,12 @@ export async function retrieveCourseMemory({
         })
       : Promise.resolve([]),
   ])
+  const pages = mergeCourseMemoryPages({
+    required: requiredPages,
+    relevant: relevantPages,
+    limit: pageLimit,
+  })
+  diagnostics.candidates.pages.selected = pages.length
   const budgetedPages = applyContentBudget(pages, policy.pageCharacterBudget)
   const budgetedDoubtMessages = applyContentBudget(
     doubtMessages,
@@ -1153,6 +1331,11 @@ export async function retrieveCourseMemory({
       pages: pageLimit,
       doubt_messages: doubtLimit,
       source_chunks: sourceLimit,
+    },
+    curriculum_scope: {
+      allowed_prior_topic_count: allowedPageTopicIds?.length ?? null,
+      required_anchor_topic_count: requiredPageTopicIds.length,
+      required_anchor_page_count: requiredPages.length,
     },
     candidate_counts: diagnostics.candidates,
     shadow_comparison: {

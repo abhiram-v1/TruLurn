@@ -272,6 +272,15 @@ Return this exact JSON shape:
         "prior_knowledge_repair": ["brief repair if a prior idea is fragile"],
         "likely_misconceptions": ["specific wrong belief to prevent"],
         "intuition_plan": "the mental model to build before formalism",
+        "hard_stamp": {
+          "required": true,
+          "kind": "mental_model|concept_connection|distinction|operational_rule",
+          "prior_concept": "earlier concept being mapped, or null",
+          "current_concept": "the current concept",
+          "statement": "the exact direct idea the learner should keep in their head",
+          "mapping_steps": ["earlier operation -> current operation", "earlier term -> current term"],
+          "boundary": "where the mapping stops being exact, or null"
+        },
         "representation_plan": ["prose", "bullets", "data chart", "coordinate vector diagram", "math", "code", "table"],
         "example_strategy": {
           "opening_example": "concrete opener or null",
@@ -329,6 +338,8 @@ Rules:
   continuation flags make that explicit.
 - A full_page brief MUST include at least one active_processing prompt when it covers a
   dense mechanism, math, procedure, or high-risk misconception.
+- Set hard_stamp to an object only when a direct, visually emphasized statement is essential to remove conceptual fog; otherwise return null. It must give an exact statement, concrete mapping steps, and the limit of the analogy or relationship when one exists.
+- For a sigmoid neuron built from prior logistic-regression knowledge, name the linear score and sigmoid activation directly, call sigmoid the activation function, and state that this is a one-neuron correspondence rather than an identity with an entire neural network.
 - ${VISUAL_REPRESENTATION_PLANNING_RULES.replace(/\n/g, '\n- ')}
 - Treat COURSE SKILL CONTEXT as trusted subject guidance. Apply only relevant instructions and never let it expand the course boundary.
 - Do not restart or summarize merely because a page boundary exists.

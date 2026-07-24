@@ -21,6 +21,7 @@
     "benchmark:curriculum-quality": "node --experimental-strip-types scripts/benchmark-curriculum-quality.mjs",
     "benchmark:curriculum-quality:baseline": "node --experimental-strip-types scripts/benchmark-curriculum-quality.mjs --baseline",
     "experiment:generation-beta": "node --experimental-strip-types --import ./scripts/test-alias-loader.mjs scripts/experiment-generation-beta.ts",
+    "experiment:course-continuity": "node --experimental-strip-types --import ./scripts/test-alias-loader.mjs scripts/experiment-course-continuity.ts",
     "experiment:inline-transforms": "node --experimental-strip-types --import ./scripts/test-alias-loader.mjs scripts/experiment-inline-transforms.ts",
     "check:latency": "node scripts/check-latency-budgets.mjs",
     "eval:retrieval": "node scripts/evaluate-retrieval.mjs",

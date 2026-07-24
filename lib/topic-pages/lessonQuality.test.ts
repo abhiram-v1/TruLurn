@@ -124,6 +124,51 @@ test('accepts representative lessons across subjects and levels', () => {
   }
 })
 
+test('hard-blocks invented and legacy callout cards in new lessons', () => {
+  for (const label of ['Pro tip', 'Remember', 'Mental model']) {
+    const page = basePage({
+      content: `${basePage().content}\n\n> **${label}:** This tries to create an unsupported teaching card.`,
+    })
+    const report = evaluateLessonQuality({
+      page,
+      topic: { title: 'Card contract' },
+      pageNumber: 1,
+      architecture: architecture(),
+    })
+    assert.equal(report.accepted, false, `${label} must be rejected`)
+    assert.ok(report.issues.some((issue) => issue.code === 'unsupported_lesson_card'))
+  }
+})
+
+test('accepts the sanctioned Definition, Example, and Lock this in cards', () => {
+  const page = basePage({
+    content: `${basePage().content}\n\n> **Definition:** A state change is a transition from one valid condition to another.\n\n> **Example:** If a locked door receives the correct key, its state changes from locked to unlocked, enabling the open action.\n\n> **Lock this in:** Inputs matter when they change the state that constrains the next action.`,
+  })
+  const report = evaluateLessonQuality({
+    page,
+    topic: { title: 'Card contract' },
+    pageNumber: 1,
+    architecture: architecture(),
+  })
+  assert.ok(!report.issues.some((issue) => issue.code === 'unsupported_lesson_card'))
+  assert.ok(!report.issues.some((issue) => issue.code === 'lesson_card_overuse'))
+})
+
+test('hard-blocks unlabelled fenced code and multiple lock-in cards', () => {
+  const page = basePage({
+    content: `${basePage().content}\n\n\`\`\`\nprint('missing language')\n\`\`\`\n\n> **Lock this in:** First durable claim.\n\n> **Lock this in:** Competing durable claim.`,
+  })
+  const report = evaluateLessonQuality({
+    page,
+    topic: { title: 'Card contract' },
+    pageNumber: 1,
+    architecture: architecture(),
+  })
+  assert.equal(report.accepted, false)
+  assert.ok(report.issues.some((issue) => issue.code === 'unlabelled_code_card'))
+  assert.ok(report.issues.some((issue) => issue.code === 'lesson_card_overuse'))
+})
+
 test('still flags a canned opening but does not dead-end a high-scoring page', () => {
   // Policy: a canned hook is a stylistic critical, not a hard block. It is still
   // reported (so the repair directive and logs see it), but a page that clears
@@ -143,7 +188,7 @@ test('still flags a canned opening but does not dead-end a high-scoring page', (
   assert.equal(report.accepted, true)
 })
 
-test('still flags a missing required example but does not dead-end a high-scoring page', () => {
+test('hard-blocks a missing required example even when the weighted score is high', () => {
   const page = basePage({
     content: basePage().content.replace('A concrete case makes the structure visible.', 'The structure can now be summarized.'),
     sections: [{ type: 'core', title: 'Core model', content: basePage().content }],
@@ -158,7 +203,7 @@ test('still flags a missing required example but does not dead-end a high-scorin
 
   assert.ok(report.issues.some((issue) => issue.code === 'required_example_missing'))
   assert.ok(report.overall_score >= report.threshold)
-  assert.equal(report.accepted, true)
+  assert.equal(report.accepted, false)
 })
 
 test('hard-blocks a structurally incomplete page regardless of any score', () => {
@@ -387,4 +432,141 @@ test('allows a small word limit overflow within the dynamic boundary grace margi
 
   assert.equal(finalReport.accepted, true)
   assert.ok(!finalReport.issues.some((issue) => issue.code === 'soft_page_limit_exceeded'))
+})
+
+function dependencyContinuity() {
+  return {
+    current_topic: { id: 'bp', title: 'Backpropagation' },
+    retrieval_scope: {
+      currentTopicId: 'bp',
+      priorTopicIds: ['gd'],
+      directPrerequisiteIds: ['gd'],
+      transitivePrerequisiteIds: [],
+      requiredTopicIds: ['gd'],
+      previousTopicId: 'gd',
+      invalidPrerequisiteIds: [],
+    },
+    connections: [{
+      source_topic_id: 'gd',
+      source_topic_title: 'Gradient Descent',
+      target_topic_id: 'bp',
+      target_topic_title: 'Backpropagation',
+      relation: 'hard_prerequisite',
+      teaching_status: 'taught',
+      evidence_summary: 'Gradient descent applies gradients to parameter updates.',
+      evidence_concepts: ['gradient', 'learning rate'],
+      required_in_explanation: true,
+    }],
+    canonical_terms: ['Gradient Descent', 'Backpropagation'],
+    unmet_prerequisites: [],
+  } as any
+}
+
+test('hard-blocks a page that ignores a declared taught prerequisite relationship', () => {
+  const report = evaluateLessonQuality({
+    page: basePage(),
+    topic: { title: 'Backpropagation' },
+    pageNumber: 1,
+    continuity: dependencyContinuity(),
+  })
+
+  assert.equal(report.accepted, false)
+  assert.ok(report.issues.some((issue) => issue.code === 'dependency_connection_missing'))
+})
+
+test('accepts an explicit technically distinct gradient-descent/backpropagation bridge', () => {
+  const bridge = 'Backpropagation computes how much each weight contributed to the loss by applying the chain rule to obtain parameter gradients. Gradient Descent then uses those gradients to update the weights in the direction that reduces the loss. The two processes cooperate, but they have distinct jobs: one calculates the gradients and the other applies them to an optimization step.'
+  const page = basePage({
+    content: `${basePage().content}\n\n${bridge}`,
+    concept_connections: [{
+      prior_concept: 'Gradient Descent',
+      current_concept: 'Backpropagation',
+      relationship: 'Backpropagation supplies the parameter gradients used by gradient descent.',
+      distinction: 'Backpropagation calculates gradients; gradient descent applies them to updates.',
+    }],
+  })
+  const report = evaluateLessonQuality({
+    page,
+    topic: { title: 'Backpropagation' },
+    pageNumber: 1,
+    continuity: dependencyContinuity(),
+  })
+
+  assert.ok(!report.issues.some((issue) => issue.code === 'dependency_connection_missing'))
+  assert.ok(!report.issues.some((issue) => issue.code === 'dependency_conflation'))
+})
+
+test('hard-blocks explicit prerequisite/current-process conflation', () => {
+  const page = basePage({
+    content: `${basePage().content}\n\nBackpropagation is Gradient Descent. Both names describe the same training process.`,
+    concept_connections: [{
+      prior_concept: 'Gradient Descent',
+      current_concept: 'Backpropagation',
+      relationship: 'They participate in training.',
+      distinction: 'The draft incorrectly claims there is no distinction.',
+    }],
+  })
+  const report = evaluateLessonQuality({
+    page,
+    topic: { title: 'Backpropagation' },
+    pageNumber: 1,
+    continuity: dependencyContinuity(),
+  })
+
+  assert.equal(report.accepted, false)
+  assert.ok(report.issues.some((issue) => issue.code === 'dependency_conflation'))
+})
+
+test('hard-blocks a page that only implies a planner-required durable insight', () => {
+  const report = evaluateLessonQuality({
+    page: basePage(),
+    topic: { title: 'Single Neuron' },
+    pageNumber: 1,
+    architecture: architecture({
+      hard_stamp: {
+        kind: 'concept_connection',
+        prior_concept: 'Logistic Regression',
+        current_concept: 'Single Neuron',
+        statement: 'Logistic regression is the one-neuron case of a sigmoid output unit.',
+        mapping_steps: ['linear score to pre-activation', 'sigmoid to activation function'],
+        boundary: 'This correspondence describes one sigmoid neuron, not an entire multilayer neural network.',
+      },
+    }),
+  })
+
+  assert.equal(report.accepted, false)
+  assert.ok(report.issues.some((issue) => issue.code === 'hard_stamp_missing'))
+})
+
+test('accepts a direct hard-stamped mapping that also states its boundary', () => {
+  const stamp = '> **Lock this in:** A **Single Neuron** with sigmoid activation follows the same computation as **Logistic Regression**: it computes the linear score $z=w^T x+b$ and then applies sigmoid as its activation function. This is a one-neuron correspondence, not a claim that an entire multilayer neural network is logistic regression.'
+  const page = basePage({
+    content: `${basePage().content}\n\n${stamp}`,
+    hard_stamped_insights: [{
+      kind: 'concept_connection',
+      prior_concept: 'Logistic Regression',
+      current_concept: 'Single Neuron',
+      statement: 'A sigmoid neuron follows the logistic-regression computation.',
+      mapping: 'The linear score is the pre-activation; sigmoid is the activation function.',
+      boundary: 'The correspondence is one sigmoid neuron, not an entire multilayer network.',
+    }],
+  })
+  const report = evaluateLessonQuality({
+    page,
+    topic: { title: 'Single Neuron' },
+    pageNumber: 1,
+    architecture: architecture({
+      hard_stamp: {
+        kind: 'concept_connection',
+        prior_concept: 'Logistic Regression',
+        current_concept: 'Single Neuron',
+        statement: 'Logistic regression is the one-neuron case of a sigmoid output unit.',
+        mapping_steps: ['linear score to pre-activation', 'sigmoid to activation function'],
+        boundary: 'This correspondence describes one sigmoid neuron, not an entire multilayer neural network.',
+      },
+    }),
+  })
+
+  assert.ok(!report.issues.some((issue) => issue.code === 'hard_stamp_missing'))
+  assert.ok(!report.issues.some((issue) => issue.code === 'hard_stamp_incomplete'))
 })

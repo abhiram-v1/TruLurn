@@ -1,7 +1,7 @@
 /* Adaptive study workspace */
 .learn-shell {
   grid-template-columns:
-    clamp(300px, 23vw, 360px)
+    clamp(360px, 28vw, 420px)
     minmax(0, 1fr)
     clamp(320px, 22vw, 370px);
   transition: grid-template-columns 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -9,7 +9,7 @@
 
 .learn-shell.roadmap-collapsed {
   grid-template-columns:
-    56px
+    64px
     minmax(0, 1fr)
     clamp(320px, 22vw, 370px);
 }
@@ -23,7 +23,7 @@
 
 .learn-shell.roadmap-collapsed.doubts-expanded {
   grid-template-columns:
-    56px
+    64px
     minmax(0, 1fr)
     clamp(420px, 34vw, 580px);
 }
@@ -257,6 +257,474 @@
 .tagged-reminders-state.is-error {
   color: var(--color-danger);
 }
+
+/* Traccia explorer — a dense, text-first course outline inspired by IDE file trees. */
+.traccia-explorer,
+.traccia-collapsed {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.traccia-explorer-header {
+  align-items: flex-start;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  display: flex;
+  flex: 0 0 auto;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 18px 14px 16px 18px;
+}
+
+.traccia-explorer-heading {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.traccia-explorer-heading p {
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: 760;
+  letter-spacing: .2em;
+  line-height: 1;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.traccia-explorer-heading span {
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traccia-explorer-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+.traccia-explorer-actions button,
+.traccia-collapsed-open {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .045em;
+  min-height: 26px;
+  padding: 4px 7px;
+  text-transform: uppercase;
+}
+
+.traccia-explorer-actions button:hover,
+.traccia-explorer-actions button:focus-visible,
+.traccia-collapsed-open:hover,
+.traccia-collapsed-open:focus-visible {
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  border-color: var(--color-border);
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+.traccia-explorer-actions button[aria-pressed='true'] {
+  border-color: color-mix(in srgb, var(--color-accent) 32%, var(--color-border));
+  color: var(--color-accent-strong);
+}
+
+.traccia-explorer-progress {
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  color: var(--color-text-secondary);
+  display: flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  justify-content: space-between;
+  padding: 14px 18px;
+}
+
+.traccia-explorer-progress strong {
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+.traccia-explorer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 14px 0 20px;
+  scrollbar-color: rgba(86, 82, 75, 0.3) transparent;
+  scrollbar-width: thin;
+}
+
+.traccia-explorer-section {
+  margin: 0 0 8px;
+}
+
+.traccia-explorer-section-row,
+.traccia-explorer-group-row {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.traccia-explorer-section-row {
+  align-items: start;
+  gap: 8px;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  min-height: 38px;
+  padding: 9px 14px 8px 18px;
+}
+
+.traccia-explorer-section-row:hover,
+.traccia-explorer-section-row:focus-visible,
+.traccia-explorer-group-row:hover:not(:disabled),
+.traccia-explorer-group-row:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+  outline: none;
+}
+
+.traccia-explorer-index,
+.traccia-explorer-fraction,
+.traccia-explorer-status {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.traccia-explorer-index {
+  font-family: var(--font-mono);
+}
+
+.traccia-explorer-fraction {
+  color: var(--color-text-secondary);
+}
+
+.traccia-explorer-status {
+  justify-self: end;
+  text-align: right;
+}
+
+.traccia-explorer-section-title {
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: .065em;
+  line-height: 1.38;
+  text-transform: uppercase;
+}
+
+.traccia-explorer-section.is-current > .traccia-explorer-section-row .traccia-explorer-index,
+.traccia-explorer-section.is-current > .traccia-explorer-section-row .traccia-explorer-fraction {
+  color: var(--color-accent-strong);
+}
+
+.traccia-explorer-section.is-done > .traccia-explorer-section-row .traccia-explorer-section-title,
+.traccia-explorer-section.is-locked > .traccia-explorer-section-row .traccia-explorer-section-title {
+  color: var(--color-text-secondary);
+}
+
+.traccia-explorer-section-content {
+  border-left: 1px solid color-mix(in srgb, var(--color-text-primary) 13%, transparent);
+  margin: 0 12px 8px 29px;
+  padding: 1px 0 4px 10px;
+}
+
+.traccia-explorer-group-row {
+  align-items: start;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-height: 36px;
+  padding: 8px 8px 8px 12px;
+}
+
+.traccia-explorer-group-row:disabled {
+  cursor: default;
+}
+
+.traccia-explorer-group.is-locked .traccia-explorer-row-title {
+  color: var(--color-text-tertiary);
+}
+
+.traccia-explorer-children {
+  border-left: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  margin-left: 0;
+  padding-left: 6px;
+}
+
+.traccia-explorer-topic,
+.traccia-explorer-group {
+  min-width: 0;
+}
+
+.traccia-explorer-topic-row,
+.traccia-explorer-page {
+  align-items: start;
+  color: var(--color-text-primary);
+  display: grid;
+  gap: 8px;
+  min-height: 35px;
+  text-decoration: none;
+}
+
+.traccia-explorer-topic-row {
+  grid-template-columns: minmax(0, 1fr) 52px;
+  padding: 8px 8px 8px 12px;
+}
+
+a.traccia-explorer-topic-row:hover,
+.traccia-explorer-page:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+  color: var(--color-text-primary);
+}
+
+.traccia-explorer-topic.is-reading > .traccia-explorer-topic-row {
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+}
+
+.traccia-explorer-topic.is-reading .traccia-explorer-row-title,
+.traccia-explorer-page.is-reading .traccia-explorer-row-title {
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+.traccia-explorer-topic.is-reading .traccia-explorer-status,
+.traccia-explorer-page.is-reading .traccia-explorer-status {
+  color: var(--color-accent-strong);
+}
+
+.traccia-explorer-topic.is-done .traccia-explorer-row-title,
+.traccia-explorer-page.is-done .traccia-explorer-row-title {
+  color: var(--color-text-secondary);
+}
+
+.traccia-explorer-topic.is-locked .traccia-explorer-row-title,
+.traccia-explorer-topic.is-locked .traccia-explorer-status {
+  color: var(--color-text-tertiary);
+}
+
+.traccia-explorer-row-title {
+  font-size: 12px;
+  line-height: 1.4;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.traccia-explorer-pages {
+  border-left: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  margin: 0 0 7px 10px;
+  padding: 1px 0 3px 6px;
+}
+
+.traccia-explorer-page {
+  grid-template-columns: 24px minmax(0, 1fr) 52px;
+  padding: 7px 8px 7px 6px;
+}
+
+.traccia-explorer-page.is-reading {
+  background: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+}
+
+.traccia-explorer-page-summary {
+  border-left: 1px solid color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  margin: 0 0 8px 20px;
+  padding: 5px 0 7px 18px;
+}
+
+.traccia-explorer-footer {
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  flex: 0 0 auto;
+}
+
+.traccia-explorer-next,
+.traccia-explorer-graph {
+  color: var(--color-text-secondary);
+  display: grid;
+  gap: 2px;
+  padding: 10px 18px;
+  text-decoration: none;
+}
+
+.traccia-explorer-next {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+}
+
+.traccia-explorer-next span,
+.traccia-explorer-graph {
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.traccia-explorer-next strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traccia-explorer-next:hover,
+.traccia-explorer-graph:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+  color: var(--color-text-primary);
+}
+
+.traccia-collapsed {
+  align-items: stretch;
+}
+
+.traccia-collapsed-open {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  min-height: 50px;
+  width: 100%;
+}
+
+.traccia-collapsed-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 0;
+}
+
+.traccia-collapsed-item {
+  align-items: center;
+  border-left: 2px solid transparent;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex: 0 0 34px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  justify-content: center;
+  text-decoration: none;
+}
+
+a.traccia-collapsed-item:hover {
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  color: var(--color-text-primary);
+}
+
+.traccia-collapsed-item.is-current {
+  background: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  border-left-color: color-mix(in srgb, var(--color-accent) 72%, var(--color-border));
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
+.traccia-collapsed-item.is-locked {
+  color: var(--color-text-tertiary);
+}
+
+.traccia-explorer-reminders {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.traccia-explorer-reminder-intro {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+}
+
+.traccia-explorer-reminder-intro strong,
+.traccia-explorer-empty strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.traccia-explorer-reminder-intro span,
+.traccia-explorer-empty span {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+}
+
+.traccia-explorer-reminder-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.traccia-explorer-reminder {
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 58%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 12px 12px 12px 18px;
+}
+
+.traccia-explorer-reminder > a {
+  color: var(--color-text-primary);
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  text-decoration: none;
+}
+
+.traccia-explorer-reminder > a strong { font-size: 11px; }
+.traccia-explorer-reminder > a span { color: var(--color-text-secondary); font-size: 12px; line-height: 1.4; }
+.traccia-explorer-reminder > a small { color: var(--color-text-tertiary); font-size: 10px; }
+
+.traccia-explorer-reminder > button,
+.traccia-explorer-empty button {
+  align-self: start;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+.traccia-explorer-reminder > button:hover,
+.traccia-explorer-empty button:hover {
+  color: var(--color-accent-strong);
+}
+
+.traccia-explorer-empty {
+  align-items: center;
+  color: var(--color-text-secondary);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+}
+
+.traccia-explorer-empty.is-error { color: var(--color-danger); }
 
 .roadmap-rail {
   align-items: center;
@@ -858,11 +1326,11 @@
 
 @media (max-width: 1180px) {
   .learn-shell {
-    grid-template-columns: 220px minmax(0, 1fr) 310px;
+    grid-template-columns: 320px minmax(0, 1fr) 310px;
   }
 
   .learn-shell.roadmap-collapsed {
-    grid-template-columns: 54px minmax(0, 1fr) 310px;
+    grid-template-columns: 64px minmax(0, 1fr) 310px;
   }
 
   .learn-shell.doubts-expanded {
@@ -870,7 +1338,7 @@
   }
 
   .learn-shell.roadmap-collapsed.doubts-expanded {
-    grid-template-columns: 54px minmax(0, 1fr) 410px;
+    grid-template-columns: 64px minmax(0, 1fr) 410px;
   }
 
   .lesson-content {
@@ -892,10 +1360,31 @@
     min-height: 74px;
   }
 
-  .learn-shell.roadmap-collapsed .roadmap-rail {
+  .learn-shell.roadmap-collapsed .traccia-collapsed-list {
     flex-direction: row;
     justify-content: flex-start;
-    padding: 10px 14px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 10px;
+  }
+
+  .learn-shell.roadmap-collapsed .traccia-collapsed {
+    flex-direction: row;
+  }
+
+  .learn-shell.roadmap-collapsed .traccia-collapsed-open {
+    border-bottom: 0;
+    border-right: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+    min-height: 74px;
+    width: 64px;
+  }
+
+  .learn-shell.roadmap-collapsed .traccia-collapsed-item {
+    flex-basis: 38px;
+  }
+
+  .traccia-explorer {
+    max-height: min(520px, 62vh);
   }
 
   .lesson-content {

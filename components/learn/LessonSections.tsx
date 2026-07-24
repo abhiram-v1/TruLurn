@@ -1,13 +1,8 @@
 'use client'
 
 import {
-  IconAlertTriangle,
-  IconBulb,
-  IconCheck,
   IconChecks,
   IconMathFunction,
-  IconSparkles,
-  IconX,
 } from '@tabler/icons-react'
 import { useState } from 'react'
 import { MarkdownContent } from '@/components/ui/MarkdownContent'
@@ -184,9 +179,9 @@ function renderSectionContent(section: LessonSection) {
   switch (section.type) {
     case 'prerequisites':   return <PrerequisitesBlock section={section} />
     case 'core':            return <CoreBlock section={section} />
-    case 'key_ideas':       return <KeyIdeasBlock section={section} />
-    case 'misconceptions':  return <MisconceptionsBlock section={section} />
-    case 'examples':        return <ExamplesBlock section={section} />
+    case 'key_ideas':       return <LegacyCalloutBlock section={section} label="Lock this in" />
+    case 'misconceptions':  return <LegacyCalloutBlock section={section} label="Lock this in" />
+    case 'examples':        return <LegacyCalloutBlock section={section} label="Example" />
     case 'checkpoints':     return <CheckpointsBlock section={section} />
     default:                return <CoreBlock section={section} />
   }
@@ -225,71 +220,25 @@ function CoreBlock({ section }: { section: LessonSection }) {
   )
 }
 
-function KeyIdeasBlock({ section }: { section: LessonSection }) {
-  return (
-    <div className="ls-block ls-key-ideas">
-      <div className="ls-section-header">
-        <span className="ls-section-icon">
-          <IconSparkles aria-hidden="true" size={16} stroke={1.8} />
-        </span>
-        <span className="ls-section-label">Key ideas</span>
-      </div>
-      <MarkdownContent>{section.content}</MarkdownContent>
-    </div>
-  )
+function legacyCalloutMarkdown(label: 'Example' | 'Lock this in', content: string) {
+  const quotedContent = content
+    .trim()
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n')
+  return `> **${label}:**\n>\n${quotedContent}`
 }
 
-function parseMisconception(content: string) {
-  // Handle both emoji-prefixed (legacy) and plain versions
-  const mistakeMatch = content.match(
-    /\*\*(?:❌\s*)?Common mistake:\*\*\s*([\s\S]*?)(?=\*\*(?:✅\s*)?Reality:|$)/i,
-  )
-  const realityMatch = content.match(/\*\*(?:✅\s*)?Reality:\*\*\s*([\s\S]*)$/i)
-  if (!mistakeMatch || !realityMatch) return null
-  return {
-    mistake: mistakeMatch[1].trim(),
-    reality: realityMatch[1].trim(),
-  }
-}
-
-function MisconceptionsBlock({ section }: { section: LessonSection }) {
-  const parsed = parseMisconception(section.content)
+function LegacyCalloutBlock({
+  section,
+  label,
+}: {
+  section: LessonSection
+  label: 'Example' | 'Lock this in'
+}) {
   return (
-    <div className="ls-block ls-misconceptions">
-      <div className="ls-section-header">
-        <span className="ls-section-icon">
-          <IconAlertTriangle aria-hidden="true" size={16} stroke={1.8} />
-        </span>
-        <span className="ls-section-label">Common misconception</span>
-      </div>
-      {parsed ? (
-        <div className="ls-misconception-rows">
-          <div className="ls-misconception-row ls-misconception-mistake">
-            <IconX aria-hidden="true" className="ls-misconception-icon" size={14} stroke={2.5} />
-            <MarkdownContent>{parsed.mistake}</MarkdownContent>
-          </div>
-          <div className="ls-misconception-row ls-misconception-reality">
-            <IconCheck aria-hidden="true" className="ls-misconception-icon" size={14} stroke={2.5} />
-            <MarkdownContent>{parsed.reality}</MarkdownContent>
-          </div>
-        </div>
-      ) : (
-        <MarkdownContent>{section.content}</MarkdownContent>
-      )}
-    </div>
-  )
-}
-
-function ExamplesBlock({ section }: { section: LessonSection }) {
-  return (
-    <div className="ls-block ls-examples">
-      <div className="ls-section-header">
-        <span className="ls-section-icon">
-          <IconBulb aria-hidden="true" size={16} stroke={1.8} />
-        </span>
-        <span className="ls-section-label">Example</span>
-      </div>
-      <MarkdownContent>{section.content}</MarkdownContent>
+    <div className="ls-block ls-core ls-legacy-supplement">
+      <MarkdownContent>{legacyCalloutMarkdown(label, section.content)}</MarkdownContent>
     </div>
   )
 }

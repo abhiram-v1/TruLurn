@@ -122,6 +122,15 @@ export interface LessonSection {
   content: string  // raw markdown with LaTeX
 }
 
+export interface LessonHardStampedInsight {
+  kind: 'mental_model' | 'concept_connection' | 'distinction' | 'operational_rule'
+  prior_concept: string | null
+  current_concept: string
+  statement: string
+  mapping: string
+  boundary: string | null
+}
+
 export interface SourceCitation {
   citation_id: string
   evidence_id: string

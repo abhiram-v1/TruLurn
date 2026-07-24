@@ -39,6 +39,32 @@ test('transform system requires the renderer-compatible math delimiters', () => 
   const system = buildTransformSystem('deeper')
   assert.match(system, /Use \$\.\.\.\$ for every inline formula/)
   assert.ok(system.includes('Never use \\(...\\) or \\[...\\]'))
+  assert.match(system, /Never invent a callout, panel, card label/i)
+})
+
+test('transform quality checks prevent helpers from inventing lesson cards', () => {
+  const invented = validateTransformResult(
+    'example',
+    'A scalar changes magnitude.',
+    '> **Pro tip:** A scalar changes magnitude. For example, multiplying 3 by 2 produces 6.',
+  )
+  assert.ok(invented.some((issue) => /never invent a card|renderer-owned/i.test(issue)))
+
+  const introduced = validateTransformResult(
+    'example',
+    'A scalar changes magnitude.',
+    '> **Example:** A scalar changes magnitude. Multiplying 3 by 2 produces 6.',
+  )
+  assert.ok(introduced.some((issue) => /Do not introduce a card/i.test(issue)))
+})
+
+test('transform quality checks preserve an existing sanctioned card label', () => {
+  const issues = validateTransformResult(
+    'simplify',
+    '> **Definition:** A scalar is a rank-zero tensor that stores one value.',
+    '> **Definition:** A scalar is a tensor that stores just one value.',
+  )
+  assert.ok(!issues.some((issue) => /card/i.test(issue)))
 })
 
 test('quality checks reject unsupported LaTeX delimiters and mixed display fences', () => {

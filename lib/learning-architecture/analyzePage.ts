@@ -10,6 +10,15 @@ export type ConceptDifficulty = 'low' | 'medium' | 'high'
 export type ReasoningNeed = 'low' | 'medium' | 'high'
 export type MisconceptionRisk = 'low' | 'medium' | 'high'
 
+export type HardStampPlan = {
+  kind: 'mental_model' | 'concept_connection' | 'distinction' | 'operational_rule'
+  prior_concept: string | null
+  current_concept: string
+  statement: string
+  mapping_steps: string[]
+  boundary: string | null
+}
+
 export type LearningArchitectureBrief = {
   concept_importance: ConceptImportance
   concept_difficulty: ConceptDifficulty
@@ -24,6 +33,8 @@ export type LearningArchitectureBrief = {
   prior_knowledge_repair: string[]
   likely_misconceptions: string[]
   intuition_plan: string
+  /** A single unusually valuable idea that must be stated directly in a visual callout. */
+  hard_stamp?: HardStampPlan | null
   representation_plan: string[]
   example_strategy: {
     opening_example?: string | null
@@ -123,6 +134,23 @@ function normalizeTeachingDepth(value: unknown): 1 | 2 | 3 | 4 | 5 {
   return 3
 }
 
+function normalizeHardStamp(raw: any): HardStampPlan | null {
+  if (!raw || raw.required !== true) return null
+  const kind = raw.kind === 'concept_connection'
+    || raw.kind === 'distinction'
+    || raw.kind === 'operational_rule'
+    ? raw.kind
+    : 'mental_model'
+  return {
+    kind,
+    prior_concept: compact(raw.prior_concept, 140) || null,
+    current_concept: compact(raw.current_concept, 140),
+    statement: compact(raw.statement, 520),
+    mapping_steps: normalizeArray(raw.mapping_steps, 5),
+    boundary: compact(raw.boundary, 360) || null,
+  }
+}
+
 export function normalizeBrief(raw: any): LearningArchitectureBrief {
   const exampleStrategy = raw?.example_strategy ?? {}
   const activeProcessing = raw?.active_processing ?? {}
@@ -142,6 +170,7 @@ export function normalizeBrief(raw: any): LearningArchitectureBrief {
     prior_knowledge_repair: normalizeArray(raw?.prior_knowledge_repair, 6),
     likely_misconceptions: normalizeArray(raw?.likely_misconceptions, 6),
     intuition_plan: compact(raw?.intuition_plan, 520),
+    hard_stamp: normalizeHardStamp(raw?.hard_stamp),
     representation_plan: normalizeArray(raw?.representation_plan, 6),
     example_strategy: {
       opening_example: compact(exampleStrategy.opening_example, 320) || null,
@@ -184,6 +213,11 @@ export function validateLearningArchitectureBrief(brief: LearningArchitectureBri
   if (!brief.success_criteria.length) errors.push('Missing success_criteria.')
   if (!brief.why_this_matters_now) errors.push('Missing why_this_matters_now.')
   if (!brief.intuition_plan) errors.push('Missing intuition_plan.')
+  if (brief.hard_stamp) {
+    if (!brief.hard_stamp.current_concept) errors.push('Hard stamp is missing current_concept.')
+    if (!brief.hard_stamp.statement) errors.push('Hard stamp is missing its explicit statement.')
+    if (!brief.hard_stamp.mapping_steps.length) errors.push('Hard stamp is missing its concrete mapping steps.')
+  }
   if (!brief.cross_page_connection) errors.push('Missing cross_page_connection.')
   if (!brief.reason) errors.push('Missing reason.')
   if (brief.recommended_content_kind === 'full_page' && !hasActiveProcessing(brief)) {
@@ -281,6 +315,15 @@ Return this exact JSON shape:
   "prior_knowledge_repair": ["brief repair/hint if a prior idea is fragile"],
   "likely_misconceptions": ["specific wrong belief to prevent"],
   "intuition_plan": "the concrete mental model or intuition to build before formalism",
+  "hard_stamp": {
+    "required": true,
+    "kind": "mental_model|concept_connection|distinction|operational_rule",
+    "prior_concept": "earlier concept being mapped, or null",
+    "current_concept": "the current concept",
+    "statement": "the exact direct idea the learner should keep in their head",
+    "mapping_steps": ["earlier operation -> current operation", "earlier term -> current term"],
+    "boundary": "where the mapping stops being exact, or null"
+  },
   "representation_plan": ["prose", "bullets", "data chart", "coordinate vector diagram", "math", "code", "table"],
   "example_strategy": {
     "opening_example": "concrete opener or null",
@@ -320,6 +363,9 @@ Rules:
 - If this introduces a dense mechanism, math, procedure, or high-risk misconception, include active processing.
 - Worked examples are required for math/procedure and usually useful for mechanisms.
 - Do not request decorative examples. Examples must reveal necessity, boundaries, or structure.
+- Set hard_stamp to an object only when one direct statement would remove likely conceptual fog: a powerful mapping to prior knowledge, a distinction learners commonly blur, or an operational rule they must retain. Otherwise return null.
+- A hard stamp is not a summary or motivational slogan. Its statement must be technically precise, mapping_steps must spell out the correspondence, and boundary must state the limit whenever an analogy or earlier model is not completely identical.
+- Example: for a learner who knows logistic regression, a single sigmoid neuron can be hard-stamped as linear score z=w^T x+b followed by sigmoid activation a=sigma(z); in neural-network language sigmoid is the activation function. Do not call the linear score itself "linear regression" and do not imply a whole neural network is merely logistic regression.
 - Use prior context and reusable examples when possible. Do not casually switch analogy domains.
 - ${VISUAL_REPRESENTATION_PLANNING_RULES.replace(/\n/g, '\n- ')}
 - Treat COURSE SKILL CONTEXT as trusted subject guidance. Apply only relevant instructions and never let it override locked page scope.

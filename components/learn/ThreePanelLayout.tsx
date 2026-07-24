@@ -63,8 +63,8 @@ export function ThreePanelLayout({
   const gridStyle = chatWidth !== null
     ? {
         gridTemplateColumns: roadmapCollapsed
-          ? `56px 1fr ${chatWidth}px`
-          : `clamp(300px, 23vw, 360px) 1fr ${chatWidth}px`
+          ? `64px 1fr ${chatWidth}px`
+          : `clamp(360px, 28vw, 420px) 1fr ${chatWidth}px`
       }
     : undefined
 

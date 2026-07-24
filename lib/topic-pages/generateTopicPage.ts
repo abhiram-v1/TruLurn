@@ -6,6 +6,10 @@ import { buildPersonaDirective } from '@/lib/personas'
 import { buildLessonFidelityDirective, policyFromCourse } from '@/lib/course-generation/sourceFidelity'
 import { formatSourceProfileForLessons } from '@/lib/course-generation/sourceProfile'
 import { buildLessonQualityRepairDirective } from '@/lib/topic-pages/lessonQuality'
+import {
+  buildLessonVerificationRepairDirective,
+  type LessonVerificationReport,
+} from '@/lib/topic-pages/lessonVerification'
 import { CHART_EMBEDDING_INSTRUCTIONS } from '@/lib/ai/skills/dataChart'
 import { VECTOR_DIAGRAM_EMBEDDING_INSTRUCTIONS } from '@/lib/ai/skills/vectorDiagram'
 import type {
@@ -34,7 +38,8 @@ import type {
 } from '@/lib/learning-architecture/analyzePage'
 import type { SourceImageAsset } from '@/lib/sources/images'
 import { buildLessonFeedbackDirective } from '@/lib/learning/lessonFeedback'
-import type { ConceptKind, ContentKind, LessonExampleRef, LessonSection, LessonSectionType, TopicDepth } from '@/types'
+import { SANCTIONED_LESSON_CARD_DIRECTIVE } from '@/lib/lesson-cards'
+import type { ConceptKind, ContentKind, LessonExampleRef, LessonHardStampedInsight, LessonSection, LessonSectionType, TopicDepth } from '@/types'
 
 type GenerateTopicPageInput = {
   course: any
@@ -63,6 +68,8 @@ type GenerateTopicPageInput = {
     report: LessonQualityReport
     previousDraft: GeneratedTopicPage
   }
+  /** Independent factual/continuity review that rejected the prior draft. */
+  verificationRepair?: LessonVerificationReport
   /** Title of the next topic in the course — used for the carry-forward closing sentence. */
   nextTopicTitle?: string
   /** Running example from the most recent prior page — reuse it for continuity. */
@@ -86,11 +93,15 @@ export type GeneratedTopicPage = {
   reused_concepts: string[]
   reminder_concepts: string[]
   example_refs: LessonExampleRef[]
+  concept_connections: LessonConceptConnection[]
+  hard_stamped_insights: LessonHardStampedInsight[]
   learning_architecture?: LearningArchitectureBrief | null
   sections: LessonSection[]
   source_citations?: SourceCitation[]
   grounding?: GroundingReport | null
   lesson_quality?: LessonQualityReport | null
+  lesson_verification?: LessonVerificationReport | null
+  verification_repair_history?: LessonVerificationReport[]
   quality_repair_history?: LessonQualityRepairRecord[]
   generation_authority?: GenerationAuthorityContract | null
   /** Source figures attached to this page (for inline embeds + the figure rail). */
@@ -108,6 +119,13 @@ export type GeneratedTopicPage = {
   topic_type?: 'conceptual' | 'technical' | 'mathematical' | 'programming' | 'overview' | 'bridge'
   core_realization?: string
   example_to_use?: string
+}
+
+export type LessonConceptConnection = {
+  prior_concept: string
+  current_concept: string
+  relationship: string
+  distinction: string
 }
 
 function compact(text: string, max = 1400) {
@@ -154,6 +172,13 @@ function formatCourseMemory(memory?: CourseMemoryContext, options?: { excludeSou
       const lines: string[] = []
       if (page.focus) lines.push(`Focus: ${page.focus}`)
       if (page.summary) lines.push(`Summary: ${page.summary}`)
+      if (page.hard_stamped_insights?.length) {
+        lines.push(`Durable mental models: ${page.hard_stamped_insights.map((stamp) => [
+          stamp.statement,
+          `Mapping: ${stamp.mapping}`,
+          stamp.boundary ? `Boundary: ${stamp.boundary}` : null,
+        ].filter(Boolean).join(' ')).join(' | ')}`)
+      }
       // Add a short excerpt so the generator sees the actual vocabulary and framing,
       // not just the summary label. 350 chars is enough to catch the opening explanation.
       const excerpt = compact(page.content, 350)
@@ -223,6 +248,9 @@ function formatLearningArchitecture(brief?: LearningArchitectureBrief) {
     brief.prior_knowledge_repair.length ? `Prior knowledge repair: ${brief.prior_knowledge_repair.join('; ')}` : null,
     brief.likely_misconceptions.length ? `Misconception risks: ${brief.likely_misconceptions.join('; ')}` : null,
     `Intuition plan: ${brief.intuition_plan}`,
+    brief.hard_stamp
+      ? `HARD-STAMP REQUIRED (${brief.hard_stamp.kind}): ${brief.hard_stamp.statement}\nPrior concept: ${brief.hard_stamp.prior_concept || 'none'}; current concept: ${brief.hard_stamp.current_concept}; mapping: ${brief.hard_stamp.mapping_steps.join(' -> ')}; boundary: ${brief.hard_stamp.boundary || 'none'}`
+      : 'Hard-stamp callout: not required; do not manufacture one.',
     `Representation plan: ${brief.representation_plan.join('; ') || 'prose'}`,
     `Example strategy: opening=${brief.example_strategy.opening_example || 'none'}; worked_example_needed=${brief.example_strategy.worked_example_needed}; contrast_case_needed=${brief.example_strategy.contrast_case_needed}; reusable=${brief.example_strategy.reusable_example_refs.join('; ') || 'none'}`,
     active.length ? `Active processing: ${active.join('; ')}` : 'Active processing: none',
@@ -452,22 +480,12 @@ function chooseOptionalSections(
 // Expected model output:
 //
 //   <assessment>{ "topic_depth": "...", "focus": "...", ... }</assessment>
-//   <prerequisites>...</prerequisites>   ← optional
 //   <core>...</core>                     ← always
-//   <key_ideas>...</key_ideas>           ← optional
-//   <misconceptions>...</misconceptions> ← optional
-//   <examples>...</examples>             ← optional
-//   <checkpoints>...</checkpoints>       ← optional
 //
 // Falls back to old <metadata>/<content> format if no <assessment> found.
 
 const SECTION_TAGS: LessonSectionType[] = [
-  'prerequisites',
   'core',
-  'key_ideas',
-  'misconceptions',
-  'examples',
-  'checkpoints',
 ]
 
 function extractTag(text: string, tag: string): string | null {
@@ -510,6 +528,8 @@ function parseStructuredResponse(
     reused_concepts?: string[]
     reminder_concepts?: string[]
     example_refs?: LessonExampleRef[]
+    concept_connections?: LessonConceptConnection[]
+    hard_stamped_insights?: LessonHardStampedInsight[]
     page_mode?: 'micro' | 'short' | 'full' | 'critical'
     topic_type?: 'conceptual' | 'technical' | 'mathematical' | 'programming' | 'overview' | 'bridge'
     core_realization?: string
@@ -555,6 +575,8 @@ function parseStructuredResponse(
       reused_concepts: Array.isArray(meta.reused_concepts) ? meta.reused_concepts : [],
       reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
       example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
+      concept_connections: Array.isArray(meta.concept_connections) ? meta.concept_connections : [],
+      hard_stamped_insights: Array.isArray(meta.hard_stamped_insights) ? meta.hard_stamped_insights : [],
       sections: [],
       concept_importance: normalizeImportance(meta.concept_importance),
       concept_difficulty: normalizeReasoningNeed(meta.concept_difficulty),
@@ -593,6 +615,8 @@ function parseStructuredResponse(
     reused_concepts: Array.isArray(meta.reused_concepts) ? meta.reused_concepts : [],
     reminder_concepts: Array.isArray(meta.reminder_concepts) ? meta.reminder_concepts : [],
     example_refs: Array.isArray(meta.example_refs) ? meta.example_refs : [],
+    concept_connections: Array.isArray(meta.concept_connections) ? meta.concept_connections : [],
+    hard_stamped_insights: Array.isArray(meta.hard_stamped_insights) ? meta.hard_stamped_insights : [],
     sections,
     concept_importance: normalizeImportance(meta.concept_importance),
     concept_difficulty: normalizeReasoningNeed(meta.concept_difficulty),
@@ -637,6 +661,8 @@ function parseOldFormat(
       reused_concepts: [],
       reminder_concepts: [],
       example_refs: [],
+      concept_connections: [],
+      hard_stamped_insights: [],
       sections: [{ type: 'core', content }],
     }
   }
@@ -664,6 +690,8 @@ function parseOldFormat(
     reused_concepts: [],
     reminder_concepts: [],
     example_refs: [],
+    concept_connections: [],
+    hard_stamped_insights: [],
     sections: [{ type: 'core', content }],
   }
 }
@@ -711,6 +739,8 @@ ${TEACHING_PRINCIPLES_DIRECTIVE}
 
 ${SIGNAL_DENSITY_DIRECTIVE}
 
+${SANCTIONED_LESSON_CARD_DIRECTIVE}
+
 INVARIANTS:
 - The generation authority contract owns scope, page existence, sequence, content kind, focus, and length class. Never override it.
 - The page objective and source boundary are mandatory, but planner recommendations about importance, difficulty, reasoning need, teaching depth, examples, formalism, and misconception risk are advisory. Check them against the actual source evidence, prior pages, continuation flags, and useful token budget.
@@ -723,12 +753,17 @@ INVARIANTS:
   Robotic (banned): "'Maps' means it converts the input. 'Arbitrary-size' means the input can be any size. 'Fixed-size' means the output length is constant." — the same sentence skeleton three times, term by term, with no consequence attached.
   Alive (required): "Two words in that definition do all the work. *Arbitrary-size* is a promise — one character or a terabyte, the function doesn't care. *Fixed-size* is the surprise: whatever goes in, exactly 256 bits come out. Everything hashing is used for lives in that asymmetry."
   The alive version selects what matters, attaches each term to its consequence, and varies its rhythm. Apply that instinct to every explanation, not only definitions.
-- STRUCTURAL VARIETY ACROSS PAGES: the previous-pages excerpts show which structural moves were just used. Do not open with the same move, deploy the same callout pattern, or repeat the paragraph rhythm of the immediately preceding page. Consecutive pages built on an identical skeleton read as machine output even when each page is individually fine.
-- When the page contract permits a concept or topic to close, important concepts must end with one compact blockquote callout labelled "Remember" or "TL;DR", containing the canonical definition and the few load-bearing points worth retaining. If the explanation continues, defer it. Never label content as exam-ready or interview-ready.
+- STRUCTURAL VARIETY ACROSS PAGES: the previous-pages excerpts show which structural moves were just used. Do not open with the same move, force the same sanctioned card type, or repeat the paragraph rhythm of the immediately preceding page. Consecutive pages built on an identical skeleton read as machine output even when each page is individually fine.
+- When the page contract permits a concept or topic to close, use a single Lock this in card only when one load-bearing idea genuinely deserves durable emphasis. If the explanation continues, defer it. Never manufacture a summary card or label content as exam-ready or interview-ready.
 - Protect the first impression: after the first concept heading, use at most two short opening paragraphs and reach the governing insight or formal definition within roughly 150 words. Do not begin with a list, taxonomy, or wall of setup. Exception: when the user prompt carries a TOPIC OPENING directive, deliver its brief orientation before the first concept heading — that orientation is signal, not setup.
 - Use progressive depth (per TEACHING PRINCIPLES): mental model / tension first, then a visible definition callout, then connected mechanism and example, then boundaries or optional detail.
 - Be accurate, focused, and complete. Use enough of the planned teaching budget to make the assigned understanding real, then stop before adding repetition or unrelated detail.
 - Preserve continuity: do not re-teach prior material. Use a brief callback, then advance the new idea.
+- Treat STRUCTURED COURSE STATE as an acceptance contract, not optional inspiration. For every REQUIRED CONCEPT BRIDGE, the visible prose must name both concepts, state their distinct jobs, and explain the dependency or handoff between them. Never collapse a prerequisite and the current concept into the same process.
+- Use only earlier-in-sequence pages as learned context. Never describe a future, skipped, or merely planned concept as something the learner already knows.
+- Preserve canonical terminology from the course state. Introduce an abbreviation or synonym only after naming the canonical term, and do not silently rename a concept across pages.
+- When the learning architecture says HARD-STAMP REQUIRED, place exactly one compact blockquote beside the explanation it clarifies: \`> **Lock this in:** ...\`. State the conclusion directly, spell out the operational mapping, and state the boundary when the relationship is not an exact identity. Do not make the learner infer the point from an example, and do not use the callout for generic summaries or motivational slogans.
+- A hard stamp must remain technically exact. For a sigmoid neuron, say it computes a linear score $z=w^T x+b$ and then applies the sigmoid activation $a=\\sigma(z)$. Logistic regression is a useful one-neuron correspondence; the score is not "linear regression," and a multilayer neural network is not simply logistic regression.
 - Treat planned pages as consecutive physical spans of one textbook manuscript. A page boundary does not create a new lesson, hook, recap, or conclusion.
 - Treat target_words as the expected teaching budget for this span: write near it when the concept needs development, and under it only when the assigned understanding is genuinely complete. Slight overflow toward soft_max_words is allowed to finish a nearly complete concept or worked step.
 - Define technical terms accurately. Use formalism, examples, analogies, code, and active processing when the source material, assigned objective, or verified planner recommendation genuinely calls for them.
@@ -817,16 +852,16 @@ ${lessonResearch}
 Use it as a factual anchor without copying its prose.
 ` : ''}
 
-Return exactly these tags. <assessment> and <core> are required; optional tags are included only when earned.
+Return exactly two tags: <assessment> and <core>. Legacy optional section tags are disabled.
 
 SIGNAL-DENSE PAGE RULES:
-- Build for understanding first and retrieval second: clear concept headings, connected explanatory prose, bullets for truly parallel information, and compact callouts for definitions or durable formulations.
+- Build for understanding first and retrieval second: clear concept headings, connected explanatory prose, bullets for truly parallel information, and only the sanctioned cards when their specific teaching job is earned.
 - Preserve the motivation, formal definition, mechanism, and interpretation that make the idea understandable. Remove only setup that performs no teaching work.
 - A focused page is better than a repetitive page, but a short page is not automatically better than a vivid, complete explanation.
 - Keep canonical definitions easy to find, and end important concepts with a brief memory-retention block without flattening the surrounding lesson into notes.
 - FIRST VIEWPORT: after the first ## concept heading, write no more than two short paragraphs before the central insight or a > **Definition:** callout. Do not put a long list above the definition.
 - PROGRESSIVE DEPTH: establish the governing idea before details. After a definition callout, use one or two connected paragraphs—not a term-by-term list. Put material in bullets only when the subject itself contains a meaningful enumeration; keep supporting taxonomy, exceptions, and edge cases below the main explanation.
-- MEMORY CLOSE: only when this span closes the concept, use one short blockquote callout: > **Remember:** ... or > **TL;DR:** ... Never create a large summary section.
+- MEMORY CLOSE: only when this span closes the concept and one load-bearing idea merits emphasis, use one short > **Lock this in:** card. If a HARD-STAMP REQUIRED card already appears, that is the page's single lock-in card. Never create a large summary section.
 
 PHYSICAL PAGE CONTRACT:
 - This span begins at: ${authority.sequence.start_boundary}
@@ -886,7 +921,25 @@ WRITER JUDGMENT CONTRACT:
   "covered_concepts": ["newly taught concept"],
   "reused_concepts": ["briefly referenced prior concept"],
   "reminder_concepts": ["one-line callback"],
-  "example_refs": []
+  "example_refs": [],
+  "concept_connections": [
+    {
+      "prior_concept": "canonical earlier concept",
+      "current_concept": "canonical current concept",
+      "relationship": "how the earlier result, representation, or mechanism is used now",
+      "distinction": "why the two concepts are not the same process"
+    }
+  ],
+  "hard_stamped_insights": [
+    {
+      "kind": "mental_model|concept_connection|distinction|operational_rule",
+      "prior_concept": "canonical earlier concept, or null",
+      "current_concept": "canonical current concept",
+      "statement": "the direct claim shown in the Lock this in callout",
+      "mapping": "the concrete operation-to-operation or term-to-term correspondence",
+      "boundary": "where the relationship stops being exact, or null"
+    }
+  ]
 }
 </assessment>
 
@@ -898,14 +951,9 @@ ${authority.sequence.continues_from_previous
 [Write the planned manuscript span using the active persona. Give every major concept a short, recognizable ## heading. Satisfy the assigned boundaries and understanding without treating this physical page as a separate lesson.]
 </core>
 
-Optional tags:
-<prerequisites>[Only a truly necessary brief prerequisite]</prerequisites>
-<key_ideas>[Only 3+ distinct durable takeaways]</key_ideas>
-<examples>[Only a substantial worked example that would clutter core]</examples>
-<misconceptions>[Only a specific high-risk wrong belief and correction]</misconceptions>
-<checkpoints>[Only 1-2 reasoning prompts that materially improve learning]</checkpoints>
+Do not emit any other section tags. Put prerequisites, misconception repairs, worked examples, and retrieval prompts into the coherent <core> manuscript using normal prose or the sanctioned card whose teaching job matches the content.
 
-Keep assessment flags consistent with emitted tags. Record prior concepts and examples accurately.`
+Keep assessment flags false because legacy optional section tags are disabled. Record prior concepts and examples accurately. Populate concept_connections for every REQUIRED CONCEPT BRIDGE and only when the prose actually teaches that connection. Populate hard_stamped_insights only for a visible \`Lock this in\` card; when HARD-STAMP REQUIRED appears in the architecture, one matching card and metadata record are mandatory.`
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -1175,6 +1223,7 @@ export async function generateTopicPage({
   sourceEvidence = [],
   availableFigures = [],
   qualityRepair,
+  verificationRepair,
   nextTopicTitle,
   priorExample,
 }: GenerateTopicPageInput): Promise<GeneratedTopicPage> {
@@ -1291,6 +1340,9 @@ ${availableFigures.map((figure, index) => {
   const qualityRepairBlock = qualityRepair
     ? `\n${buildLessonQualityRepairDirective(qualityRepair.report, qualityRepair.previousDraft)}\n`
     : ''
+  const verificationRepairBlock = verificationRepair
+    ? `\n${buildLessonVerificationRepairDirective(verificationRepair)}\n`
+    : ''
   // The topic-level lesson plan already decided this page's shape and budget.
   // The writer's own assessment must operate WITHIN that decision, not override
   // it upward — this is what keeps small topics small.
@@ -1315,7 +1367,7 @@ ${availableFigures.map((figure, index) => {
     nextTopicTitle,
     priorExample,
     authority,
-  }), qualityRepairBlock].filter(Boolean).join('')
+  }), verificationRepairBlock, qualityRepairBlock].filter(Boolean).join('')
 
   const reasoningEffort = selectLessonReasoningEffort({
     course,
@@ -1413,6 +1465,8 @@ export function buildPageDocument(input: {
     reused_concepts: input.page.reused_concepts,
     reminder_concepts: input.page.reminder_concepts,
     example_refs: input.page.example_refs,
+    concept_connections: input.page.concept_connections,
+    hard_stamped_insights: input.page.hard_stamped_insights,
     page_mode: input.page.page_mode ?? null,
     topic_type: input.page.topic_type ?? null,
     core_realization: input.page.core_realization ?? null,
@@ -1428,6 +1482,8 @@ export function buildPageDocument(input: {
     figures: input.page.figures ?? [],
     grounding: input.page.grounding ?? null,
     lesson_quality: input.page.lesson_quality ?? null,
+    lesson_verification: input.page.lesson_verification ?? null,
+    verification_repair_history: input.page.verification_repair_history ?? [],
     quality_repair_history: input.page.quality_repair_history ?? [],
     generation_authority: input.page.generation_authority ?? null,
     created_at: new Date(),

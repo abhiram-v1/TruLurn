@@ -51,6 +51,67 @@ final result: passed
 
 ---
 
+# Traccia IDE Explorer Design QA
+
+- source visual truth path: `C:\Users\ASUS\.codex\generated_images\019f88f8-a509-7e63-a601-e50fdd017a01\exec-8e44391e-d891-488b-9e65-9e1fa8fbd07b.png`
+- implementation screenshot path: `C:\Projects\TruLurn\traccia-implementation-final.jpg`
+- collapsed-state screenshot path: `C:\Projects\TruLurn\traccia-collapsed.png`
+- combined comparison path: `C:\Projects\TruLurn\traccia-design-comparison-final.jpg`
+- viewport: 1440 × 1024 CSS pixels, device pixel ratio 1
+- source pixels: 1487 × 1058; implementation pixels: 1440 × 1024; both normalized to 1440 × 1024 for the combined comparison
+- state: light theme, second curriculum section open, Vectors current, page 2 of 4 current
+
+**Full-view comparison evidence**
+
+The implementation preserves the selected mock's restrained IDE-explorer composition: text-only hierarchy, thin tree guides, compact rows, tabular progress values, low-intensity current-row treatment, and a quiet warm surface. The wider real-data branch structure is intentionally retained instead of copying the mock's simplified curriculum grouping.
+
+**Focused region comparison evidence**
+
+The Traccia header, current topic, nested page list, and collapsed rail were inspected at full screenshot resolution. Current and page-level selection remain distinct without cards, icons, shadows, gradients, or decorative markers. Long page names fit at the 1440px verification viewport, and the narrow collapsed state exposes numbered topic shortcuts plus an explicit Open control.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: existing TruLurn UI typography is retained; section labels, status words, page numbers, and selected-row weights match the mock's compact hierarchy.
+- Spacing and layout rhythm: the rail measures roughly 403px at the verification viewport; hierarchy indentation and 35–38px row heights keep the tree dense and readable.
+- Colors and visual tokens: all surfaces, lines, text, and selection states use existing TruLurn tokens with a low-intensity terracotta accent.
+- Image quality and asset fidelity: the target has no raster imagery or interface icons; the implementation correctly uses no icons or substitute glyph art.
+- Copy and content: real course titles, topic states, progress, page titles, reminders, next-topic navigation, and knowledge-graph navigation are preserved.
+- Accessibility and interaction: semantic buttons, links, navigation landmarks, `aria-expanded`, `aria-current`, disabled locked items, and text state labels provide keyboard and non-color cues.
+
+**Comparison history**
+
+- Initial P2: nested page labels wrapped too aggressively because three hierarchy levels accumulated excessive indentation. Fixed by tightening child and page guides while retaining visual parentage.
+- Initial P2: visible open/closed status words consumed section-title width and diverged from the selected mock. Fixed by keeping disclosure state in `aria-expanded` and reserving visible statuses for learning state.
+- Post-fix evidence: the final combined comparison shows aligned density, full-width selection strips, readable one-line page labels, and consistent tree guides.
+
+**Primary interactions tested**
+
+- Reminders/Course view switching
+- Section and nested group expansion
+- Whole-panel Hide/Open behavior
+- Current-topic and current-page state rendering
+- Locked topics remain non-navigable
+- User independently confirmed the production-facing behavior before deployment
+
+**Findings**
+
+- No actionable P0, P1, or P2 findings remain.
+- [P3] The mock flattens curriculum groupings for presentation; the implementation deliberately preserves the real course hierarchy.
+
+**Implementation checklist**
+
+- [x] Text-only IDE-style hierarchy
+- [x] Explicit learning-state labels
+- [x] Thin, subdued tree guides and dividers
+- [x] Functional whole-panel collapse and expansion
+- [x] Reminder, lesson, next-topic, and graph navigation retained
+- [x] Semantic accessibility states retained
+- [x] Side-by-side visual comparison completed
+
+final result: passed
+
+---
+
 # Traccia Route Map Design QA
 
 - source visual truth path: `C:\Users\ASUS\.codex\generated_images\019f4d89-7e98-7180-a6c0-c8781cbe6e98\exec-18279a2b-f1b3-4236-9f8e-a5a7cb508edd.png`

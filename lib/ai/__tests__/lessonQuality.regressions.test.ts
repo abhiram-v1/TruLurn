@@ -13,7 +13,7 @@ Third, when no known algorithm exists. Speech recognition is a case where the pa
 
 Fourth, when the goal is discovery rather than prediction. You want to find patterns in the data that you do not know in advance — for instance, segmenting customers into distinct groups you never defined beforehand. The model reveals structure that no pre-existing rule could have uncovered.
 
-> **Mental model:** Use hand-written rules when the rules are already clear to you; use machine learning when the source of the patterns must come from the data itself.
+> **Lock this in:** Use hand-written rules when the rules are already clear to you; use machine learning when the source of the patterns must come from the data itself.
 
 Machine learning does not replace thinking. It replaces the part of thinking that would otherwise turn into an ever-growing, unmaintainable checklist of edge cases and exceptions.
 
@@ -39,6 +39,8 @@ function basePage(overrides: Partial<GeneratedTopicPage> = {}): GeneratedTopicPa
     reused_concepts: [],
     reminder_concepts: [],
     example_refs: [],
+    concept_connections: [],
+    hard_stamped_insights: [],
     sections: [{ type: 'core', content: BASE_CONTENT }],
     ...overrides,
   }

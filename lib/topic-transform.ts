@@ -1,3 +1,10 @@
+import {
+  findLessonCalloutLabels,
+  findUnlabelledCodeFences,
+  findUnsupportedLessonCallouts,
+  hasInventedLessonCardContainer,
+} from '@/lib/lesson-cards'
+
 export type TransformAction = 'simplify' | 'deeper' | 'example'
 
 const TRANSFORM_MATH_OUTPUT_CONTRACT = `Math formatting is strict because the lesson renderer uses remark-math:
@@ -5,6 +12,12 @@ const TRANSFORM_MATH_OUTPUT_CONTRACT = `Math formatting is strict because the le
 - Use $$ only as standalone opening and closing lines for display math.
 - Never use \\(...\\) or \\[...\\] delimiters; they render as unreadable raw LaTeX in this app.
 - Never place $$ on a line with prose or equation content.`
+
+const TRANSFORM_CARD_OUTPUT_CONTRACT = `Lesson card structure is renderer-owned:
+- Never invent a callout, panel, card label, custom ::: container, HTML, or MDX wrapper.
+- If the selected passage already contains a Definition, Example, or Lock this in card, preserve that exact label and change only its teaching content.
+- If the selection is ordinary prose, return ordinary prose. The Example action does not automatically create an Example card.
+- Fenced code is allowed only when the selection already contains code; preserve its explicit language.`
 
 export const TRANSFORM_SYSTEM: Record<TransformAction, string> = {
   simplify: `You are TruLurn's lesson editor. Rewrite a selected passage in simpler, clearer language.
@@ -40,7 +53,7 @@ Rules:
 }
 
 export function buildTransformSystem(action: TransformAction): string {
-  return `${TRANSFORM_SYSTEM[action]}\n\n${TRANSFORM_MATH_OUTPUT_CONTRACT}`
+  return `${TRANSFORM_SYSTEM[action]}\n\n${TRANSFORM_MATH_OUTPUT_CONTRACT}\n\n${TRANSFORM_CARD_OUTPUT_CONTRACT}`
 }
 
 export function buildTransformUserPrompt({
@@ -118,6 +131,29 @@ export function validateTransformResult(
   if (mixedDisplayFence) issues.push('Put each display-math $$ delimiter on its own line.')
   if (/^(?:here(?:'s| is)|simplified version|expanded version|example:)/iu.test(trimmed)) {
     issues.push('Remove the conversational preamble or output label.')
+  }
+
+  const originalCardLabels = findLessonCalloutLabels(selectedText)
+  const resultCardLabels = findLessonCalloutLabels(trimmed)
+  const unsupportedCards = findUnsupportedLessonCallouts(trimmed)
+  if (unsupportedCards.length || hasInventedLessonCardContainer(trimmed)) {
+    issues.push('Use only the renderer-owned Definition, Example, Code, and Lock this in card forms; never invent a card or wrapper.')
+  }
+  if (originalCardLabels.length === 0 && resultCardLabels.length > 0) {
+    issues.push('Do not introduce a card while replacing ordinary prose.')
+  }
+  if (
+    originalCardLabels.length > 0
+    && originalCardLabels.map((label) => label.toLowerCase()).join('|')
+      !== resultCardLabels.map((label) => label.toLowerCase()).join('|')
+  ) {
+    issues.push('Preserve the selected passage\'s existing lesson-card label exactly.')
+  }
+  if (findUnlabelledCodeFences(trimmed) > 0) {
+    issues.push('Every fenced code block needs an explicit language.')
+  }
+  if (!selectedText.includes('```') && trimmed.includes('```')) {
+    issues.push('Do not introduce a code card when the selected passage did not contain code.')
   }
   if (trimmed.replace(/\s+/gu, ' ') === selectedText.trim().replace(/\s+/gu, ' ')) {
     issues.push('The replacement must materially change the selected passage.')

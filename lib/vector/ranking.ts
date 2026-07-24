@@ -1,4 +1,4 @@
-export type RetrievalMethod = 'dense' | 'lexical'
+export type RetrievalMethod = 'dense' | 'lexical' | 'dependency'
 
 export type RankedCandidate<T> = {
   id: string

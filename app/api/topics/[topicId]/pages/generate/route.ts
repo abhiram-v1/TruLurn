@@ -12,6 +12,7 @@ import {
 } from '@/lib/topic-pages/generateTopicPage'
 import { buildGenerationPointer, firstTeachableDescendant, isContainerTopic, nextRecommendedTeachableTopic } from '@/lib/traccia/sequence'
 import { buildSequenceContextPack } from '@/lib/traccia/sequenceContext'
+import { buildCourseRetrievalScope } from '@/lib/topic-pages/courseContinuity'
 import {
   backfillCourseSourceEmbeddings,
   embedPageById,
@@ -42,6 +43,11 @@ import {
   type LessonQualityRepairRecord,
   type LessonQualityReport,
 } from '@/lib/topic-pages/lessonQuality'
+import {
+  LessonVerificationError,
+  verifyLessonDraft,
+  type LessonVerificationReport,
+} from '@/lib/topic-pages/lessonVerification'
 import {
   buildGenerationAuthority,
   CourseScopeError,
@@ -233,10 +239,19 @@ export async function POST(
 
     const t0 = performance.now()
 
+    const courseRetrievalScope = buildCourseRetrievalScope({
+      topics: allTopics as any,
+      currentTopicId: params.topicId,
+    })
+    const requiredTopicTitles = allTopics
+      .filter((candidate: any) => courseRetrievalScope.requiredTopicIds.includes(String(candidate._id)))
+      .map((candidate: any) => String(candidate.title ?? ''))
+      .filter(Boolean)
     const memoryQuery = [
       course.title ?? course.topic,
       topic.title,
       topic.description ?? topic.summary,
+      requiredTopicTitles.length ? `Prerequisite and prior concepts: ${requiredTopicTitles.join(', ')}` : null,
       `page ${pageNumber}`,
     ].filter(Boolean).join(' | ')
 
@@ -269,7 +284,7 @@ export async function POST(
         courseId,
         userId,
         currentTopicId: params.topicId,
-        pageLimit: 3,
+        pageLimit: 6,
         // Learner questions are useful to the doubt workflow, but they are not
         // authoritative lesson evidence.
         doubtLimit: 0,
@@ -277,6 +292,8 @@ export async function POST(
         // the only permitted content, so retrieve more of them.
         sourceLimit: String(course.mode ?? '') === 'source_grounded' ? 8 : 3,
         workflow: 'lesson_generation',
+        allowedPageTopicIds: courseRetrievalScope.priorTopicIds,
+        requiredPageTopicIds: courseRetrievalScope.requiredTopicIds,
       }),
       getLearnerProfile(db, userId, courseId).catch((error) => {
         console.warn('[pageGen] Learner profile unavailable — generating without personalization.', error)
@@ -541,13 +558,17 @@ export async function POST(
       nextTopicTitle: nextTopicForPage ? String(nextTopicForPage.title) : undefined,
       priorExample,
     }
-    const generateAndVerify = async (qualityRepair?: {
-      report: LessonQualityReport
-      previousDraft: GeneratedTopicPage
-    }) => {
+    const generateAndVerify = async (repairs: {
+      qualityRepair?: {
+        report: LessonQualityReport
+        previousDraft: GeneratedTopicPage
+      }
+      verificationRepair?: LessonVerificationReport
+    } = {}) => {
       let draft = await generateTopicPage({
         ...generationInput,
-        qualityRepair,
+        qualityRepair: repairs.qualityRepair,
+        verificationRepair: repairs.verificationRepair,
       })
       if (
         String(course.mode ?? '') === 'source_grounded'
@@ -616,6 +637,43 @@ export async function POST(
       })
     }
 
+    const verificationRepairHistory: LessonVerificationReport[] = []
+    const verifyDraft = (draft: GeneratedTopicPage) => verifyLessonDraft({
+      page: draft,
+      topic,
+      focus,
+      continuity: sequenceContext.continuity,
+      learningArchitecture,
+      factualContext: [
+        lessonResearch.found ? lessonResearch.context : '',
+        courseSkillLessonContext?.text ?? '',
+        memory.pages.map((page) => [
+          `${page.topic_title}, page ${page.page_number}`,
+          page.summary ?? '',
+          page.content,
+        ].filter(Boolean).join(': ')).join('\n'),
+        sourceEvidence.map((packet) => packet.content).join('\n'),
+      ].filter(Boolean).join('\n\n'),
+    })
+    const ensureSemanticallyVerified = async (draft: GeneratedTopicPage) => {
+      let report = await verifyDraft(draft)
+      let verifiedDraft = draft
+      if (!report.accepted) {
+        verificationRepairHistory.push(report)
+        verifiedDraft = await generateAndVerify({ verificationRepair: report })
+        report = await verifyDraft(verifiedDraft)
+      }
+      const withVerification: GeneratedTopicPage = {
+        ...verifiedDraft,
+        lesson_verification: report,
+        verification_repair_history: [...verificationRepairHistory],
+      }
+      if (!report.accepted) throw new LessonVerificationError(report)
+      return withVerification
+    }
+
+    generated = await ensureSemanticallyVerified(generated)
+
     const t4 = performance.now()
 
     const sourceGrounded = String(course.mode ?? '') === 'source_grounded'
@@ -629,6 +687,7 @@ export async function POST(
       architecture: learningArchitecture,
       sourceGrounded,
       pagePlan: planned,
+      continuity: sequenceContext.continuity,
     })
 
     const MAX_QUALITY_REPAIRS = 2
@@ -641,9 +700,12 @@ export async function POST(
       })
       const previousDraft = generated
       generated = await generateAndVerify({
-        report: lessonQuality,
-        previousDraft,
+        qualityRepair: {
+          report: lessonQuality,
+          previousDraft,
+        },
       })
+      generated = await ensureSemanticallyVerified(generated)
       lessonQuality = evaluateLessonQuality({
         page: generated,
         topic,
@@ -652,6 +714,7 @@ export async function POST(
         architecture: learningArchitecture,
         sourceGrounded,
         pagePlan: planned,
+        continuity: sequenceContext.continuity,
       })
     }
 
@@ -659,6 +722,7 @@ export async function POST(
       ...generated,
       lesson_quality: lessonQuality,
       quality_repair_history: qualityRepairHistory,
+      verification_repair_history: verificationRepairHistory,
     }
 
     if (!lessonQuality.accepted) {
@@ -707,6 +771,9 @@ export async function POST(
       reused_concepts: generated.reused_concepts,
       reminder_concepts: generated.reminder_concepts,
       example_refs: generated.example_refs,
+      concept_connections: generated.concept_connections,
+      hard_stamped_insights: generated.hard_stamped_insights,
+      course_continuity: sequenceContext.continuity,
       learning_architecture: generated.learning_architecture ?? null,
       target_understanding: generated.learning_architecture?.target_understanding ?? null,
       success_criteria: generated.learning_architecture?.success_criteria ?? [],
@@ -716,6 +783,8 @@ export async function POST(
       source_citations: generated.source_citations ?? [],
       grounding: generated.grounding ?? null,
       lesson_quality: generated.lesson_quality ?? null,
+      lesson_verification: generated.lesson_verification ?? null,
+      verification_repair_history: generated.verification_repair_history ?? [],
       quality_repair_history: generated.quality_repair_history ?? [],
       generation_authority: generated.generation_authority ?? null,
       created_at: new Date(),
@@ -734,8 +803,24 @@ export async function POST(
       db.collection('topics').updateOne(
         { _id: params.topicId as any, course_id: courseId },
         {
-          $addToSet: { key_concepts: { $each: generated.key_concepts } },
-          $set: { updated_at: new Date() },
+          $addToSet: {
+            key_concepts: { $each: generated.key_concepts },
+            'teaching_state.covered_concepts': { $each: generated.covered_concepts },
+            'teaching_state.connected_prior_topic_ids': {
+              $each: sequenceContext.continuity.connections
+                .filter((connection) => connection.required_in_explanation)
+                .map((connection) => connection.source_topic_id),
+            },
+            'teaching_state.hard_stamped_insights': { $each: generated.hard_stamped_insights },
+          },
+          $set: {
+            'teaching_state.status': 'generated_and_verified',
+            'teaching_state.last_page_number': generated.page_number,
+            'teaching_state.canonical_terms': sequenceContext.continuity.canonical_terms,
+            'teaching_state.last_verification': generated.lesson_verification ?? null,
+            'teaching_state.updated_at': new Date(),
+            updated_at: new Date(),
+          },
         },
       ),
     ])
@@ -755,12 +840,17 @@ export async function POST(
       quality_dimensions: lessonQuality.dimensions,
       quality_issues: lessonQuality.issues,
       repair_attempts: qualityRepairHistory.length,
+      verification_repair_attempts: verificationRepairHistory.length,
+      verification_scores: generated.lesson_verification?.scores ?? null,
+      verification_issues: generated.lesson_verification?.issues ?? [],
       created_at: new Date(),
     })
     if (
       generated.reused_concepts.length
       || generated.reminder_concepts.length
       || generated.example_refs.length
+      || generated.concept_connections.length
+      || generated.hard_stamped_insights.length
     ) {
       await db.collection('learningEvents').insertOne({
         _id: crypto.randomUUID() as any,
@@ -774,6 +864,9 @@ export async function POST(
         reused_concepts: generated.reused_concepts,
         reminder_concepts: generated.reminder_concepts,
         example_refs: generated.example_refs,
+        concept_connections: generated.concept_connections,
+        hard_stamped_insights: generated.hard_stamped_insights,
+        course_continuity: sequenceContext.continuity,
         created_at: new Date(),
       })
     }
@@ -872,6 +965,7 @@ export async function POST(
       ? 401
       : error instanceof SourceGroundingError
         || error instanceof LessonQualityError
+        || error instanceof LessonVerificationError
         || error instanceof CourseScopeError
         ? 422
         : 500
@@ -880,6 +974,9 @@ export async function POST(
       error: message,
       ...(error instanceof LessonQualityError
         ? { code: error.code, lessonQuality: error.report }
+        : {}),
+      ...(error instanceof LessonVerificationError
+        ? { code: error.code, lessonVerification: error.report }
         : {}),
       ...(error instanceof CourseScopeError
         ? { code: error.code, generationAuthority: error.contract }

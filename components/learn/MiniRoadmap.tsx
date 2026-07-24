@@ -1,46 +1,10 @@
 'use client'
 
-import {
-  IconArrowRight,
-  IconBook2,
-  IconBrain,
-  IconBinaryTree,
-  IconCheck,
-  IconChevronDown,
-  IconChevronRight,
-  IconChevronUp,
-  IconChartDots3,
-  IconCompass,
-  IconLayoutSidebarLeftCollapse,
-  IconLayoutSidebarLeftExpand,
-  IconFlag3,
-  IconLock,
-  IconMap2,
-  IconNetwork,
-  IconRoute,
-  IconTags,
-  IconTopologyStar3,
-  IconTrash,
-} from '@tabler/icons-react'
-import type { Icon } from '@tabler/icons-react'
 import Link from 'next/link'
-import type { CSSProperties } from 'react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { Topic } from '@/types'
 import type { LessonConceptNavPage } from '@/components/learn/LessonConceptNavigator'
-
-// Rotating set of geometric glyphs for section medallions — same pool used by
-// the Atlas branch nodes, so the two curriculum views read as one system.
-const SECTION_GLYPHS: Icon[] = [
-  IconCompass,
-  IconRoute,
-  IconBinaryTree,
-  IconNetwork,
-  IconBrain,
-  IconChartDots3,
-  IconTopologyStar3,
-]
 
 type TaggedReminder = {
   id: string
@@ -56,39 +20,18 @@ type TaggedReminder = {
   taggedAt: string
 }
 
+const COMPLETE_STATES = new Set(['mastered', 'functional', 'done'])
+
 function isContainer(topic: Topic) {
   return topic.node_type === 'container' || Number(topic.children_count ?? 0) > 0
 }
-
-function topicIsCurrentPath(topic: Topic, currentTopicId: string) {
-  return topic.id === currentTopicId || (topic.path_ids ?? []).includes(currentTopicId)
-}
-
-// States that count as "behind you" for progress purposes.
-const COMPLETE_STATES = new Set(['mastered', 'functional', 'done'])
 
 function isComplete(topic: Topic) {
   return COMPLETE_STATES.has(String(topic.state))
 }
 
-// Status marker strung on the thread: green check (done), pulsing accent
-// (current), outlined accent core (available), lock (locked).
-function TopicMarker({ state }: { state: string }) {
-  if (state === 'done') {
-    return <span className="tk-mk tk-mk--done" aria-hidden="true"><IconCheck size={11} stroke={2.6} /></span>
-  }
-  if (state === 'current') {
-    return (
-      <span className="tk-mk tk-mk--current" aria-hidden="true">
-        <span className="tk-mk-pulse" />
-        <span className="tk-mk-core" />
-      </span>
-    )
-  }
-  if (state === 'available') {
-    return <span className="tk-mk tk-mk--avail" aria-hidden="true"><span className="tk-mk-core" /></span>
-  }
-  return <span className="tk-mk tk-mk--locked" aria-hidden="true"><IconLock size={9} stroke={2} /></span>
+function topicIsCurrentPath(topic: Topic, currentTopicId: string) {
+  return topic.id === currentTopicId || (topic.path_ids ?? []).includes(currentTopicId)
 }
 
 function sortTopics(topics: Topic[]) {
@@ -96,7 +39,6 @@ function sortTopics(topics: Topic[]) {
     const aSeq = Number.isFinite(Number(a.sequence_index)) ? Number(a.sequence_index) : Number.MAX_SAFE_INTEGER
     const bSeq = Number.isFinite(Number(b.sequence_index)) ? Number(b.sequence_index) : Number.MAX_SAFE_INTEGER
     if (aSeq !== bSeq) return aSeq - bSeq
-
     return Number(a.position ?? 0) - Number(b.position ?? 0)
   })
 }
@@ -105,11 +47,16 @@ function initialExpandedTopics(topics: Topic[], currentTopicId: string) {
   const current = topics.find((topic) => topic.id === currentTopicId)
   const ids = new Set<string>()
   if (!current) return ids
-
-  const parentIds = (current.path_ids ?? []).filter((id) => id !== currentTopicId)
-  parentIds.forEach((id) => ids.add(id))
+  for (const id of (current.path_ids ?? []).filter((pathId) => pathId !== currentTopicId)) ids.add(id)
   if (isContainer(current)) ids.add(current.id)
   return ids
+}
+
+function topicStatus(topic: Topic, current: boolean) {
+  if (current) return 'reading'
+  if (isComplete(topic)) return 'done'
+  if (topic.state === 'locked') return 'locked'
+  return 'next'
 }
 
 export function MiniRoadmap({
@@ -129,37 +76,37 @@ export function MiniRoadmap({
   courseTitle?: string
   collapsed?: boolean
   onToggle?: () => void
-  /** Page the learner is reading inside the current topic (1-based). */
   currentPageNumber?: number
-  /** Planned page count of the current topic. */
   totalPlannedPages?: number
-  /** Per-page concepts for the current topic — powers the "in this topic" page list. */
   conceptPages?: LessonConceptNavPage[]
 }) {
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(
     () => initialExpandedTopics(topics, currentTopicId),
   )
-  // Sections start collapsed except the one the learner is inside — the rail
-  // stays scannable while everything else remains one click away.
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
     const current = topics.find((topic) => topic.id === currentTopicId)
-    const fallback = topics[0]?.section
-    const initial = current?.section ?? fallback
+    const initial = current?.section ?? topics[0]?.section
     return new Set(initial ? [initial] : [])
   })
   const [panelView, setPanelView] = useState<'map' | 'tagged'>('map')
   const [taggedReminders, setTaggedReminders] = useState<TaggedReminder[]>([])
-  const [tagsLoading, setTagsLoading] = useState(true)
+  const [tagsLoading, setTagsLoading] = useState(false)
   const [tagsError, setTagsError] = useState<string | null>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
   const router = useRouter()
+
   const sections = Array.from(new Set(topics.map((topic) => topic.section)))
   const currentTopic = topics.find((topic) => topic.id === currentTopicId)
-  const visibleRailTopics = topics.slice(0, 12)
+  const teachable = sortTopics(topics.filter((topic) => !isContainer(topic)))
+  const completedCount = teachable.filter(isComplete).length
+  const progressPct = teachable.length ? Math.round((completedCount / teachable.length) * 100) : 0
+  const currentIndex = teachable.findIndex((topic) => topic.id === currentTopicId)
+  const nextTopic = currentIndex >= 0 ? teachable[currentIndex + 1] ?? null : null
+  const visibleRailTopics = teachable.slice(0, 12)
+
   const hasRecursiveTraccia = topics.some((topic) =>
     Boolean(topic.parent_id || topic.node_type || topic.children_count || topic.path_ids?.length),
   )
-
   const topicById = new Map(topics.map((topic) => [topic.id, topic]))
   const childrenByParent = new Map<string, Topic[]>()
   for (const topic of topics) {
@@ -172,20 +119,13 @@ export function MiniRoadmap({
     childrenByParent.set(parentId, sortTopics(children))
   }
 
-  // ── Journey context: progress + what comes after the current topic ──
-  const teachable = sortTopics(topics.filter((topic) => !isContainer(topic)))
-  const completedCount = teachable.filter(isComplete).length
-  const progressPct = teachable.length ? Math.round((completedCount / teachable.length) * 100) : 0
-  const currentIndex = teachable.findIndex((topic) => topic.id === currentTopicId)
-  const nextTopic = currentIndex >= 0 ? teachable[currentIndex + 1] ?? null : null
-
   const loadTaggedReminders = useCallback(async () => {
     setTagsLoading(true)
     setTagsError(null)
     try {
-      const res = await fetch(`/api/recall/tags?courseId=${encodeURIComponent(courseId)}`)
-      const data = await res.json()
-      if (!res.ok) {
+      const response = await fetch(`/api/recall/tags?courseId=${encodeURIComponent(courseId)}`)
+      const data = await response.json()
+      if (!response.ok) {
         setTagsError(typeof data.error === 'string' ? data.error : 'Could not load tagged reminders.')
         return
       }
@@ -197,13 +137,6 @@ export function MiniRoadmap({
     }
   }, [courseId])
 
-  // Prefetch the reminder list so switching views feels immediate.
-  useEffect(() => {
-    void loadTaggedReminders()
-  }, [loadTaggedReminders])
-
-  // Tagging happens inside the recall overlay; update Traccia without waiting
-  // for another network read.
   useEffect(() => {
     function handleTagged(event: Event) {
       const reminder = (event as CustomEvent<TaggedReminder>).detail
@@ -217,32 +150,24 @@ export function MiniRoadmap({
     return () => window.removeEventListener('trulurn:tagged-reminder', handleTagged)
   }, [courseId])
 
-  // Keep the current topic visible — the list can hold dozens of topics.
   useEffect(() => {
     if (collapsed) return
     currentRowRef.current?.scrollIntoView({ block: 'center' })
   }, [currentTopicId, collapsed])
 
-  // Prefetch the next and previous adjacent topics so clicking them is instant.
   useEffect(() => {
     if (!nextTopic) return
-    const prefetchHref = `/learn/${courseId}/${encodeURIComponent(nextTopic.id)}`
-    const run = () => { router.prefetch(prefetchHref) }
-    if (typeof requestIdleCallback !== 'undefined') {
-      requestIdleCallback(run, { timeout: 3000 })
-    } else {
-      setTimeout(run, 500)
-    }
+    const href = `/learn/${courseId}/${encodeURIComponent(nextTopic.id)}`
+    const run = () => { router.prefetch(href) }
+    if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(run, { timeout: 3000 })
+    else setTimeout(run, 500)
   }, [nextTopic, courseId, router])
 
   function toggleTopic(topicId: string) {
     setExpandedTopicIds((current) => {
       const next = new Set(current)
-      if (next.has(topicId)) {
-        next.delete(topicId)
-      } else {
-        next.add(topicId)
-      }
+      if (next.has(topicId)) next.delete(topicId)
+      else next.add(topicId)
       return next
     })
   }
@@ -250,53 +175,44 @@ export function MiniRoadmap({
   function toggleSection(section: string) {
     setOpenSections((current) => {
       const next = new Set(current)
-      if (next.has(section)) {
-        next.delete(section)
-      } else {
-        next.add(section)
-      }
+      if (next.has(section)) next.delete(section)
+      else next.add(section)
       return next
     })
   }
 
-  // Page progress shown under the current topic row ("Page 3 of 7") when
-  // there is no per-page list to render instead.
-  function currentPageProgress() {
-    if (!currentPageNumber || !totalPlannedPages || totalPlannedPages < 1) return null
-    const pct = Math.min(100, Math.round((currentPageNumber / totalPlannedPages) * 100))
-    return (
-      <div className="topic-page-progress" aria-label={`Page ${currentPageNumber} of ${totalPlannedPages}`}>
-        <span className="tpp-bar"><span style={{ width: `${pct}%` }} /></span>
-        <span className="tpp-text">Page {currentPageNumber} of {totalPlannedPages}</span>
-      </div>
-    )
+  function openPanelView(view: 'map' | 'tagged') {
+    setPanelView(view)
+    if (view === 'tagged' && !taggedReminders.length && !tagsLoading) void loadTaggedReminders()
   }
 
-  // "In this topic" page list — shown under the current topic, mirrors the
-  // per-page concept nav that already lives in the lesson panel.
   function renderCurrentTopicPages(topic: Topic) {
-    if (!conceptPages || !conceptPages.length) return null
+    if (!conceptPages?.length) {
+      if (!currentPageNumber || !totalPlannedPages) return null
+      return (
+        <div className="traccia-explorer-page-summary">
+          Page {currentPageNumber} of {totalPlannedPages}
+        </div>
+      )
+    }
+
     const active = currentPageNumber ?? 1
     return (
-      <div className="traccia-pages-panel" aria-label={`Pages in ${topic.title}`}>
-        <div className="traccia-pages-head">
-          <span>In this topic</span>
-          <span className="traccia-pages-count">Page {active} / {conceptPages.length}</span>
-        </div>
-        {conceptPages.map((pg) => {
-          const state = pg.page_number < active ? 'done' : pg.page_number === active ? 'current' : 'todo'
-          const label = pg.concepts?.[0] || pg.summary || `Page ${pg.page_number}`
+      <div className="traccia-explorer-pages" aria-label={`Pages in ${topic.title}`}>
+        {conceptPages.map((page) => {
+          const state = page.page_number < active ? 'done' : page.page_number === active ? 'reading' : 'next'
+          const label = page.concepts?.[0] || page.summary || `Page ${page.page_number}`
           return (
             <Link
-              key={pg.id}
-              className={`traccia-page-row is-${state}`}
-              href={`/learn/${courseId}/${topic.id}?page=${pg.page_number}`}
+              key={page.id}
+              className={`traccia-explorer-page is-${state}`}
+              href={`/learn/${courseId}/${topic.id}?page=${page.page_number}`}
               prefetch={false}
+              aria-current={state === 'reading' ? 'page' : undefined}
             >
-              <span className="traccia-page-pip">
-                {state === 'done' ? <IconCheck size={9} stroke={3} /> : pg.page_number}
-              </span>
-              <span className="traccia-page-name">{label}</span>
+              <span className="traccia-explorer-index">{String(page.page_number).padStart(2, '0')}</span>
+              <span className="traccia-explorer-row-title">{label}</span>
+              <span className="traccia-explorer-status">{state}</span>
             </Link>
           )
         })}
@@ -310,61 +226,36 @@ export function MiniRoadmap({
     const container = isContainer(topic)
     const expanded = expandedTopicIds.has(topic.id)
     const children = childrenByParent.get(topic.id) ?? []
-    const markerState = current ? 'current'
-      : isComplete(topic) ? 'done'
-      : topic.state === 'active' ? 'available'
-      : 'locked'
 
     if (container) {
       const locked = topic.state === 'locked'
-      // Progress through this lesson: all teachable descendants, not just
-      // direct children (containers can nest).
       const descendants = topics.filter(
-        (t) => !isContainer(t) && (t.path_ids ?? []).includes(topic.id),
+        (candidate) => !isContainer(candidate) && (candidate.path_ids ?? []).includes(topic.id),
       )
       const teachableChildren = descendants.length
         ? descendants
         : children.filter((child) => !isContainer(child))
       const doneCount = teachableChildren.filter(isComplete).length
       const total = teachableChildren.length
-      const containsCurrent = teachableChildren.some((t) => t.id === currentTopicId)
-      const done = total > 0 && doneCount === total
-      const lit = total ? Math.min(1, (doneCount + (containsCurrent ? 0.5 : 0)) / total) : 0
+
       return (
         <div
-          className={`traccia-lesson level-${Math.min(level, 2)} ${currentPath ? 'is-current-path' : ''} ${locked ? 'is-locked' : ''}`}
+          className={`traccia-explorer-group level-${Math.min(level, 2)} ${currentPath ? 'is-current-path' : ''} ${locked ? 'is-locked' : ''}`}
           key={topic.id}
         >
           <button
-            aria-expanded={expanded}
-            className="traccia-lesson-head"
+            aria-expanded={locked ? undefined : expanded}
+            className="traccia-explorer-group-row"
             disabled={locked}
             onClick={() => toggleTopic(topic.id)}
             type="button"
           >
-            <span className={`traccia-lesson-node ${currentPath ? 'active' : ''} ${done ? 'done' : ''}`} aria-hidden="true" />
-            <span className="traccia-lesson-copy">
-              <span className="traccia-lesson-title">{topic.title}</span>
-              {total ? (
-                <span className="traccia-lesson-sub">
-                  <span className="traccia-lesson-frac">{doneCount}/{total}</span>
-                  <span className="traccia-lesson-minibar" aria-hidden="true">
-                    <i style={{ width: `${lit * 100}%` }} />
-                  </span>
-                </span>
-              ) : null}
-            </span>
-            {locked ? (
-              <IconLock className="traccia-lesson-lock" aria-label="Locked" size={13} stroke={1.8} />
-            ) : expanded ? (
-              <IconChevronDown className="traccia-lesson-chevron" aria-hidden="true" size={15} stroke={1.8} />
-            ) : (
-              <IconChevronRight className="traccia-lesson-chevron" aria-hidden="true" size={15} stroke={1.8} />
-            )}
+            <span className="traccia-explorer-row-title">{topic.title}</span>
+            <span className="traccia-explorer-fraction">{total ? `${doneCount}/${total}` : ''}</span>
+            {locked ? <span className="traccia-explorer-status">locked</span> : null}
           </button>
           {expanded && children.length ? (
-            <div className="traccia-topic-thread" style={{ '--lit': lit } as CSSProperties}>
-              <span className="traccia-topics-lit" aria-hidden="true" />
+            <div className="traccia-explorer-children">
               {children.map((child) => renderTopicRow(child, level + 1))}
             </div>
           ) : null}
@@ -372,35 +263,29 @@ export function MiniRoadmap({
       )
     }
 
-    const row = (
+    const status = topicStatus(topic, current)
+    const content = (
       <>
-        <TopicMarker state={markerState} />
-        <span className="traccia-topic-copy">
-          <span className="traccia-topic-title">{topic.title}</span>
-          {current ? (
-            <span className="tk-here">
-              <IconBook2 size={11} stroke={1.9} aria-hidden="true" /> Reading now
-            </span>
-          ) : null}
-          {current && !(conceptPages && conceptPages.length) ? currentPageProgress() : null}
-        </span>
+        <span className="traccia-explorer-row-title">{topic.title}</span>
+        <span className="traccia-explorer-status">{status}</span>
       </>
     )
 
     return (
       <Fragment key={topic.id}>
         <div
-          className={`traccia-topic-row level-${Math.min(level, 2)} ${current ? 'is-current' : ''} ${isComplete(topic) ? 'is-done' : ''} ${topic.state === 'locked' ? 'is-locked' : ''}`}
+          className={`traccia-explorer-topic level-${Math.min(level, 2)} is-${status}`}
           ref={current ? currentRowRef : undefined}
         >
           {topic.state === 'locked' ? (
-            <div className="traccia-topic-link" aria-disabled="true">{row}</div>
+            <div className="traccia-explorer-topic-row" aria-disabled="true">{content}</div>
           ) : (
             <Link
-              className="traccia-topic-link"
+              className="traccia-explorer-topic-row"
               href={`/learn/${courseId}/${topic.id}`}
+              aria-current={current ? 'page' : undefined}
             >
-              {row}
+              {content}
             </Link>
           )}
         </div>
@@ -409,26 +294,15 @@ export function MiniRoadmap({
     )
   }
 
-  function sectionProgress(section: string) {
-    const inSection = teachable.filter((topic) => topic.section === section)
-    if (!inSection.length) return null
-    const done = inSection.filter(isComplete).length
-    return (
-      <span className="roadmap-section-count">
-        {done}/{inSection.length}
-      </span>
-    )
-  }
-
   async function removeTaggedReminder(reminderId: string) {
     const previous = taggedReminders
     setTaggedReminders((current) => current.filter((reminder) => reminder.id !== reminderId))
     try {
-      const res = await fetch(
+      const response = await fetch(
         `/api/recall/tags?courseId=${encodeURIComponent(courseId)}&reminderId=${encodeURIComponent(reminderId)}`,
         { method: 'DELETE' },
       )
-      if (!res.ok) setTaggedReminders(previous)
+      if (!response.ok) setTaggedReminders(previous)
     } catch {
       setTaggedReminders(previous)
     }
@@ -436,236 +310,157 @@ export function MiniRoadmap({
 
   function renderTaggedReminders() {
     return (
-      <div className="tagged-reminders-view">
-        <div className="tagged-reminders-intro">
-          <strong>Return to what felt uncertain</strong>
-          <span>Each reminder opens the exact lesson that prompted it.</span>
+      <div className="traccia-explorer-reminders">
+        <div className="traccia-explorer-reminder-intro">
+          <strong>Tagged reminders</strong>
+          <span>Return to the lesson that prompted each note.</span>
         </div>
-
         {tagsLoading ? (
-          <div className="tagged-reminders-state" role="status">Loading reminders...</div>
+          <div className="traccia-explorer-empty" role="status">Loading reminders...</div>
         ) : tagsError ? (
-          <div className="tagged-reminders-state is-error" role="alert">
+          <div className="traccia-explorer-empty is-error" role="alert">
             <span>{tagsError}</span>
             <button type="button" onClick={() => void loadTaggedReminders()}>Retry</button>
           </div>
         ) : taggedReminders.length ? (
-          <div className="tagged-reminders-list">
+          <div className="traccia-explorer-reminder-list">
             {taggedReminders.map((reminder) => {
               const href = `/learn/${courseId}/${reminder.topicId}${reminder.pageNumber ? `?page=${reminder.pageNumber}` : ''}`
               return (
-                <div className="tagged-reminder-row" key={reminder.id}>
-                  <Link className="tagged-reminder-link" href={href} prefetch>
-                    <span className="tagged-reminder-concept">
-                      <IconTags aria-hidden="true" size={13} stroke={1.8} />
-                      {reminder.concept || reminder.topicTitle}
-                    </span>
-                    <span className="tagged-reminder-prompt">{reminder.prompt}</span>
-                    <span className="tagged-reminder-source">
-                      {reminder.topicTitle}
-                      {reminder.pageNumber ? ` · Page ${reminder.pageNumber}` : ''}
-                      <IconArrowRight aria-hidden="true" size={13} stroke={2} />
-                    </span>
+                <div className="traccia-explorer-reminder" key={reminder.id}>
+                  <Link href={href} prefetch>
+                    <strong>{reminder.concept || reminder.topicTitle}</strong>
+                    <span>{reminder.prompt}</span>
+                    <small>{reminder.topicTitle}{reminder.pageNumber ? ` · Page ${reminder.pageNumber}` : ''}</small>
                   </Link>
-                  <button
-                    className="tagged-reminder-remove"
-                    type="button"
-                    aria-label={`Remove reminder for ${reminder.concept || reminder.topicTitle}`}
-                    title="Remove tagged reminder"
-                    onClick={() => void removeTaggedReminder(reminder.id)}
-                  >
-                    <IconTrash aria-hidden="true" size={14} stroke={1.7} />
+                  <button type="button" onClick={() => void removeTaggedReminder(reminder.id)}>
+                    Remove
                   </button>
                 </div>
               )
             })}
           </div>
         ) : (
-          <div className="tagged-reminders-state">
-            <IconTags aria-hidden="true" size={22} stroke={1.5} />
-            <strong>No tagged reminders yet</strong>
-            <span>Tag a recall prompt when you want to revisit its source later.</span>
+          <div className="traccia-explorer-empty">
+            <strong>No tagged reminders</strong>
+            <span>Tag a recall prompt and it will appear here.</span>
           </div>
         )}
       </div>
     )
   }
 
-  return (
-    <>
-      <div className="roadmap-header">
-        {!collapsed ? (
-          <div className="traccia-heading">
-            <p className="panel-label">{panelView === 'map' ? 'Traccia' : 'Tagged reminders'}</p>
-            {panelView === 'map' ? (
-              <span className="traccia-heading-note">{courseTitle || 'Course path'}</span>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="roadmap-header-actions">
-          {!collapsed ? (
-            <button
-              className="panel-toggle roadmap-view-toggle"
-              type="button"
-              onClick={() => setPanelView((view) => view === 'map' ? 'tagged' : 'map')}
-              aria-label={panelView === 'map' ? 'Show tagged reminders' : 'Show Traccia map'}
-              title={panelView === 'map' ? 'Show tagged reminders' : 'Show Traccia map'}
-              aria-pressed={panelView === 'tagged'}
-            >
-              {panelView === 'map' ? (
-                <IconTags aria-hidden="true" size={17} stroke={1.8} />
-              ) : (
-                <IconMap2 aria-hidden="true" size={17} stroke={1.8} />
-              )}
-            </button>
-          ) : null}
-          <button
-            className="panel-toggle roadmap-toggle"
-            type="button"
-            onClick={onToggle}
-            aria-label={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
-            title={collapsed ? 'Expand Traccia' : 'Collapse Traccia'}
-          >
-            {collapsed ? (
-              <IconLayoutSidebarLeftExpand aria-hidden="true" size={18} stroke={1.8} />
+  if (collapsed) {
+    return (
+      <div className="traccia-collapsed">
+        <button className="traccia-collapsed-open" type="button" onClick={onToggle} aria-label="Expand Traccia">
+          Open
+        </button>
+        <nav className="traccia-collapsed-list" aria-label="Collapsed Traccia topics">
+          {visibleRailTopics.map((topic, index) => {
+            const current = topic.id === currentTopicId
+            return topic.state === 'locked' ? (
+              <span className="traccia-collapsed-item is-locked" key={topic.id} title={`${topic.title} — locked`}>
+                {String(index + 1).padStart(2, '0')}
+              </span>
             ) : (
-              <IconLayoutSidebarLeftCollapse aria-hidden="true" size={18} stroke={1.8} />
-            )}
-          </button>
-        </div>
+              <Link
+                className={`traccia-collapsed-item ${current ? 'is-current' : ''}`}
+                href={`/learn/${courseId}/${topic.id}`}
+                key={topic.id}
+                title={topic.title}
+                aria-current={current ? 'page' : undefined}
+              >
+                {String(index + 1).padStart(2, '0')}
+              </Link>
+            )
+          })}
+        </nav>
       </div>
+    )
+  }
 
-      {collapsed ? (
-        <>
-          <div className="roadmap-rail" aria-label="Collapsed Traccia">
-            {visibleRailTopics.map((topic) => {
-              const current = topic.id === currentTopicId
-              const dotState = current ? 'active' : topic.state
+  return (
+    <div className="traccia-explorer">
+      <header className="traccia-explorer-header">
+        <div className="traccia-explorer-heading">
+          <p>Traccia</p>
+          <span>{courseTitle || 'Course path'}</span>
+        </div>
+        <div className="traccia-explorer-actions">
+          <button
+            type="button"
+            onClick={() => openPanelView(panelView === 'map' ? 'tagged' : 'map')}
+            aria-pressed={panelView === 'tagged'}
+          >
+            {panelView === 'map' ? 'Reminders' : 'Course'}
+          </button>
+          <button type="button" onClick={onToggle} aria-label="Collapse Traccia">Hide</button>
+        </div>
+      </header>
 
-              return (
-                <Link
-                  className={`roadmap-rail-dot ${current ? 'current' : ''}`}
-                  href={`/learn/${courseId}/${topic.id}`}
-                  key={topic.id}
-                  title={topic.title}
-                >
-                  <span className={`state-dot ${dotState}`} />
-                </Link>
-              )
-            })}
-          </div>
-        </>
-      ) : panelView === 'tagged' ? (
-        renderTaggedReminders()
-      ) : (
+      {panelView === 'tagged' ? renderTaggedReminders() : (
         <>
-          {/* Course progress — always visible above the list */}
-          <div className="roadmap-progress" aria-label={`${completedCount} of ${teachable.length} topics completed`}>
-            <div className="roadmap-progress-bar">
-              <span style={{ width: `${progressPct}%` }} />
-            </div>
-            <span className="roadmap-progress-text"><b>{completedCount}</b> of {teachable.length} topics</span>
-            <span className="roadmap-progress-pct">{progressPct}%</span>
+          <div className="traccia-explorer-progress" aria-label={`${completedCount} of ${teachable.length} topics completed`}>
+            <span><strong>{completedCount}</strong> of {teachable.length} topics</span>
+            <span>{progressPct}%</span>
           </div>
 
-          <div className="roadmap-scroll">
+          <nav className="traccia-explorer-scroll" aria-label="Course outline">
             {sections.map((section, sectionIndex) => {
               const sectionTopics = teachable.filter((topic) => topic.section === section)
+              const doneCount = sectionTopics.filter(isComplete).length
               const isCurrentSection = currentTopic?.section === section
-              const isLockedSection = sectionTopics.length > 0
-                && sectionTopics.every((topic) => topic.state === 'locked')
-              const isDoneSection = !isCurrentSection && sectionTopics.length > 0
-                && sectionTopics.every(isComplete)
-              const sectionDoneCount = sectionTopics.filter(isComplete).length
-              const sectionLit = sectionTopics.length
-                ? Math.min(1, (sectionDoneCount + (isCurrentSection ? 0.5 : 0)) / sectionTopics.length)
-                : 0
-              const sectionLabelId = `traccia-section-${sectionIndex}`
-              const Glyph = SECTION_GLYPHS[sectionIndex % SECTION_GLYPHS.length]
+              const isLockedSection = sectionTopics.length > 0 && sectionTopics.every((topic) => topic.state === 'locked')
+              const isDoneSection = !isCurrentSection && sectionTopics.length > 0 && sectionTopics.every(isComplete)
               const sectionOpen = openSections.has(section)
+              const sectionLabelId = `traccia-section-${sectionIndex}`
 
               return (
                 <section
-                  aria-labelledby={sectionLabelId}
-                  className={`traccia-section ${isCurrentSection ? 'section-current' : ''} ${isLockedSection ? 'section-locked' : ''} ${isDoneSection ? 'section-done' : ''}`}
+                  className={`traccia-explorer-section ${isCurrentSection ? 'is-current' : ''} ${isLockedSection ? 'is-locked' : ''} ${isDoneSection ? 'is-done' : ''}`}
                   key={section}
+                  aria-labelledby={sectionLabelId}
                 >
                   <button
                     aria-expanded={sectionOpen}
-                    className="traccia-section-head"
+                    className="traccia-explorer-section-row"
                     id={sectionLabelId}
                     onClick={() => toggleSection(section)}
                     type="button"
                   >
-                    <span className="traccia-section-marker" aria-hidden="true">
-                      <Glyph size={16} stroke={1.7} />
-                      {isDoneSection ? (
-                        <span className="traccia-section-badge"><IconCheck size={9} stroke={3} /></span>
-                      ) : isLockedSection ? (
-                        <span className="traccia-section-badge is-locked"><IconLock size={8} stroke={2.2} /></span>
-                      ) : null}
-                    </span>
-                    <span className="traccia-section-copy">
-                      <span className="traccia-section-name">{section}</span>
-                      <span className="traccia-section-meta">
-                        {sectionProgress(section)}
-                        {isCurrentSection ? <span className="traccia-section-here">You are here</span> : null}
-                      </span>
-                    </span>
-                    {sectionOpen ? (
-                      <IconChevronUp className="traccia-section-chevron" aria-hidden="true" size={16} stroke={1.8} />
-                    ) : (
-                      <IconChevronDown className="traccia-section-chevron" aria-hidden="true" size={16} stroke={1.8} />
-                    )}
+                    <span className="traccia-explorer-index">{String(sectionIndex + 1).padStart(2, '0')}</span>
+                    <span className="traccia-explorer-section-title">{section}</span>
+                    <span className="traccia-explorer-fraction">{doneCount}/{sectionTopics.length}</span>
                   </button>
+
                   {sectionOpen ? (
-                    <div className="traccia-section-thread" style={{ '--lit': sectionLit } as CSSProperties}>
-                      {hasRecursiveTraccia ? (
-                        sortTopics(topics.filter((topic) => {
-                          if (topic.section !== section) return false
-                          return !topic.parent_id || !topicById.has(topic.parent_id)
-                        })).map((topic) => renderTopicRow(topic))
-                      ) : (
-                        sortTopics(topics.filter((topic) => topic.section === section))
-                          .map((topic) => renderTopicRow(topic))
-                      )}
-                    </div>
-                  ) : null}
-                  {sectionOpen && sectionIndex === sections.length - 1 ? (
-                    <div className="traccia-route-destination" aria-hidden="true">
-                      <IconFlag3 size={15} stroke={1.8} />
+                    <div className="traccia-explorer-section-content">
+                      {(hasRecursiveTraccia
+                        ? sortTopics(topics.filter((topic) => {
+                            if (topic.section !== section) return false
+                            return !topic.parent_id || !topicById.has(topic.parent_id)
+                          }))
+                        : sortTopics(topics.filter((topic) => topic.section === section))
+                      ).map((topic) => renderTopicRow(topic))}
                     </div>
                   ) : null}
                 </section>
               )
             })}
-          </div>
+          </nav>
 
-          {/* Journey footer — what comes after this topic */}
-          <div className="roadmap-footer-stack">
+          <footer className="traccia-explorer-footer">
             {nextTopic ? (
-              <Link className="roadmap-next" href={`/learn/${courseId}/${nextTopic.id}`}>
-                <span className="roadmap-next-icon-shell" aria-hidden="true">
-                  <IconBook2 size={16} stroke={1.8} />
-                </span>
-                <span className="roadmap-next-copy">
-                  <span className="roadmap-next-label">Up next</span>
-                  <span className="roadmap-next-title">{nextTopic.title}</span>
-                </span>
-                <IconArrowRight size={15} stroke={2} className="roadmap-next-arrow" aria-hidden="true" />
+              <Link className="traccia-explorer-next" href={`/learn/${courseId}/${nextTopic.id}`}>
+                <span>Up next</span>
+                <strong>{nextTopic.title}</strong>
               </Link>
-            ) : currentIndex >= 0 ? (
-              <div className="roadmap-next is-locked">
-                <span className="roadmap-next-label">Up next</span>
-                <span className="roadmap-next-title">Final topic — you&apos;re at the end of the path</span>
-              </div>
             ) : null}
-            <Link className="roadmap-graph-link" href={`/graph/${courseId}`}>
-              <IconTopologyStar3 size={13} stroke={1.8} /> Open knowledge graph
-            </Link>
-          </div>
+            <Link className="traccia-explorer-graph" href={`/graph/${courseId}`}>Knowledge graph</Link>
+          </footer>
         </>
       )}
-    </>
+    </div>
   )
 }

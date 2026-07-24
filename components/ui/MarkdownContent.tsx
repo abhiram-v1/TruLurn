@@ -26,11 +26,13 @@ import rust from 'react-syntax-highlighter/dist/esm/languages/prism/rust'
 import go from 'react-syntax-highlighter/dist/esm/languages/prism/go'
 import {
   IconBook2,
+  IconCode,
   IconFlask,
-  IconSparkles,
+  IconLock,
 } from '@tabler/icons-react'
 import { TruViz } from '@/components/trueviz/TruViz'
 import { LessonImage } from '@/components/ui/LessonImage'
+import { classifyLessonCalloutLabel, type LessonCalloutType } from '@/lib/lesson-cards'
 import { repairMathFences } from '@/lib/lesson-markdown'
 
 SyntaxHighlighter.registerLanguage('python', python)
@@ -134,12 +136,23 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
   const displayLang = language || 'text'
 
   return (
-    <div className="md-code-block">
+    <div className="md-code-block" data-lesson-card="code">
       <div className="md-code-header">
-        <span className="md-code-lang">{displayLang}</span>
-        <button className="md-code-copy" onClick={handleCopy} type="button">
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
+        <span className="md-code-heading">
+          <IconCode aria-hidden="true" size={16} stroke={1.8} />
+          <span className="md-code-title">Code</span>
+        </span>
+        <span className="md-code-meta">
+          <span className="md-code-lang">{displayLang}</span>
+          <button
+            aria-label={copied ? 'Code copied' : 'Copy code'}
+            className="md-code-copy"
+            onClick={handleCopy}
+            type="button"
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </span>
       </div>
       <div className="md-code-body">
         <SyntaxHighlighter
@@ -156,29 +169,31 @@ function CodeBlock({ language, value }: { language: string; value: string }) {
 }
 
 // ── Inline callout cards ──────────────────────────────────────────────────────
-// Renders > **Definition:** / > **Example:** / > **Key insight:** blockquotes
-// as styled cards with icons. Applied consistently everywhere md-content is used.
-
-type CalloutType = 'definition' | 'example' | 'insight'
-
-const CALLOUT_ICON: Record<CalloutType, React.ReactNode> = {
+// New lessons use exactly Definition, Example, and Lock this in. The classifier
+// also maps legacy stored labels into this same visual system so old UI does not
+// leak back into the page.
+const CALLOUT_ICON: Record<LessonCalloutType, React.ReactNode> = {
   definition: <IconBook2 size={15} stroke={1.8} aria-hidden="true" />,
   example:    <IconFlask size={15} stroke={1.8} aria-hidden="true" />,
-  insight:    <IconSparkles size={15} stroke={1.8} aria-hidden="true" />,
+  insight:    <IconLock size={15} stroke={1.8} aria-hidden="true" />,
 }
 
-function CalloutCard({ type, children }: { type: CalloutType; children: React.ReactNode }) {
+function CalloutCard({ type, children }: { type: LessonCalloutType; children: React.ReactNode }) {
   return (
-    <div className={`md-callout md-callout-${type}`}>
+    <aside
+      aria-label={type === 'insight' ? 'Lock this in' : type}
+      className={`md-callout md-callout-${type}`}
+      data-lesson-card={type}
+    >
       <span className="md-callout-icon">{CALLOUT_ICON[type]}</span>
       <div className="md-callout-body">{children}</div>
-    </div>
+    </aside>
   )
 }
 
 // Peek into the HAST node to detect whether the first strong in the first
 // paragraph matches a TruLurn callout label pattern.
-function detectCalloutType(node: any): CalloutType | null {
+function detectCalloutType(node: any): LessonCalloutType | null {
   // HAST nodes: type='element', tagName='p'|'strong'|etc; type='text' for text
   const firstEl = node?.children?.find(
     (c: any) => c.type === 'element' && c.tagName === 'p',
@@ -194,15 +209,7 @@ function detectCalloutType(node: any): CalloutType | null {
     .join('')
     .trim()
 
-  if (/^Definition/i.test(label)) return 'definition'
-  if (/^Example/i.test(label)) return 'example'
-  if (
-    /^Key insight/i.test(label)
-    || /^Key idea/i.test(label)
-    || /^Remember/i.test(label)
-    || /^TL;?DR/i.test(label)
-  ) return 'insight'
-  return null
+  return classifyLessonCalloutLabel(label, { allowLegacy: true })
 }
 
 // ── Figure label parsing + reference linking ──────────────────────────────────

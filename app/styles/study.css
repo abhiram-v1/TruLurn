@@ -237,12 +237,13 @@
 
 .md-callout {
   align-items: flex-start;
-  border-left: 3px solid var(--color-border);
-  border-radius: 0 6px 6px 0;
+  background: var(--md-callout-surface, color-mix(in srgb, var(--color-bg-secondary) 42%, transparent));
+  border: 1px solid var(--md-callout-border, var(--color-border));
+  border-radius: 7px;
   display: flex;
-  gap: 10px;
+  gap: 12px;
   margin: 0 0 20px;
-  padding: 11px 14px;
+  padding: 13px 15px;
 }
 
 .md-callout-icon {
@@ -266,29 +267,36 @@
 
 .md-callout-body .md-p:last-child { margin-bottom: 0; }
 
-/* Definition — muted blue */
+/* Definition — low-intensity mineral blue */
 .md-callout-definition {
-  background: color-mix(in srgb, var(--color-detail-mineral) 58%, var(--color-bg-primary));
-  border-left-color: var(--color-detail-slate);
+  --md-callout-border: color-mix(in srgb, var(--color-detail-slate) 48%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, var(--color-detail-mineral) 14%, var(--color-bg-primary));
 }
 .md-callout-definition .md-callout-icon { color: var(--color-detail-slate-ink); }
 .md-callout-definition .md-strong { color: var(--color-detail-slate-ink); }
 
-/* Example — warm sand */
+/* Example — low-intensity warm sand */
 .md-callout-example {
-  background: rgba(244, 227, 178, 0.35);
-  border-left-color: #9c7a3c;
+  --md-callout-border: color-mix(in srgb, #9c7a3c 42%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, #f4e3b2 9%, var(--color-bg-primary));
 }
-.md-callout-example .md-callout-icon { color: #9c7a3c; }
-.md-callout-example .md-strong { color: #7a5c24; }
+.md-callout-example .md-callout-icon { color: color-mix(in srgb, #9c7a3c 78%, var(--color-text-secondary)); }
+.md-callout-example .md-strong { color: color-mix(in srgb, #7a5c24 74%, var(--color-text-primary)); }
 
-/* Key insight — terracotta */
+/* Lock this in — low-intensity terracotta */
 .md-callout-insight {
-  background: rgba(211, 109, 74, 0.07);
-  border-left-color: var(--color-accent);
+  --md-callout-border: color-mix(in srgb, var(--color-accent) 40%, var(--color-border));
+  --md-callout-surface: color-mix(in srgb, var(--color-accent) 4%, var(--color-bg-primary));
 }
-.md-callout-insight .md-callout-icon { color: var(--color-accent); }
-.md-callout-insight .md-strong { color: var(--color-accent); }
+.md-callout-insight .md-callout-icon { color: color-mix(in srgb, var(--color-accent) 76%, var(--color-text-secondary)); }
+.md-callout-insight .md-strong { color: color-mix(in srgb, var(--color-accent) 72%, var(--color-text-primary)); }
+
+@media (max-width: 700px) {
+  .md-callout {
+    gap: 10px;
+    padding: 11px 12px;
+  }
+}
 
 /* Plain blockquote (non-callout) inside lesson core */
 .ls-core .md-content .md-blockquote {
@@ -1476,21 +1484,43 @@ a.roadmap-next:hover .roadmap-next-arrow {
 }
 
 .md-content .md-code-block {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg-secondary) 52%, var(--color-bg-primary));
+  border: 1px solid color-mix(in srgb, var(--color-text-secondary) 26%, var(--color-border));
+  border-radius: 7px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
   font-size: 0.82em;
-  margin: 0.5em 0;
+  margin: 0.5em 0 1.25em;
   overflow: hidden;
 }
 
 .md-content .md-code-header {
-  display: flex;
   align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-text-secondary) 18%, var(--color-border));
+  display: flex;
   justify-content: space-between;
-  padding: 0.28em 0.75em;
-  border-bottom: 1px solid var(--color-border);
+  min-height: 38px;
+  padding: 0.36em 0.8em;
+}
+
+.md-content .md-code-heading,
+.md-content .md-code-meta {
+  align-items: center;
+  display: inline-flex;
+}
+
+.md-content .md-code-heading {
+  color: var(--color-text-secondary);
+  gap: 7px;
+}
+
+.md-content .md-code-title {
+  font-family: var(--font-sans, inherit);
+  font-size: 0.82em;
+  font-weight: 650;
+}
+
+.md-content .md-code-meta {
+  gap: 10px;
 }
 
 .md-content .md-code-lang {
@@ -1507,14 +1537,14 @@ a.roadmap-next:hover .roadmap-next-arrow {
   font-size: 0.78em;
   color: var(--color-text-secondary);
   font-family: inherit;
-  padding: 0.1em 0.4em;
+  padding: 0.22em 0.45em;
   border-radius: 3px;
   transition: color 0.12s, background 0.12s;
 }
 
 .md-content .md-code-copy:hover {
   color: var(--color-text-primary);
-  background: rgba(211, 109, 74, 0.1);
+  background: color-mix(in srgb, var(--color-text-secondary) 9%, transparent);
 }
 
 .md-content .md-code-body {
